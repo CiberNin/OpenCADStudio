@@ -757,6 +757,32 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             self.refresh_block_palette();
         }
     }
+
+    /// Rebuild the Reference Manager's entry list from the active drawing.
+    /// Display-only: `collect_entries` stats files but mutates nothing.
+    pub(crate) fn refresh_xref_manager(&mut self) {
+        let i = self.active_tab;
+        let base_dir: std::path::PathBuf = self.tabs[i]
+            .current_path
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let tab_id = self.tabs[i].id;
+        self.xref_manager
+            .refresh(&self.tabs[i].scene.document, &base_dir);
+        self.xref_manager.source_tab_id = Some(tab_id);
+    }
+
+    /// Re-scan when the palette is open but showing another tab's drawing.
+    pub(crate) fn refresh_xref_manager_if_stale(&mut self) {
+        if self.active_modal != Some(crate::app::ModalKind::XrefManager) {
+            return;
+        }
+        let i = self.active_tab;
+        if self.xref_manager.source_tab_id != Some(self.tabs[i].id) {
+            self.refresh_xref_manager();
+        }
+    }
 }
 
 #[cfg(test)]

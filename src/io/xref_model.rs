@@ -312,9 +312,17 @@ pub enum RefType {
 /// One external reference in the XREF manager's unified list.
 ///
 /// `key` is the block-record handle (DWG xref) or definition-object handle
-/// (image / PDF) — stable across renames, so [`renamed`](Self::renamed) keeps
-/// it. `saved_path` is the raw stored string verbatim, never synthesized;
-/// `found_at` is where it actually resolved, if anywhere.
+/// (image / PDF) for top-level entries — stable across renames, so
+/// [`renamed`](Self::renamed) keeps it. Nested child entries (enumerated from
+/// a host file, never merged) use [`child_key`] — a stable hash of
+/// `(parent_key, name, saved_path)` — so a foreign handle that collides with
+/// a host handle can never alias a host row. `saved_path` is the raw stored
+/// string verbatim, never synthesized; `found_at` is where it actually
+/// resolved, if anywhere.
+///
+/// `parent_key` is `None` for roots and `Some(host_key)` for nested children.
+/// The palette's refresh path keys rows off `(key, saved_path)` — both sides
+/// go through `collect_entries`, so the same derivation applies everywhere.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceEntry {
     pub key: u64,
@@ -327,6 +335,7 @@ pub struct ReferenceEntry {
     pub saved_path: String,
     pub found_at: Option<String>,
     pub loaded: bool,
+    pub parent_key: Option<u64>,
 }
 
 impl ReferenceEntry {
@@ -342,6 +351,7 @@ impl ReferenceEntry {
             saved_path: String::new(),
             found_at: None,
             loaded: true,
+            parent_key: None,
         }
     }
 
@@ -360,7 +370,6 @@ impl ReferenceEntry {
 pub fn bind_symbol(parent: &str, child: &str, sym: &str) -> String {
     format!("{parent}$0${child}$0${sym}")
 }
-
 /// [`bind_symbol`] for the two-level case, bumping the `$N$` counter past
 /// every collision in `taken` (`PLAN$0$WALLS` taken → `PLAN$1$WALLS`).
 pub fn bind_symbol_taken(parent: &str, sym: &str, taken: &[impl AsRef<str>]) -> String {
@@ -374,10 +383,183 @@ pub fn bind_symbol_taken(parent: &str, sym: &str, taken: &[impl AsRef<str>]) -> 
     }
 }
 
+/// Stable key for a nested child entry.
+///
+/// Top-level entries keep the host handle value unchanged. Nested children
+/// come from foreign files whose handle values can collide with host handles,
+/// so they are namespaced via `DefaultHasher(parent_key, name, saved_path)`.
+/// Deterministic within a run; same derivation is used everywhere
+/// `collect_entries` output is consumed, so palette `(key, saved_path)` rows
+/// keep resolving.
+pub fn child_key(parent_key: u64, name: &str, saved_path: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    parent_key.hash(&mut h);
+    name.hash(&mut h);
+    saved_path.hash(&mut h);
+    h.finish()
+}
+
+/// Pure status decision for one entry (no filesystem).
+///
+/// - `resolved` is the stat outcome (`Loaded`/`NotFound`/`Failed`; `Unloaded`
+///   never reaches here — it is decided before stat).
+/// - `live` is the current mtime, `cached` the load-time mtime from the
+///   previous refresh (`None` on first call → no `Stale` on bootstrap).
+/// - `parent_failed` is true for nested children whose host entry is
+///   `NotFound`/`Failed` → `Loaded` is overridden to `Orphaned`.
+///
+/// The 1s slack absorbs filesystem timestamp granularity so a file that did
+/// not actually change is not flagged `Stale`.
+pub fn decide_status(
+    resolved: RefStatus,
+    live: Option<std::time::SystemTime>,
+    cached: Option<std::time::SystemTime>,
+    parent_failed: bool,
+) -> RefStatus {
+    if parent_failed && resolved == RefStatus::Loaded {
+        return RefStatus::Orphaned;
+    }
+    if resolved == RefStatus::Loaded {
+        if let (Some(l), Some(c)) = (live, cached) {
+            if let Ok(delta) = l.duration_since(c) {
+                if delta > std::time::Duration::from_secs(1) {
+                    return RefStatus::Stale;
+                }
+            }
+        }
+    }
+    resolved
+}
+
+/// Session set of unloaded reference keys.
+///
+/// Owns the `HashSet<u64>` that `collect_entries` takes as `unloaded`.
+/// Task 8b wires session state; the set itself lives here so both sides
+/// share one owner. Keys are top-level handle values (nested children are
+/// never unloadable on their own).
+#[derive(Debug, Clone, Default)]
+pub struct UnloadSet(pub std::collections::HashSet<u64>);
+
+impl UnloadSet {
+    pub fn add(&mut self, key: u64) {
+        self.0.insert(key);
+    }
+    pub fn remove(&mut self, key: &u64) {
+        self.0.remove(key);
+    }
+    pub fn contains(&self, key: &u64) -> bool {
+        self.0.contains(key)
+    }
+    pub fn is_unloaded(&self, key: u64) -> bool {
+        self.0.contains(&key)
+    }
+    pub fn as_set(&self) -> &std::collections::HashSet<u64> {
+        &self.0
+    }
+}
+
+/// Load-time mtimes per reference key, populated on first refresh.
+///
+/// `Stale` is detectable only thereafter: an empty cache means bootstrap, so
+/// `decide_status` never reports `Stale` without a cached baseline. Reload
+/// clears the key (fresh baseline on next refresh). Task 8b owns session
+/// wiring; the map type lives here.
+#[derive(Debug, Clone, Default)]
+pub struct RefStatCache(pub std::collections::HashMap<u64, std::time::SystemTime>);
+
+impl RefStatCache {
+    pub fn insert(&mut self, key: u64, mtime: std::time::SystemTime) {
+        self.0.insert(key, mtime);
+    }
+    pub fn get(&self, key: &u64) -> Option<std::time::SystemTime> {
+        self.0.get(key).copied()
+    }
+    pub fn remove(&mut self, key: &u64) {
+        self.0.remove(key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_lexical, to_pathtype, to_pathtype_result, wildcard_match, Pathtype, PathtypeError};
     use super::{bind_symbol, bind_symbol_taken, RefKind, ReferenceEntry};
+    use super::{child_key, decide_status, RefStatCache, RefStatus, UnloadSet};
+
+    #[test]
+    fn child_key_differs_from_colliding_host_key() {
+        // Crafted collision: nested foreign handle 42 equals a host handle 42.
+        // Namespaced derivation must not alias the host row.
+        let host_key = 42u64;
+        let nested = child_key(100, "DETAIL", "refs/detail.dwg");
+        assert_ne!(nested, host_key);
+        // Stable: same inputs → same key; different parent → different key.
+        assert_eq!(nested, child_key(100, "DETAIL", "refs/detail.dwg"));
+        assert_ne!(nested, child_key(101, "DETAIL", "refs/detail.dwg"));
+    }
+
+    #[test]
+    fn decide_status_stale_needs_slack() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let cached = UNIX_EPOCH + Duration::from_secs(1_000);
+        // +0.5s: within 1s slack → stays Loaded.
+        let live = cached + Duration::from_millis(500);
+        assert_eq!(
+            decide_status(RefStatus::Loaded, Some(live), Some(cached), false),
+            RefStatus::Loaded
+        );
+        // +2s: beyond slack → Stale.
+        let live2 = cached + Duration::from_secs(2);
+        assert_eq!(
+            decide_status(RefStatus::Loaded, Some(live2), Some(cached), false),
+            RefStatus::Stale
+        );
+        // No cached baseline (first refresh) → never Stale on bootstrap.
+        assert_eq!(
+            decide_status(RefStatus::Loaded, Some(live2), None, false),
+            RefStatus::Loaded
+        );
+    }
+
+    #[test]
+    fn decide_status_orphaned_overrides_loaded_only() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let t = Some(UNIX_EPOCH + Duration::from_secs(1_000));
+        assert_eq!(
+            decide_status(RefStatus::Loaded, t, t, true),
+            RefStatus::Orphaned
+        );
+        // Non-Loaded nested states survive the parent override.
+        assert_eq!(
+            decide_status(RefStatus::NotFound, t, t, true),
+            RefStatus::NotFound
+        );
+        assert_eq!(
+            decide_status(RefStatus::Failed, t, t, true),
+            RefStatus::Failed
+        );
+    }
+
+    #[test]
+    fn unload_set_add_remove_contains() {
+        let mut s = UnloadSet::default();
+        assert!(!s.is_unloaded(7));
+        s.add(7);
+        assert!(s.is_unloaded(7));
+        assert!(s.contains(&7));
+        s.remove(&7);
+        assert!(!s.is_unloaded(7));
+    }
+
+    #[test]
+    fn ref_stat_cache_roundtrip() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let mut c = RefStatCache::default();
+        let t = UNIX_EPOCH + Duration::from_secs(5);
+        c.insert(9, t);
+        assert_eq!(c.get(&9), Some(t));
+    }
 
     #[test]
     fn lexical_normalize_missing_file_no_fs_touch() {

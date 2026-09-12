@@ -578,8 +578,13 @@ impl OpenCADStudio {
                 }
             }
 
-            cmd if cmd.eq_ignore_ascii_case("XREF") || cmd.to_ascii_uppercase().starts_with("XREF ") => {
-                // XREF sub-option dispatcher (Task 5). The verb is
+            // XREFMAN — open/focus the Reference Manager palette (display-only,
+            // Task 7). The XREF command below is untouched.
+            "XREFMAN" => {
+                return Some(Task::done(Message::ToggleXrefManager));
+            }
+
+            cmd if cmd.eq_ignore_ascii_case("XREF") || cmd.to_ascii_uppercase().starts_with("XREF ") => {                // XREF sub-option dispatcher (Task 5). The verb is
                 // case-insensitive; arguments split on whitespace.
                 let rest = cmd
                     .splitn(2, char::is_whitespace)

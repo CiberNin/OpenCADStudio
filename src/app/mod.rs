@@ -708,6 +708,8 @@ pub(super) struct OpenCADStudio {
     pub(crate) dock_drag_target: Option<(crate::app::config::DockSide, usize)>,
     /// Docked Insert Block panel state (search, preview size, cached thumbnails).
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
+    /// Reference Manager palette state (display-only in Task 7).
+    pub(crate) xref_manager: crate::ui::window::xref_manager::XrefManagerPanel,
     /// Whether the document file tabs are shown at the top (FILETAB).
     show_file_tabs: bool,
     /// Whether the layout/paper-space tabs are shown at the bottom (LAYOUTTAB).
@@ -1728,6 +1730,7 @@ pub enum ModalKind {
     UpdateNotice,
     DonationPrompt,
     Layers,
+    XrefManager,
     LayerStateManager,
     LayerTranslator,
     DrawingUnits,
@@ -2344,6 +2347,16 @@ pub enum Message {
     /// active command as if typed (empty keyword = Enter). (#304)
     CommandOptionPick(String),
     ToggleLayers,
+    /// Open/focus (or close) the Reference Manager palette.
+    ToggleXrefManager,
+    /// Rescan the active drawing's references into the palette.
+    XrefManagerRefresh,
+    /// Toggle one palette row (entry index) in the multi-selection set.
+    XrefManagerSelect(usize),
+    /// Flip the palette's list/tree presentation.
+    XrefManagerToggleTree,
+    /// Expand/collapse one tree parent (block-record handle key).
+    XrefManagerToggleExpand(u64),
     LayerToggleVisible(usize),
     LayerToggleLock(usize),
     LayerToggleFreeze(usize),
@@ -3710,6 +3723,7 @@ impl OpenCADStudio {
             show_properties: true,
             show_block_palette: false,
             block_palette: Default::default(),
+            xref_manager: Default::default(),
             dock: Default::default(),
             dock_expanded: None,
             dock_dragging: None,

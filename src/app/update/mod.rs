@@ -314,6 +314,9 @@ impl OpenCADStudio {
         // The block panel watches the drawing's block list and rebuilds its
         // thumbnails whenever the names change (BLOCK define, file open, …).
         self.refresh_block_palette_if_stale();
+        // The Reference Manager watches the active drawing and re-scans when
+        // the palette is open on another tab's entries.
+        self.refresh_xref_manager_if_stale();
         // Let V4 plugins observe selection changes that happened while handling
         // this message (picking, window select, QSELECT, SELECTALL, grip edits,
         // and plugin request draining).
@@ -2124,6 +2127,33 @@ impl OpenCADStudio {
                     self.sync_ribbon_layers();
                     self.active_modal = Some(super::ModalKind::Layers);
                 }
+                Task::none()
+            }
+
+            Message::ToggleXrefManager => {
+                if self.active_modal == Some(super::ModalKind::XrefManager) {
+                    self.active_modal = None;
+                    self.reset_modal_geometry();
+                } else {
+                    self.refresh_xref_manager();
+                    self.active_modal = Some(super::ModalKind::XrefManager);
+                }
+                Task::none()
+            }
+            Message::XrefManagerRefresh => {
+                self.refresh_xref_manager();
+                Task::none()
+            }
+            Message::XrefManagerSelect(index) => {
+                self.xref_manager.toggle_select(index);
+                Task::none()
+            }
+            Message::XrefManagerToggleTree => {
+                self.xref_manager.toggle_tree();
+                Task::none()
+            }
+            Message::XrefManagerToggleExpand(key) => {
+                self.xref_manager.toggle_expand(key);
                 Task::none()
             }
 
