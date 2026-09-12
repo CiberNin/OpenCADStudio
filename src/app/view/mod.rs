@@ -1875,7 +1875,8 @@ bg={bg_ms:.1}ms n={view_count}"
         let workspace: Element<'_, Message> = row(parts).width(Fill).height(Fill).into();
 
         let any_dragging = self.dock_dragging.is_some();
-        let any_resizing = self.dock_resizing.is_some() || self.xref_col_drag.is_some();
+        let any_resizing =
+            self.dock_resizing.is_some() || self.xref_col_drag.is_some() || self.xref_split_drag;
         let workspace = if any_dragging {
             let id = self.dock_dragging.expect("guarded by any_dragging");
             let side = self.dock_drag_target.map(|(s, _)| s).unwrap_or(

@@ -3303,6 +3303,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Selecteer objecten om te wentelen of [Modus] (Enter om te voltooien):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Maken
     .boolean = Booleaanse bewerkingen

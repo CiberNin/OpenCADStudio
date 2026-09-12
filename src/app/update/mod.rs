@@ -2192,6 +2192,25 @@ impl OpenCADStudio {
                 self.xref_col_last = None;
                 Task::none()
             }
+            Message::XrefSplitGrab => {
+                self.xref_split_drag = true;
+                self.xref_col_last = None;
+                Task::none()
+            }
+            Message::XrefSplitMove(p) => {
+                if self.xref_split_drag {
+                    if let Some(last) = self.xref_col_last {
+                        self.xref_manager.drag_table_by(p.y - last.y);
+                    }
+                    self.xref_col_last = Some(p);
+                }
+                Task::none()
+            }
+            Message::XrefSplitRelease => {
+                self.xref_split_drag = false;
+                self.xref_col_last = None;
+                Task::none()
+            }
             Message::XrefManagerTogglePreview => {
                 self.xref_manager.show_preview ^= true;
                 Task::none()
@@ -2284,12 +2303,10 @@ impl OpenCADStudio {
                 self.xref_manager_op(op);
                 Task::none()
             }
-            Message::XrefManagerPathInput(text) => {
-                self.xref_manager.path_input = text;
-                Task::none()
-            }
-            Message::XrefManagerPathApply => {
-                self.xref_manager_path_apply();
+            Message::XrefRowOp(index, op) => {
+                // Row-scoped op: select the row first, then run the op.
+                self.xref_manager.right_click_select(index);
+                self.xref_manager_op(op);
                 Task::none()
             }
             Message::XrefFindReplacePrompt => {

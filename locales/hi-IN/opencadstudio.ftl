@@ -3293,6 +3293,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  घुमाने के लिए ऑब्जेक्ट चुनें या [मोड] (समाप्त करने के लिए Enter):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = बनाएँ
     .boolean = बूलियन संक्रियाएँ

@@ -3303,6 +3303,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Objekte zum Rotieren wählen oder [Modus] (Enter zum Beenden):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Erstellen
     .boolean = Boolesche Operationen

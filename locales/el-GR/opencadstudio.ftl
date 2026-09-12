@@ -3176,6 +3176,7 @@ insert =
     .not-found = Not found
     .orphaned = Orphaned
     .unreferenced = Unreferenced
+    .xref-file-references = File References
     .xref-change-path = Change Path
     .xref-make-absolute = Make Absolute
     .xref-make-relative = Make Relative

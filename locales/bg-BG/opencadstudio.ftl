@@ -3304,6 +3304,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Изберете обекти за завъртане или [Режим] (Enter за край):
 
     .path = Път:
+    .xref-file-references = File References
 model =
     .create = Създаване
     .boolean = Булеви операции

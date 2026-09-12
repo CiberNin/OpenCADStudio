@@ -3304,6 +3304,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Válasszon megforgatandó objektumokat vagy [Mód] (Enter a befejezéshez):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Létrehozás
     .boolean = Logikai műveletek

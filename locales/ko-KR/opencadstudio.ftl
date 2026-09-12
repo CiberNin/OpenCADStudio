@@ -3304,6 +3304,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  회전할 객체 선택 또는 [모드] (Enter로 완료):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = 생성
     .boolean = 불리언 연산

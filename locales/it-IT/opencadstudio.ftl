@@ -3304,6 +3304,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Seleziona oggetti da rivoluzionare o [Modalità] (Invio per terminare):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Crea
     .boolean = Operazioni booleane

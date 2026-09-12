@@ -3288,6 +3288,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  选择要旋转的对象或 [模式]（按 Enter 完成）：
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = 创建
     .boolean = 布尔运算

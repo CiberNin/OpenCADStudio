@@ -3265,6 +3265,7 @@ insert =
     .specify-the-requested-path-or-point-or-use-undo = { common.specify }: { common.path } / { common.point } [{ common.undo }].
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Oluştur
     .boolean = Boole işlemleri

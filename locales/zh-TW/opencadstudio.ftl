@@ -3300,6 +3300,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  選取要旋轉的物件或 [模式]（按 Enter 完成）：
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = 建立
     .boolean = 布林運算

@@ -3317,6 +3317,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  حدد عناصر التدوير أو [الوضع] (Enter للإنهاء):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = إنشاء
     .boolean = عمليات منطقية

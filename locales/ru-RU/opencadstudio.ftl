@@ -3306,6 +3306,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Выберите объекты для вращения или [Режим] (Enter — завершить):
 
     .path = Путь:
+    .xref-file-references = File References
 model =
     .create = Создание
     .boolean = Булевы операции

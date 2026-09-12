@@ -10,7 +10,7 @@ use crate::io::xref::collect_entries_with_prev;
 use crate::io::xref_model::{normalize_lexical, Pathtype, RefKind, RefStatus, RefType, ReferenceEntry};
 use crate::ui::ROW_H;
 use acadrust::CadDocument;
-use iced::widget::{button, column, container, mouse_area, row, scrollable, text, text_input, tooltip};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, text, tooltip};
 use iced::Padding;
 use iced::{Background, Border, Element, Fill, Length, Theme};
 use std::collections::{HashMap, HashSet};
@@ -25,13 +25,46 @@ const IS_WASM: bool = cfg!(target_arch = "wasm32");
 /// Font size for table cells (mirrors `layers.rs`).
 const FONT_SZ: f32 = ROW_H * 0.42; // ≈11 px at ROW_H=26
 /// Fixed table height so the details pane below keeps stable space.
-const TABLE_H: f32 = 240.0;
+const TABLE_H: f32 = 480.0;
+/// Minimum table area height under split dragging.
+const TABLE_MIN_H: f32 = 120.0;
 /// Minimum table content width so columns stay readable in narrow docks.
 const TABLE_MIN_W: f32 = 480.0;
 /// Inter-column gutter shared by header, rows, and grab zones so columns align.
 const COL_GUTTER: f32 = 6.0;
+/// Tree-mode text size: a step above the table cells, like the
+/// industry tree.
 /// Indent per tree depth level.
 const INDENT_W: f32 = 16.0;
+
+/// Dashed vertical tree guide (one per ancestor level), stretched to the row.
+const TREE_GUIDE_SVG: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 100\" preserveAspectRatio=\"none\"><line x1=\"8\" y1=\"0\" x2=\"8\" y2=\"100\" stroke=\"#808080\" stroke-width=\"1.5\" stroke-dasharray=\"4,4\"/></svg>";
+
+/// Shared parsed handle for [`TREE_GUIDE_SVG`] (parsed once, not per row).
+fn tree_guide_handle() -> iced::widget::svg::Handle {
+    static HANDLE: std::sync::OnceLock<iced::widget::svg::Handle> = std::sync::OnceLock::new();
+    HANDLE
+        .get_or_init(|| iced::widget::svg::Handle::from_memory(TREE_GUIDE_SVG))
+        .clone()
+}
+
+/// Indent cells for `depth` ancestor levels: dashed guides explaining the
+/// hierarchy, same total width as the old blank indent.
+fn tree_indent(depth: u32) -> iced::widget::Row<'static, crate::app::Message> {
+    let mut row = iced::widget::Row::new().spacing(0);
+    for _ in 0..depth {
+        row = row.push(
+            container(
+                iced::widget::svg(tree_guide_handle())
+                    .width(Length::Fixed(INDENT_W))
+                    .height(Fill),
+            )
+            .align_y(iced::Center),
+        );
+    }
+    row
+}
+const TREE_FONT_SZ: f32 = 13.0;
 /// Longest edge of a preview image, in pixels.
 const PREVIEW_MAX: u32 = 256;
 
@@ -82,11 +115,12 @@ pub struct XrefManagerPanel {
     /// when the tab's revision moves (reuses the undo-snapshot counter, so
     /// CLI and palette mutations both trip it).
     pub source_edit_revision: u64,
-    /// Draft for the details-pane "new path" edit.
-    pub path_input: String,
     /// Reference-table column widths: Reference, Status, Size, Type, Date,
     /// Saved Path. Draggable via the header dividers (clamped).
     pub col_widths: [f32; 6],
+    /// Reference-table area height. Draggable via the split divider above
+    /// the Details/Preview pane (clamped).
+    pub table_h: f32,
     /// Open dropdown menus (one at a time; dismissed together).
     pub attach_open: bool,
     pub refresh_open: bool,
@@ -121,8 +155,8 @@ impl Default for XrefManagerPanel {
             nested: HashSet::new(),
             source_tab_id: None,
             source_edit_revision: 0,
-            path_input: String::new(),
             col_widths: DEFAULT_COL_WIDTHS,
+            table_h: TABLE_H,
             attach_open: false,
             refresh_open: false,
             path_open: false,
@@ -370,6 +404,12 @@ impl XrefManagerPanel {
         }
     }
 
+    /// Apply a vertical split-divider drag to the table area height
+    /// (clamped). Called with the pointer delta.
+    pub fn drag_table_by(&mut self, dy: f32) {
+        self.table_h = (self.table_h + dy).clamp(TABLE_MIN_H, 1200.0);
+    }
+
     /// Expand/collapse one tree parent (no-op for unknown keys).
     pub fn toggle_expand(&mut self, parent_key: u64) {
         if !self.expanded.remove(&parent_key) && self.children.contains_key(&parent_key) {
@@ -554,7 +594,8 @@ impl XrefManagerPanel {
             toolbar_tip(crate::t!("Attach").into_owned(), web_tip.clone())
         } else {
             split_button(
-                toolbar_btn(crate::t!("Attach").into_owned(), Some(Message::XAttachPick)),
+                crate::t!("Attach").into_owned(),
+                Some(Message::XAttachPick),
                 self.attach_open,
                 Message::XrefManagerAttachMenu,
                 vec![
@@ -575,10 +616,8 @@ impl XrefManagerPanel {
             toolbar_tip(crate::t!("Refresh").into_owned(), web_tip.clone())
         } else {
             split_button(
-                toolbar_btn(
-                    crate::t!("Refresh").into_owned(),
-                    Some(Message::XrefManagerRefresh),
-                ),
+                crate::t!("Refresh").into_owned(),
+                Some(Message::XrefManagerRefresh),
                 self.refresh_open,
                 Message::XrefManagerRefreshMenu,
                 vec![menu_item(
@@ -588,23 +627,55 @@ impl XrefManagerPanel {
                 )],
             )
         };
-        // List / Tree are two buttons on their own left-aligned row; the
-        // active mode renders inert.
-        let list_btn = if self.tree {
-            toolbar_btn(crate::t!("List").into_owned(), Some(Message::XrefManagerToggleTree))
-        } else {
-            toolbar_btn(crate::t!("List").into_owned(), None)
+        // List / Tree view buttons with active-state coloring: the current
+        // mode renders in the primary accent (blue), the other is clickable.
+        let mode_btn = |label: String, active: bool| -> Element<'static, Message> {
+            let msg = if active {
+                None
+            } else {
+                Some(Message::XrefManagerToggleTree)
+            };
+            let mut b = button(text(label).size(11))
+                .style(move |theme: &Theme, status| {
+                    let palette = theme.palette();
+                    if active {
+                        button::Style {
+                            background: Some(Background::Color(palette.primary.base.color)),
+                            border: Border {
+                                radius: 3.0.into(),
+                                color: palette.primary.base.color,
+                                width: 1.0,
+                            },
+                            text_color: palette.primary.base.text,
+                            ..Default::default()
+                        }
+                    } else {
+                        let pair = match status {
+                            button::Status::Hovered | button::Status::Pressed => {
+                                palette.background.strong
+                            }
+                            _ => palette.background.weak,
+                        };
+                        button::Style {
+                            background: Some(Background::Color(pair.color)),
+                            border: Border {
+                                radius: 3.0.into(),
+                                color: palette.background.neutral.color,
+                                width: 1.0,
+                            },
+                            text_color: pair.text,
+                            ..Default::default()
+                        }
+                    }
+                })
+                .padding([4, 10]);
+            if let Some(m) = msg {
+                b = b.on_press(m);
+            }
+            b.into()
         };
-        let tree_btn = if self.tree {
-            toolbar_btn(crate::t!("Tree").into_owned(), None)
-        } else {
-            toolbar_btn(crate::t!("Tree").into_owned(), Some(Message::XrefManagerToggleTree))
-        };
-        let mode_row: Element<'static, Message> =
-            container(row![list_btn, tree_btn].spacing(2))
-                .width(Fill)
-                .padding([2, 8])
-                .into();
+        let list_btn = mode_btn(crate::t!("List").into_owned(), !self.tree);
+        let tree_btn = mode_btn(crate::t!("Tree").into_owned(), self.tree);
         // Reference operations (Detach/Unload/Reload/Bind/Overlay/Attach)
         // live in the per-row right-click menu, not the toolbar.
         // Change Path group: greyed until a reference whose path can change
@@ -653,10 +724,8 @@ impl XrefManagerPanel {
                     Some(crate::t!("Select a single reference first.").into_owned())
                 };
                 split_button(
-                    toolbar_btn(
-                        crate::t!("Change Path").into_owned(),
-                        Some(Message::XrefManagerPathMenu),
-                    ),
+                    crate::t!("Change Path").into_owned(),
+                    Some(Message::XrefManagerPathMenu),
                     self.path_open,
                     Message::XrefManagerPathMenu,
                     vec![
@@ -710,63 +779,35 @@ impl XrefManagerPanel {
             .align_y(iced::Center),
         )
         .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.palette().background.weak.color)),
+            background: Some(Background::Color(
+                theme.palette().background.weakest.color,
+            )),
             ..Default::default()
         })
         .width(Fill)
         .padding([4, 8]);
 
-        // ── Path-edit row ─────────────────────────────────────────────────
-        // (Find & Replace moved to the Change Path menu — it prefills the
-        // command line instead of living in the panel.)
-        // Path edit applies to the anchor entry; nested anchors stay disabled.
-        let anchor_nested = self
-            .anchor
-            .is_some_and(|a| self.nested.contains(&a));
-        let path_apply = match self.anchor.and_then(|i| self.entries.get(i)) {
-            Some(_) if IS_WASM => toolbar_tip(
-                crate::t!("Set Path").into_owned(),
-                crate::t!("Reference changes are not available on web — the reference list is read-only.").into_owned(),
-            ),
-            Some(_) if anchor_nested => toolbar_tip(
-                crate::t!("Set Path").into_owned(),
-                crate::t!("Nested references are read-only — edit them in their host drawing.")
-                    .into_owned(),
-            ),
-            Some(_) if !self.path_input.is_empty() => toolbar_btn(
-                crate::t!("Set Path").into_owned(),
-                Some(Message::XrefManagerPathApply),
-            ),
-            Some(_) => toolbar_tip(
-                crate::t!("Set Path").into_owned(),
-                crate::t!("Type a new path first.").into_owned(),
-            ),
-            None => toolbar_tip(
-                crate::t!("Set Path").into_owned(),
-                crate::t!("Select a reference first.").into_owned(),
-            ),
-        };
-        let edit_row = container(
+        // ── File References pane title ──────────────────────────────────
+        // List / Tree live on this row, right-aligned.
+        let table_title: Element<'_, Message> = container(
             row![
-                text(crate::t!("Path:")).size(11),
-                text_input(crate::t!("new path for selection").as_ref(), &self.path_input)
-                    .on_input(Message::XrefManagerPathInput)
+                text(format!("{} :", crate::t!("File References").as_ref()))
                     .size(11)
-                    .padding(4)
-                    .width(Length::Fill),
-                path_apply,
+                    .width(Fill),
+                list_btn,
+                tree_btn,
             ]
             .spacing(4)
             .align_y(iced::Center),
         )
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.palette().background.weak.color)),
-            ..Default::default()
-        })
         .width(Fill)
-        .padding([4, 8]);
-
-        // ── Column header ─────────────────────────────────────────────────
+        .padding(Padding {
+            top: 4.0,
+            right: 8.0,
+            bottom: 0.0,
+            left: 8.0,
+        })
+        .into();
         // Each divider between header cells grabs for a width drag
         // (`XrefColGrab(i)` resizes column `i`); mirrors the Layers
         // Name-column divider.
@@ -867,7 +908,7 @@ impl XrefManagerPanel {
             .center_x(Fill)
             .center_y(Fill)
             .width(Fill)
-            .height(Length::Fixed(TABLE_H))
+            .height(Length::Fixed(self.table_h))
             .into()
         } else if self.tree {
             // Tree view replaces the table: icon + name rows in nesting
@@ -893,19 +934,19 @@ impl XrefManagerPanel {
                     is_expanded,
                 ));
             }
-            scrollable(tree_col).height(Length::Fixed(TABLE_H)).into()
+            scrollable(tree_col).height(Length::Fixed(self.table_h)).into()
         } else {
             scrollable(
                 column![
                     col_header,
-                    scrollable(rows_col).height(Length::Fixed(TABLE_H)),
+                    scrollable(rows_col).height(Length::Fixed(self.table_h)),
                 ]
                 .width(Length::Fixed(table_w)),
             )
             .direction(iced::widget::scrollable::Direction::Horizontal(
                 iced::widget::scrollable::Scrollbar::new(),
             ))
-            .height(Length::Fixed(TABLE_H))
+            .height(Length::Fixed(self.table_h))
             .into()
         };
         // Thin external padding + darkest surface around the table, like the
@@ -1023,15 +1064,30 @@ impl XrefManagerPanel {
                 .into()
         };
 
-        let mut content = column![title_bar, toolbar, mode_row, edit_row, table_rows];
+        // Horizontal split divider between the table and the lower pane:
+        // grabs vertically to give the table more (or less) height.
+        let split = mouse_area(
+            container(iced::widget::Space::new().height(Length::Fixed(6.0)))
+                .width(Fill)
+                .height(Length::Fixed(6.0)),
+        )
+        .on_press(Message::XrefSplitGrab)
+        .interaction(iced::mouse::Interaction::ResizingVertically);
+        let mut content = column![title_bar, toolbar, table_title, table_rows, split];
         if let Some(notice) = notice {
             content = content.push(notice);
         }
         content = content.push(lower);
+        // Panel-wide move/release tracking for the split drag (mirrors the
+        // header divider tracking for columns).
+        let content: Element<'_, Message> = mouse_area(content.spacing(0))
+            .on_move(|p| Message::XrefSplitMove(p))
+            .on_release(Message::XrefSplitRelease)
+            .into();
         // Fixed to the dock width like the block palette: the panel never
         // sizes itself from its (wider) table content, so the dock width
         // setting — and resize — actually takes effect.
-        container(content.spacing(0))
+        container(content)
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
                     theme.palette().background.base.color,
@@ -1251,23 +1307,78 @@ fn toolbar_tip(label: String, tip: String) -> Element<'static, Message> {
 /// Split button: a default action plus a triangle that opens the rest in an
 /// overlay menu (spec toolbar: Attach ▾, Refresh ▾, Change Path ▾).
 ///
-/// `main` is the already-gated default-action element; `toggle` flips this
-/// menu (closing the others is handled at the message site); `items` are the
-/// menu rows, each full-width. Dismissal (Escape / outside click) funnels to
+/// Both halves share one bordered group look: the main half keeps only the
+/// left corners rounded (no right border), the caret keeps only the right
+/// corners (no left border), so the pair reads as a single control. Hover
+/// and press states highlight each half independently.
+/// `main_msg` runs the default action; `toggle` flips this menu (closing the
+/// others is handled at the message site); `items` are the menu rows, each
+/// full-width. Dismissal (Escape / outside click) funnels to
 /// [`Message::XrefManagerDismissMenus`].
 fn split_button(
-    main: Element<'static, Message>,
+    main_label: String,
+    main_msg: Option<Message>,
     menu_open: bool,
     toggle: Message,
     items: Vec<Element<'static, Message>>,
 ) -> Element<'static, Message> {
+    use iced::border::Radius;
+    // Triangle matches the main button's height and bordered style so the
+    // group reads as one split control: same padding, icon box fixed to the
+    // 11px text line height.
+    let half_style = |left: bool| {
+        move |theme: &Theme, status| {
+            let palette = theme.palette();
+            let pair = match status {
+                button::Status::Hovered | button::Status::Pressed => {
+                    palette.background.strong
+                }
+                _ => palette.background.weak,
+            };
+            let radius = if left {
+                Radius {
+                    top_left: 3.0,
+                    top_right: 0.0,
+                    bottom_right: 0.0,
+                    bottom_left: 3.0,
+                }
+            } else {
+                Radius {
+                    top_left: 0.0,
+                    top_right: 3.0,
+                    bottom_right: 3.0,
+                    bottom_left: 0.0,
+                }
+            };
+            button::Style {
+                background: Some(Background::Color(pair.color)),
+                border: Border {
+                    radius: radius.into(),
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                },
+                text_color: pair.text,
+                ..Default::default()
+            }
+        }
+    };
+    let mut main = button(text(main_label).size(11))
+        .style(half_style(true))
+        .padding([4, 10]);
+    if let Some(m) = main_msg {
+        main = main.on_press(m);
+    }
     let caret = button(
-        container(crate::ui::icons::themed_arrow_down(9.0)).align_y(iced::Center),
+        container(crate::ui::icons::themed_arrow_down(9.0))
+            .align_y(iced::Center)
+            .height(Length::Fixed(15.0)),
     )
     .on_press(toggle)
-    .style(button::subtle)
-    .padding([4, 6]);
-    let head = row![main, caret].spacing(0).align_y(iced::Center);
+    .style(half_style(false))
+    .padding([4, 10]);
+    // Overlap the halves by the 1px shared border so no double line shows
+    // where they meet.
+    let head = row![main, caret].spacing(-1.0).align_y(iced::Center);
     let popup: Element<'static, Message> = container(
         column(items.into_iter().map(|item| {
             container(item).width(Fill).into()
@@ -1304,13 +1415,23 @@ fn menu_item(label: String, msg: Option<Message>, gate: Option<String>) -> Eleme
     }
 }
 
-/// Per-row right-click menu: the reference operations act on the current
-/// selection (right-click selects the row first when outside it), so one
-/// static menu serves every row. Nested rows report per-entry errors from
-/// the engine, matching the CLI wording.
-fn row_menu() -> Element<'static, Message> {
+/// One right-click menu row, styled like the model-space context menu:
+/// borderless subtle text rows, not toolbar buttons.
+fn menu_row(label: String, msg: Message) -> Element<'static, Message> {
+    button(text(label).size(12))
+        .on_press(msg)
+        .style(button::subtle)
+        .padding([4, 12])
+        .width(Fill)
+        .into()
+}
+
+/// Per-row right-click menu. Each item targets its own row, so the
+/// operation applies to the row under the cursor. Nested rows report
+/// per-entry errors from the engine, matching the CLI wording.
+fn row_menu_for(index: usize) -> Element<'static, Message> {
     let item = |label: &str, op: XrefPaletteOp| -> Element<'static, Message> {
-        toolbar_btn(label.to_string(), Some(Message::XrefManagerOp(op)))
+        menu_row(label.to_string(), Message::XrefRowOp(index, op))
     };
     container(
         column![
@@ -1422,7 +1543,7 @@ fn xref_row<'a>(
     )
     .on_press(Message::XrefManagerSelect(index))
     .on_right_press(Message::XrefRowRightClick(index));
-    iced_aw::ContextMenu::new(row, row_menu).into()
+    iced_aw::ContextMenu::new(row, move || row_menu_for(index)).into()
 }
 
 /// One tree-mode row: indent + optional expand arrow + file icon + name.
@@ -1435,11 +1556,7 @@ fn tree_row(
     is_expanded: bool,
 ) -> Element<'_, Message> {
     let mut cells = row![].spacing(2).align_y(iced::Center);
-    if display.depth > 0 {
-        cells = cells.push(
-            iced::widget::Space::new().width(Length::Fixed(INDENT_W * display.depth as f32)),
-        );
-    }
+    cells = cells.push(tree_indent(display.depth));
     if show_expand {
         let key = entry.key;
         let arrow = button(crate::ui::icons::themed_arrow_toggle(is_expanded, 10.0))
@@ -1454,10 +1571,10 @@ fn tree_row(
         cells = cells.push(arrow);
     }
     cells = cells.push(
-        container(crate::ui::icons::themed_secondary(crate::ui::icons::DOC, 12.0))
+        container(crate::ui::icons::themed_secondary(crate::ui::icons::DOC, 14.0))
             .align_y(iced::Center),
     );
-    cells = cells.push(text(entry.name.clone()).size(FONT_SZ));
+    cells = cells.push(text(entry.name.clone()).size(TREE_FONT_SZ));
     let index = display.index;
     let row = mouse_area(
         container(cells.spacing(4).width(Fill))
@@ -1477,17 +1594,16 @@ fn tree_row(
                 }
             })
             .padding(Padding {
-                top: 0.0,
-                bottom: 0.0,
+                top: 5.0,
+                bottom: 5.0,
                 left: 8.0,
                 right: 8.0,
             })
-            .height(Length::Fixed(ROW_H))
             .width(Fill),
     )
     .on_press(Message::XrefManagerSelect(index))
     .on_right_press(Message::XrefRowRightClick(index));
-    iced_aw::ContextMenu::new(row, row_menu).into()
+    iced_aw::ContextMenu::new(row, move || row_menu_for(index)).into()
 }
 
 /// Tree-mode host root: home icon + name with the current-drawing marker.
@@ -1500,15 +1616,11 @@ fn tree_host_row(display: DisplayRow, host_name: &str) -> Element<'_, Message> {
     };
     name.push('*');
     let mut cells = row![].spacing(2).align_y(iced::Center);
-    if display.depth > 0 {
-        cells = cells.push(
-            iced::widget::Space::new().width(Length::Fixed(INDENT_W * display.depth as f32)),
-        );
-    }
+    cells = cells.push(tree_indent(display.depth));
     cells = cells.push(
-        container(crate::ui::icons::themed_home(12.0)).align_y(iced::Center),
+        container(crate::ui::icons::themed_home(14.0)).align_y(iced::Center),
     );
-    cells = cells.push(text(name).size(FONT_SZ));
+    cells = cells.push(text(name).size(TREE_FONT_SZ));
     container(cells.spacing(4).width(Fill))
         .style(|theme: &Theme| {
             let pair = theme.palette().background.base;
@@ -1519,12 +1631,11 @@ fn tree_host_row(display: DisplayRow, host_name: &str) -> Element<'_, Message> {
             }
         })
         .padding(Padding {
-            top: 0.0,
-            bottom: 0.0,
+            top: 5.0,
+            bottom: 5.0,
             left: 8.0,
             right: 8.0,
         })
-        .height(Length::Fixed(ROW_H))
         .width(Fill)
         .into()
 }
@@ -1663,9 +1774,9 @@ fn reference_preview(entry: &ReferenceEntry) -> Option<image::RgbaImage> {
     if IS_WASM {
         return None;
     }
-    if !matches!(entry.status, RefStatus::Loaded | RefStatus::Stale) {
-        return None;
-    }
+    // Any entry whose file resolves decodes — including Unloaded and
+    // Unreferenced rows — so previews don't depend on load state. Missing
+    // files fail the decode below and fall back to the placeholder.
     let found = entry.found_at.as_deref().filter(|s| !s.is_empty())?;
     match entry.kind {
         RefKind::DwgXref => {
@@ -1857,6 +1968,16 @@ mod tests {
     }
 
     #[test]
+    fn table_split_drag_clamps() {
+        let mut panel = XrefManagerPanel::default();
+        assert_eq!(panel.table_h, super::TABLE_H);
+        panel.drag_table_by(60.0);
+        assert_eq!(panel.table_h, super::TABLE_H + 60.0);
+        panel.drag_table_by(-10000.0);
+        assert_eq!(panel.table_h, super::TABLE_MIN_H);
+    }
+
+    #[test]
     fn image_format_reads_extension() {
         assert_eq!(image_format("C:/exa/plan.BMP"), "BMP");
         assert_eq!(image_format("a/b/c.png"), "PNG");
@@ -2045,6 +2166,40 @@ mod tests {
             panel.previews.is_empty(),
             "undecodable file → placeholder, no cache entry"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preview_decodes_unloaded_entry_with_file() {
+        // Previews key off file resolvability, not load state: an Unloaded
+        // image whose file exists still decodes.
+        use crate::io::xref_model::UnloadKey;
+        let dir = std::env::temp_dir().join(format!(
+            "ocs_xref_preview_unloaded_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = preview_doc(&dir, "img.png");
+        let key = doc
+            .objects
+            .iter()
+            .find_map(|(h, o)| match o {
+                acadrust::objects::ObjectType::ImageDefinition(_) => Some(h.value()),
+                _ => None,
+            })
+            .unwrap();
+        let mut unloaded = std::collections::HashSet::new();
+        unloaded.insert(UnloadKey::Direct(key));
+        let no_prev = std::collections::HashMap::new();
+        let mut panel = XrefManagerPanel::default();
+        panel.refresh(&doc, &dir, &unloaded, &no_prev, "host", "");
+        panel.toggle_select(0);
+        panel.refresh(&doc, &dir, &unloaded, &no_prev, "host", "");
+        assert_eq!(panel.previews.len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

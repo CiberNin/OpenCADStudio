@@ -3304,6 +3304,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Wybierz obiekty do obrotu lub [Tryb] (Enter kończy):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Utwórz
     .boolean = Operacje boolowskie

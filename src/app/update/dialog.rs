@@ -686,6 +686,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 self.dock_drag_target = None;
                 self.xref_col_drag = None;
                 self.xref_col_last = None;
+                self.xref_split_drag = false;
                 iced::Task::none()
             }
         }
@@ -908,6 +909,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 .collect()
         };
         if picked.is_empty() {
+            self.command_line
+                .push_info(crate::t!("Select a reference first.").as_ref());
             return;
         }
         let needs_host = matches!(
@@ -1239,43 +1242,6 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             self.report_xref_status(info);
         }
         self.post_ref_op(i);
-        self.refresh_xref_manager();
-    }
-
-    /// Apply the details-pane path draft to the anchor entry (verbatim
-    /// store, same engine fn as `XREF Path`).
-    pub(crate) fn xref_manager_path_apply(&mut self) {
-        if cfg!(target_arch = "wasm32") {
-            self.command_line.push_error(crate::t!("Reference changes are not available on web — the reference list is read-only.").as_ref());
-            return;
-        }
-        let i = self.active_tab;
-        let anchor = self.xref_manager.anchor.and_then(|a| {
-            self.xref_manager
-                .entries
-                .get(a)
-                .filter(|_| !self.xref_manager.nested.contains(&a))
-                .map(|e| (e.key, e.name.clone()))
-        });
-        let Some((key, _)) = anchor else {
-            return;
-        };
-        let new_raw = self.xref_manager.path_input.clone();
-        if new_raw.is_empty() {
-            return;
-        }
-        self.push_undo_snapshot(i, "XREF-PATH");
-        match crate::io::xref::set_ref_path(&mut self.tabs[i].scene.document, key, &new_raw)
-        {
-            Ok(name) => {
-                self.command_line.push_output(crate::tf!(
-                    "XREF: Path set for \"{}\" — Reload to apply.",
-                    name
-                ).as_ref());
-                self.post_ref_op(i);
-            }
-            Err(msg) => self.command_line.push_error(msg.as_str()),
-        }
         self.refresh_xref_manager();
     }
 }

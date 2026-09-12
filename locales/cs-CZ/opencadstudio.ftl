@@ -3302,6 +3302,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Vyberte objekty k rotaci nebo [Režim] (Enter ukončí):
 
     .path = Cesta:
+    .xref-file-references = File References
 model =
     .create = Vytvořit
     .boolean = Booleovské operace

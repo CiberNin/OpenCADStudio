@@ -3304,6 +3304,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Valitse pyöräytettävät objektit tai [Tila] (Enter lopettaa):
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = Luo
     .boolean = Boolen operaatiot

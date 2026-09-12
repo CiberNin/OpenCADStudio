@@ -712,6 +712,8 @@ pub(super) struct OpenCADStudio {
     /// with the last pointer position. Mirrors the Layers Name-column drag.
     pub(crate) xref_col_drag: Option<usize>,
     pub(crate) xref_col_last: Option<iced::Point>,
+    /// Table/lower-pane split divider drag in progress.
+    pub(crate) xref_split_drag: bool,
     /// Docked Insert Block panel state (search, preview size, cached thumbnails).
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
     /// Reference Manager palette state (display-only in Task 7).
@@ -2369,6 +2371,12 @@ pub enum Message {
     XrefColMove(iced::Point),
     /// Pointer released during a column drag.
     XrefColRelease,
+    /// Start a table/lower-pane split divider drag.
+    XrefSplitGrab,
+    /// Pointer moved (panel space) during a split drag.
+    XrefSplitMove(iced::Point),
+    /// Pointer released during a split drag.
+    XrefSplitRelease,
     /// Flip the palette's details/preview lower pane.
     XrefManagerTogglePreview,
     /// Toggle the Attach dropdown menu.
@@ -2389,10 +2397,9 @@ pub enum Message {
     XrefManagerToggleExpand(u64),
     /// Selection-scoped palette operation (detach/unload/reload/overlay/pathtype).
     XrefManagerOp(crate::ui::window::xref_manager::XrefPaletteOp),
-    /// Details-pane "new path" draft text.
-    XrefManagerPathInput(String),
-    /// Apply the "new path" draft to the anchor entry.
-    XrefManagerPathApply,
+    /// Row-scoped palette operation: selects row `index`, then applies the
+    /// operation to it.
+    XrefRowOp(usize, crate::ui::window::xref_manager::XrefPaletteOp),
     /// Prefill the command line for Find & Replace across references
     /// (`XREF Path Find <old> <new>`); the CLI parses and runs it.
     XrefFindReplacePrompt,
@@ -3772,6 +3779,7 @@ impl OpenCADStudio {
             dock_drag_target: None,
             xref_col_drag: None,
             xref_col_last: None,
+            xref_split_drag: false,
             show_file_tabs: true,
             show_layout_tabs: true,
             last_point: None,

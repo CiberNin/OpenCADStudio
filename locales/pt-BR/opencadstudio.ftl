@@ -3304,6 +3304,7 @@ insert =
     .revolve-specify-start-angle = REVOLVE  { common.specify }: { common.start-angle }
     .revolve-select-line-ray-or-construction-line-for-axis = REVOLVE  Selecione uma linha, semirreta ou linha de construção como eixo:
     .revolve-select-objects-or-mode = REVOLVE  Selecione objetos para revolução ou [Modo] (Enter para concluir):
+    .xref-file-references = File References
 
 model =
     .create = Criar

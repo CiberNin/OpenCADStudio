@@ -3305,6 +3305,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  Sélectionnez les objets de révolution ou [Mode] (Entrée pour terminer) :
 
        .path = Chemin :
+    .xref-file-references = File References
 model =
     .create = Créer
     .boolean = Opérations booléennes

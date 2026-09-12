@@ -3157,6 +3157,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "XREF: bound \"{}\" with {} unremapped style handles (see bind limitations)." => Some(("insert", "xref-bound-with-unremapped-handles")),
         "XREF: cannot bind nested reference '{}'. Bind it in its host drawing." => Some(("insert", "xref-cannot-bind-nested-reference")),
         "Unreferenced" => Some(("insert", "unreferenced")),
+        "File References" => Some(("insert", "xref-file-references")),
         "Change Path" => Some(("insert", "xref-change-path")),
         "Make Absolute" => Some(("insert", "xref-make-absolute")),
         "Make Relative" => Some(("insert", "xref-make-relative")),

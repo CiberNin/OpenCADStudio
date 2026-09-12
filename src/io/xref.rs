@@ -978,6 +978,18 @@ pub fn collect_entries_with_prev(
         }
     }
 
+    /// Resolve `raw` into `found_at` without statting: unloaded rows keep no
+    /// size/date (spec) but still know where their file lives, so previews
+    /// and path operations work without loading.
+    fn resolve_only(entry: &mut ReferenceEntry, raw: &str, base_dir: &Path) {
+        if raw.is_empty() {
+            return;
+        }
+        if let Some(found) = resolve_path(raw, base_dir) {
+            entry.found_at = Some(found.to_string_lossy().into_owned());
+        }
+    }
+
     fn file_name_only(raw: &str) -> &str {
         raw.rsplit(['/', '\\']).next().unwrap_or(raw)
     }
@@ -999,6 +1011,7 @@ pub fn collect_entries_with_prev(
         entry.saved_path = br.xref_path.clone();
         if unloaded.contains(&UnloadKey::Direct(key)) {
             entry.status = RefStatus::Unloaded;
+            resolve_only(&mut entry, &br.xref_path, base_dir);
         } else {
             stat_into(&mut entry, &br.xref_path, base_dir);
             entry.status = decide_status(
@@ -1033,6 +1046,7 @@ pub fn collect_entries_with_prev(
         entry.saved_path = def.file_name.clone();
         if unloaded.contains(&UnloadKey::Direct(key)) {
             entry.status = RefStatus::Unloaded;
+            resolve_only(&mut entry, &def.file_name, base_dir);
         } else {
             stat_into(&mut entry, &def.file_name, base_dir);
             entry.status = decide_status(
@@ -1077,6 +1091,7 @@ pub fn collect_entries_with_prev(
         entry.saved_path = def.file_path.clone();
         if unloaded.contains(&UnloadKey::Direct(key)) {
             entry.status = RefStatus::Unloaded;
+            resolve_only(&mut entry, &def.file_path, base_dir);
         } else {
             stat_into(&mut entry, &def.file_path, base_dir);
             entry.status = decide_status(

@@ -3293,6 +3293,7 @@ insert =
     .revolve-select-objects-or-mode = REVOLVE  回転させるオブジェクトを選択、または［モード］（Enterで終了）:
 
     .path = Path:
+    .xref-file-references = File References
 model =
     .create = 作成
     .boolean = ブール演算
