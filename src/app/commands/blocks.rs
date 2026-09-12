@@ -1,6 +1,45 @@
 use super::*;
 
+/// Placeholder for XREF reference operations landing in Tasks 8/9.
+/// Each arm formats it with its own op name via `NOT_YET.replace("<op>", …)`.
+const NOT_YET: &str = "XREF: '<op>' ships with reference operations (Task 8/9).";
+
 impl OpenCADStudio {
+    /// Shared per-reference status reporting for XRELOAD and XREF Reload.
+    /// Extracted verbatim from the XRELOAD arm — no behavior change.
+    pub(in crate::app) fn report_xref_status(&mut self, info: &crate::io::xref::XrefInfo) {
+        match info.status {
+            crate::io::xref::XrefStatus::Loaded => {
+                self.command_line
+                    .push_output(crate::tf!("XREF  Reloaded \"{}\"", info.name).as_ref());
+            }
+            crate::io::xref::XrefStatus::Recovered => {
+                self.command_line.push_error(crate::tf!(
+                    "XREF  Reloaded with repairs: \"{}\"",
+                    info.name
+                ).as_ref());
+            }
+            crate::io::xref::XrefStatus::NotFound => {
+                self.command_line.push_error(crate::tf!(
+                    "XREF  Not found: \"{}\" ({})",
+                    info.name, info.path
+                ).as_ref());
+            }
+            crate::io::xref::XrefStatus::Failed => {
+                self.command_line.push_error(crate::tf!(
+                    "XREF  Reload failed: \"{}\" ({})",
+                    info.name, info.path
+                ).as_ref());
+            }
+            crate::io::xref::XrefStatus::Unloaded => {
+                self.command_line.push_info(crate::tf!(
+                    "XREF  Unloaded (skipped): \"{}\"",
+                    info.name
+                ).as_ref());
+            }
+        }
+    }
+
     pub(in crate::app) fn copy_entities_to_clipboard(
         &mut self,
         i: usize,
@@ -539,34 +578,148 @@ impl OpenCADStudio {
                 }
             }
 
-            "XREF" => {
-                // List all xref blocks in the current drawing.
-                let xrefs: Vec<String> = self.tabs[i]
-                    .scene
-                    .document
-                    .block_records
-                    .iter()
-                    .filter(|br| br.flags.is_xref || br.flags.is_xref_overlay)
-                    .map(|br| {
-                        format!(
-                            "  {} — {}",
-                            br.name,
-                            if br.xref_path.is_empty() {
+            cmd if cmd.eq_ignore_ascii_case("XREF") || cmd.to_ascii_uppercase().starts_with("XREF ") => {
+                // XREF sub-option dispatcher (Task 5). The verb is
+                // case-insensitive; arguments split on whitespace.
+                let rest = cmd
+                    .splitn(2, char::is_whitespace)
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
+                let mut parts = rest.split_whitespace();
+                let op = parts.next().unwrap_or("");
+                if op.is_empty() || op == "?" {
+                    // List every reference via collect_entries. The base dir
+                    // is the drawing's parent (or "." unsaved); nothing is
+                    // treated as unloaded here. Header lines stay
+                    // byte-identical to the legacy listing; each entry line
+                    // gains an " [Attach]" / " [Overlay]" type suffix.
+                    let base_dir: std::path::PathBuf = self.tabs[i]
+                        .current_path
+                        .as_ref()
+                        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let entries = crate::io::xref::collect_entries(
+                        &self.tabs[i].scene.document,
+                        &base_dir,
+                        &std::collections::HashSet::<u64>::new(),
+                    );
+                    if entries.is_empty() {
+                        self.command_line
+                            .push_output(crate::t!("XREF  No external references in this drawing.").as_ref());
+                    } else {
+                        self.command_line.push_output(crate::t!("XREF  External references:").as_ref());
+                        for entry in &entries {
+                            let path = if entry.saved_path.is_empty() {
                                 "(no path)".to_string()
                             } else {
-                                br.xref_path.clone()
-                            }
-                        )
-                    })
-                    .collect();
-                if xrefs.is_empty() {
-                    self.command_line
-                        .push_output(crate::t!("XREF  No external references in this drawing.").as_ref());
-                } else {
-                    self.command_line.push_output(crate::t!("XREF  External references:").as_ref());
-                    for line in xrefs {
-                        self.command_line.push_output(&line);
+                                entry.saved_path.clone()
+                            };
+                            let suffix =
+                                match entry.ref_type {
+                                    crate::io::xref_model::RefType::Overlay => " [Overlay]",
+                                    crate::io::xref_model::RefType::Attach => " [Attach]",
+                                };
+                            self.command_line
+                                .push_output(&format!("  {} — {}{}", entry.name, path, suffix));
+                        }
                     }
+                } else if op.eq_ignore_ascii_case("Reload") {
+                    // Reload all (no pattern) or the subset matching
+                    // <pattern> (case-insensitive, `*`/`?` wildcards).
+                    let pattern = parts.next().unwrap_or("").trim();
+                    // A concrete pattern that matches no entry resolves
+                    // nothing: pre-check the entry list (same base_dir +
+                    // empty unloaded set as the list path) and return early
+                    // without touching resolve_xrefs — no mutation, no
+                    // populate/refresh. Bare Reload and `*` keep the
+                    // resolve-everything path below.
+                    if !pattern.is_empty() && pattern != "*" {
+                        let base_dir: std::path::PathBuf = self.tabs[i]
+                            .current_path
+                            .as_ref()
+                            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                            .unwrap_or_else(|| std::path::PathBuf::from("."));
+                        let entries = crate::io::xref::collect_entries(
+                            &self.tabs[i].scene.document,
+                            &base_dir,
+                            &std::collections::HashSet::<u64>::new(),
+                        );
+                        let any = entries
+                            .iter()
+                            .any(|e| crate::io::xref_model::wildcard_match(&e.name, pattern));
+                        if !any {
+                            self.command_line.push_error(crate::tf!(
+                                "XREF: no references match '{}'.",
+                                pattern
+                            ).as_ref());
+                            return Some(self.finish_dispatch(cmd));
+                        }
+                    }
+                    if let Some(path) = &self.tabs[i].current_path.clone() {
+                        if let Some(base_dir) = path.parent() {
+                            let (infos, _dropped) = crate::io::xref::resolve_xrefs(
+                                &mut self.tabs[i].scene.document,
+                                base_dir,
+                            );
+                            let matched: Vec<&crate::io::xref::XrefInfo> = if pattern.is_empty() {
+                                infos.iter().collect()
+                            } else {
+                                infos
+                                    .iter()
+                                    .filter(|n| {
+                                        crate::io::xref_model::wildcard_match(&n.name, pattern)
+                                    })
+                                    .collect()
+                            };
+                            if matched.is_empty() {
+                                self.command_line.push_error(crate::tf!(
+                                    "XREF: no references match '{}'.",
+                                    pattern
+                                ).as_ref());
+                            } else {
+                                for info in matched {
+                                    self.report_xref_status(info);
+                                }
+                            }
+                            self.tabs[i].scene.populate_hatches_from_document();
+                            self.tabs[i].scene.populate_images_from_document();
+                            self.tabs[i].scene.populate_meshes_from_document();
+                            // The reload may have merged new xref layers /
+                            // linetypes — mirror them into the Layers panel and
+                            // ribbon dropdowns (#407).
+                            self.refresh_layer_panel();
+                        }
+                    } else {
+                        self.command_line
+                            .push_error(crate::t!("XREF  Save the drawing first to resolve relative XREF paths.").as_ref());
+                    }
+                } else if op.eq_ignore_ascii_case("Unload") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Unload"));
+                } else if op.eq_ignore_ascii_case("Detach") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Detach"));
+                } else if op.eq_ignore_ascii_case("Path") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Path"));
+                } else if op.eq_ignore_ascii_case("Pathtype") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Pathtype"));
+                } else if op.eq_ignore_ascii_case("Bind") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Bind"));
+                } else if op.eq_ignore_ascii_case("Overlay") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Overlay"));
+                } else if op.eq_ignore_ascii_case("Attach") {
+                    self.command_line
+                        .push_output(&NOT_YET.replace("<op>", "Attach"));
+                } else {
+                    self.command_line.push_error(crate::tf!(
+                        "XREF: unknown option '{}'. Options: ? Reload Unload Detach Path Pathtype Bind Overlay Attach",
+                        op
+                    ).as_ref());
                 }
             }
 
@@ -579,36 +732,7 @@ impl OpenCADStudio {
                             base_dir,
                         );
                         for info in &infos {
-                            match info.status {
-                                crate::io::xref::XrefStatus::Loaded => {
-                                    self.command_line
-                                        .push_output(crate::tf!("XREF  Reloaded \"{}\"", info.name).as_ref());
-                                }
-                                crate::io::xref::XrefStatus::Recovered => {
-                                    self.command_line.push_error(crate::tf!(
-                                        "XREF  Reloaded with repairs: \"{}\"",
-                                        info.name
-                                    ).as_ref());
-                                }
-                                crate::io::xref::XrefStatus::NotFound => {
-                                    self.command_line.push_error(crate::tf!(
-                                        "XREF  Not found: \"{}\" ({})",
-                                        info.name, info.path
-                                    ).as_ref());
-                                }
-                                crate::io::xref::XrefStatus::Failed => {
-                                    self.command_line.push_error(crate::tf!(
-                                        "XREF  Reload failed: \"{}\" ({})",
-                                        info.name, info.path
-                                    ).as_ref());
-                                }
-                                crate::io::xref::XrefStatus::Unloaded => {
-                                    self.command_line.push_info(crate::tf!(
-                                        "XREF  Unloaded (skipped): \"{}\"",
-                                        info.name
-                                    ).as_ref());
-                                }
-                            }
+                            self.report_xref_status(info);
                         }
                         self.tabs[i].scene.populate_hatches_from_document();
                         self.tabs[i].scene.populate_images_from_document();
@@ -782,6 +906,22 @@ mod tests {
             .unwrap();
         app.refresh_block_palette_if_stale();
         assert!(app.block_palette.blocks.iter().any(|b| b.name == "Widget"));
+    }
+
+    #[test]
+    fn xref_question_mark_lists_count() {
+        let mut app = fresh_app();
+        let out = run_capture(&mut app, "XREF ?");
+        assert!(out.contains("No external references") || out.contains("External references"));
+    }
+
+    #[test]
+    fn xref_reload_no_match_resolves_nothing() {
+        let mut app = fresh_app();
+        let dirty_before = app.tabs[0].dirty;
+        let out = run_capture(&mut app, "XREF Reload ZZZ_NO_SUCH_REF");
+        assert!(out.contains("no references match"));
+        assert_eq!(app.tabs[0].dirty, dirty_before);
     }
 
     #[test]

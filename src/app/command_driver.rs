@@ -2318,9 +2318,34 @@ impl OpenCADStudio {
                     }
                 };
                 if let Some(path) = xattach_path {
+                    // XREF-Task6: the host drawing path lives in the tab
+                    // (`current_path`), not in `Scene`, so the self-attach
+                    // guard runs here via the pure `is_self_attach` helper.
+                    let host_file = self.tabs[i].current_path.clone();
+                    let host_base = host_file
+                        .as_deref()
+                        .and_then(|p| p.parent())
+                        .map(|p| p.to_path_buf());
+                    if let Some(host) = host_file.as_deref() {
+                        if crate::modules::insert::xattach::is_self_attach(
+                            host,
+                            &path,
+                            host_base.as_deref(),
+                        ) {
+                            self.command_line.push_error(
+                                "XATTACH: cannot attach the host drawing into itself.",
+                            );
+                            self.tabs[i].scene.clear_preview_wire();
+                            self.tabs[i].active_cmd = None;
+                            self.tabs[i].snap_result = None;
+                            self.restore_pre_cmd_tangent();
+                            return Task::none();
+                        }
+                    }
                     crate::modules::insert::xattach::prepare_xref_block(
                         &mut self.tabs[i].scene,
                         &path,
+                        host_base.as_deref(),
                     );
                     // Resolving the xref merged its layer / linetype tables
                     // into the document — mirror them into the Layers panel
