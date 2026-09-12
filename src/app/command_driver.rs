@@ -2301,7 +2301,7 @@ impl OpenCADStudio {
                 self.sync_dyn_fields();
                 self.refresh_area_preview(i);
             }
-            CmdResult::CommitAndExit(entity) => {
+            CmdResult::CommitAndExit(mut entity) => {
                 // For XATTACH: ensure the xref block definition exists before
                 // committing the INSERT entity that references it.
                 // Extract path early to avoid borrow conflicts.
@@ -2332,9 +2332,7 @@ impl OpenCADStudio {
                             &path,
                             host_base.as_deref(),
                         ) {
-                            self.command_line.push_error(
-                                "XATTACH: cannot attach the host drawing into itself.",
-                            );
+                            self.command_line.push_error(crate::t!("XATTACH: cannot attach the host drawing into itself.").as_ref());
                             self.tabs[i].scene.clear_preview_wire();
                             self.tabs[i].active_cmd = None;
                             self.tabs[i].snap_result = None;
@@ -2342,11 +2340,17 @@ impl OpenCADStudio {
                             return Task::none();
                         }
                     }
-                    crate::modules::insert::xattach::prepare_xref_block(
+                    let prepared_name = crate::modules::insert::xattach::prepare_xref_block(
                         &mut self.tabs[i].scene,
                         &path,
                         host_base.as_deref(),
                     );
+                    // `prepare_xref_block` may suffix a colliding stem. The
+                    // command was created before that collision was known, so
+                    // retarget its pending INSERT to the actual new block.
+                    if let acadrust::EntityType::Insert(insert) = &mut entity {
+                        insert.block_name = prepared_name;
+                    }
                     // Resolving the xref merged its layer / linetype tables
                     // into the document — mirror them into the Layers panel
                     // and ribbon dropdowns now, not on the next reopen (#407).

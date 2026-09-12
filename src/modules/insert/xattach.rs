@@ -337,8 +337,12 @@ pub fn prepare_xref_block(
         .add_entity(EntityType::BlockEnd(BlockEnd::new()));
 
     // Resolve the XREF content immediately.
-    let path_buf = std::path::PathBuf::from(&store_path);
-    if let Some(base_dir) = path_buf.parent() {
+    // Every reference in this host resolves relative to the host drawing, not
+    // relative to the newly-attached file. Using `store_path.parent()` here
+    // made an attach unexpectedly redirect existing relative xrefs.
+    if let Some(base_dir) = host_base_dir {
+        let _ = crate::io::xref::resolve_xrefs(&mut scene.document, base_dir);
+    } else if let Some(base_dir) = std::path::Path::new(&store_path).parent() {
         let _ = crate::io::xref::resolve_xrefs(&mut scene.document, base_dir);
     }
 

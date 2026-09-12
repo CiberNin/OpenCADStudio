@@ -713,6 +713,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "XDATA",
         "XR",
         "XREF",
+        "-XREF",
         "XREFMAN",
         "XRELOAD",
         "ZOOM",

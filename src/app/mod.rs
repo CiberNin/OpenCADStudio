@@ -2357,6 +2357,17 @@ pub enum Message {
     XrefManagerToggleTree,
     /// Expand/collapse one tree parent (block-record handle key).
     XrefManagerToggleExpand(u64),
+    /// Selection-scoped palette operation (detach/unload/reload/overlay/pathtype).
+    XrefManagerOp(crate::ui::window::xref_manager::XrefPaletteOp),
+    /// Details-pane "new path" draft text.
+    XrefManagerPathInput(String),
+    /// Apply the "new path" draft to the anchor entry.
+    XrefManagerPathApply,
+    /// Find & Replace row drafts.
+    XrefManagerFindInput(String),
+    XrefManagerReplaceInput(String),
+    /// Apply Find & Replace across all direct references.
+    XrefManagerFindReplaceApply,
     LayerToggleVisible(usize),
     LayerToggleLock(usize),
     LayerToggleFreeze(usize),

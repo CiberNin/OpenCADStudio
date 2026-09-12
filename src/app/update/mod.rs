@@ -2156,6 +2156,30 @@ impl OpenCADStudio {
                 self.xref_manager.toggle_expand(key);
                 Task::none()
             }
+            Message::XrefManagerOp(op) => {
+                self.xref_manager_op(op);
+                Task::none()
+            }
+            Message::XrefManagerPathInput(text) => {
+                self.xref_manager.path_input = text;
+                Task::none()
+            }
+            Message::XrefManagerPathApply => {
+                self.xref_manager_path_apply();
+                Task::none()
+            }
+            Message::XrefManagerFindInput(text) => {
+                self.xref_manager.find_input = text;
+                Task::none()
+            }
+            Message::XrefManagerReplaceInput(text) => {
+                self.xref_manager.replace_input = text;
+                Task::none()
+            }
+            Message::XrefManagerFindReplaceApply => {
+                self.xref_manager_find_replace_apply();
+                Task::none()
+            }
 
             Message::LayerStateManagerOpen => {
                 let i = self.active_tab;

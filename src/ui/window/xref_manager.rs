@@ -1,18 +1,16 @@
-//! Reference Manager palette — display-only list of external references.
+//! Reference Manager palette — list of external references with operations.
 //!
-//! Task 7 build: a read-only table (Reference / Status / Size / Type / Date /
-//! Saved Path) fed by [`collect_entries`], a List/Tree toggle over the nested
-//! closure, a details pane for the selected entry, and a toolbar whose
-//! mutating affordances are present but disabled. Mutations (attach result
-//! handling, path edits, unload/reload, missing-on-open prompt) arrive in
-//! Tasks 8–9 — this file performs no document mutation.
+//! Task 8b build: the toolbar's mutating affordances are wired to the same
+//! engine fns the CLI uses, operating on the multi-selection with per-item
+//! report lines. Session state (unloaded set, stat cache) lives per-tab on
+//! `DocumentTab`; this panel only caches display rows plus text inputs.
 
 use crate::app::Message;
-use crate::io::xref::collect_entries;
-use crate::io::xref_model::{normalize_lexical, RefKind, RefStatus, RefType, ReferenceEntry};
+use crate::io::xref::collect_entries_with_prev;
+use crate::io::xref_model::{normalize_lexical, Pathtype, RefKind, RefStatus, RefType, ReferenceEntry};
 use crate::ui::ROW_H;
 use acadrust::CadDocument;
-use iced::widget::{button, column, container, mouse_area, row, scrollable, text, tooltip};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, text, text_input, tooltip};
 use iced::Padding;
 use iced::{Background, Border, Element, Fill, Length, Theme};
 use std::collections::{HashMap, HashSet};
@@ -42,17 +40,16 @@ pub struct DisplayRow {
     pub is_nested: bool,
 }
 
-/// Display-only state for the Reference Manager palette.
+/// Palette state for the Reference Manager.
 ///
-/// `unloaded_keys` is the session unloaded set — empty for now; Task 8 wires
-/// it to unload/reload without restructuring this state.
+/// Session state (unloaded set, stat cache) lives per-tab on `DocumentTab`
+/// and is passed into [`refresh`](XrefManagerPanel::refresh); this panel
+/// only caches display rows, expansion, selection, and text inputs.
 #[derive(Default)]
 pub struct XrefManagerPanel {
-    /// Cached [`collect_entries`] output for the active drawing.
+    /// Cached [`collect_entries_with_prev`] output for the active drawing.
     pub entries: Vec<ReferenceEntry>,
-    /// Block-record / definition handles treated as unloaded (Task 8).
-    pub unloaded_keys: HashSet<u64>,
-    /// Multi-selected entry indices — consumed by batch path ops in Task 8.
+    /// Multi-selected entry indices — consumed by batch path ops.
     pub selected: HashSet<usize>,
     /// Anchor entry driving the details pane (last row clicked).
     pub anchor: Option<usize>,
@@ -66,13 +63,47 @@ pub struct XrefManagerPanel {
     pub nested: HashSet<usize>,
     /// Document tab id that produced `entries` (stale check).
     pub source_tab_id: Option<u64>,
+    /// `edit_revision` that produced `entries` — the palette auto-rescans
+    /// when the tab's revision moves (reuses the undo-snapshot counter, so
+    /// CLI and palette mutations both trip it).
+    pub source_edit_revision: u64,
+    /// Draft for the details-pane "new path" edit.
+    pub path_input: String,
+    /// Drafts for the Find & Replace row.
+    pub find_input: String,
+    pub replace_input: String,
+}
+
+/// Selection-gated palette operation the toolbar offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XrefPaletteOp {
+    Detach,
+    Unload,
+    Reload,
+    Bind,
+    Overlay,
+    Attach,
+    Pathtype(Pathtype),
 }
 
 impl XrefManagerPanel {
-    /// Rebuild `entries` from `doc` via [`collect_entries`] and recompute the
-    /// parent → children linkage for tree mode. Selection/anchor survive by
-    /// `(key, saved_path)` identity; dead indices are dropped.
-    pub fn refresh(&mut self, doc: &CadDocument, base_dir: &Path) {
+    /// Rebuild `entries` from `doc` via [`collect_entries_with_prev`] and
+    /// recompute the parent → children linkage for tree mode. Selection/anchor
+    /// survive by `(key, saved_path)` identity; dead indices are dropped.
+    ///
+    /// `unloaded`/`prev` are the active tab's session sets, so CLI and
+    /// palette agree. Returns fresh `(key, mtime)` baselines for every
+    /// `Loaded` entry — the caller writes them into the tab's stat cache,
+    /// which makes `Stale` detectable from the second refresh on.
+    /// Wasm-safe by construction: the only I/O is `collect_entries`' path
+    /// stat plus `load_file` for nested enumeration, both already wasm-safe.
+    pub fn refresh(
+        &mut self,
+        doc: &CadDocument,
+        base_dir: &Path,
+        unloaded: &HashSet<crate::io::xref_model::UnloadKey>,
+        prev: &HashMap<u64, SystemTime>,
+    ) -> Vec<(u64, SystemTime)> {
         let old = std::mem::take(&mut self.entries);
         let sel_ids: HashSet<(u64, String)> = self
             .selected
@@ -85,7 +116,7 @@ impl XrefManagerPanel {
             .and_then(|i| old.get(i))
             .map(|e| (e.key, e.saved_path.clone()));
 
-        let entries = collect_entries(doc, base_dir, &self.unloaded_keys);
+        let entries = collect_entries_with_prev(doc, base_dir, unloaded, prev);
         // Direct references, keyed by (handle, saved path) exactly as
         // `collect_entries` emits them. The saved path disambiguates a nested
         // entry whose foreign handle happens to collide with a host handle.
@@ -154,6 +185,11 @@ impl XrefManagerPanel {
                 .position(|e| e.key == k && e.saved_path == p)
         });
         self.expanded.retain(|k| live_keys.contains(k));
+        self.entries
+            .iter()
+            .filter(|e| e.status == RefStatus::Loaded)
+            .filter_map(|e| e.modified.map(|m| (e.key, m)))
+            .collect()
     }
 
     /// Click toggles membership in the multi-selection set; selecting sets the
@@ -182,6 +218,25 @@ impl XrefManagerPanel {
         }
     }
 
+    /// True when the selection includes at least one nested row. Nested rows
+    /// stay read-only — every mutating button disables with a reason then.
+    pub fn selection_has_nested(&self) -> bool {
+        self.selected.iter().any(|i| self.nested.contains(i))
+    }
+
+    /// Selected entry indices that are directly actionable (nested rows
+    /// excluded — they have no host definition to mutate).
+    pub fn actionable_selection(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = self
+            .selected
+            .iter()
+            .copied()
+            .filter(|i| *i < self.entries.len() && !self.nested.contains(i))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
     /// Flat render order for the current mode. Tree mode emits roots
     /// (direct entries plus unclaimed nested ones) with expanded children
     /// inline, skipping repeats by normalized saved path so a cyclic closure
@@ -199,10 +254,36 @@ impl XrefManagerPanel {
                 })
                 .collect();
         }
+        fn append_tree(
+            panel: &XrefManagerPanel,
+            index: usize,
+            depth: u32,
+            seen: &mut HashSet<(String, String)>,
+            rows: &mut Vec<DisplayRow>,
+        ) {
+            let Some(entry) = panel.entries.get(index) else { return; };
+            if !claim_path(seen, &entry.saved_path, &entry.name) {
+                return;
+            }
+            rows.push(DisplayRow {
+                index,
+                depth,
+                is_nested: panel.nested.contains(&index),
+            });
+            if !panel.expanded.contains(&entry.key) {
+                return;
+            }
+            if let Some(children) = panel.children.get(&entry.key) {
+                for &child in children {
+                    append_tree(panel, child, depth + 1, seen, rows);
+                }
+            }
+        }
+
         let mut rows = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        // Roots first, in collect order; children follow an expanded parent.
-        for (index, entry) in self.entries.iter().enumerate() {
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        // Roots first, then recursively expanded descendants.
+        for (index, _) in self.entries.iter().enumerate() {
             let dominated = self
                 .children
                 .values()
@@ -210,82 +291,219 @@ impl XrefManagerPanel {
             if self.nested.contains(&index) && dominated {
                 continue;
             }
-            if !claim_path(&mut seen, &entry.saved_path) {
-                continue;
-            }
-            rows.push(DisplayRow {
-                index,
-                depth: 0,
-                is_nested: self.nested.contains(&index),
-            });
-            if self.expanded.contains(&entry.key) {
-                if let Some(kids) = self.children.get(&entry.key) {
-                    for &ci in kids {
-                        let Some(child) = self.entries.get(ci) else {
-                            continue;
-                        };
-                        if !claim_path(&mut seen, &child.saved_path) {
-                            continue;
-                        }
-                        rows.push(DisplayRow {
-                            index: ci,
-                            depth: 1,
-                            is_nested: true,
-                        });
-                    }
-                }
-            }
+            append_tree(self, index, 0, &mut seen, &mut rows);
         }
         rows
     }
 
     /// Render the palette as the full content of its modal dialog.
-    pub fn view_window(&self, sizing: crate::ui::modal::ModalSizing) -> Element<'_, Message> {
+    ///
+    /// `missing` is the active tab's open-time NotFound count — a neutral
+    /// notice renders while non-zero (never an auto-open modal).
+    pub fn view_window(
+        &self,
+        sizing: crate::ui::modal::ModalSizing,
+        missing: usize,
+    ) -> Element<'_, Message> {
         // ── Toolbar ───────────────────────────────────────────────────────
         let can_attach = !IS_WASM;
         let attach = if can_attach {
-            toolbar_btn("Attach", Some(Message::XAttachPick)) // XREF-Task8: locale
+            toolbar_btn(crate::t!("Attach").into_owned(), Some(Message::XAttachPick))
         } else {
             toolbar_tip(
-                "Attach", // XREF-Task8: locale
-                "File attach is not available on web — the reference list below is read-only.", // XREF-Task8: locale
+                crate::t!("Attach").into_owned(),
+                crate::t!("File attach is not available on web — the reference list below is read-only.").into_owned(),
             )
         };
-        let image_btn = toolbar_tip(
-            "Image…", // XREF-Task8: locale
-            "images/PDF attach — Task 8", // XREF-Task8: locale
+        let refresh = toolbar_btn(
+            crate::t!("Refresh").into_owned(),
+            Some(Message::XrefManagerRefresh),
         );
-        let pdf_btn = toolbar_tip(
-            "PDF…", // XREF-Task8: locale
-            "images/PDF attach — Task 8", // XREF-Task8: locale
-        );
-        let refresh = toolbar_btn("Refresh", Some(Message::XrefManagerRefresh)); // XREF-Task8: locale
-        let mode_label = if self.tree { "List" } else { "Tree" }; // XREF-Task8: locale
+        let mode_label = if self.tree {
+            crate::t!("List").into_owned()
+        } else {
+            crate::t!("Tree").into_owned()
+        };
         let mode_btn = toolbar_btn(mode_label, Some(Message::XrefManagerToggleTree));
         let mode_btn: Element<'_, Message> = tooltip(
             mode_btn,
-            text("Toggle list/tree").size(11), // XREF-Task8: locale
+            text(crate::t!("Toggle list/tree")).size(11),
             tooltip::Position::Bottom,
         )
         .into();
-        // Change Path submenu items exist but stay disabled until Task 8.
+        // Selection-gated ops: disabled with a reason when nothing actionable
+        // is selected (empty selection, or nested rows which stay read-only).
+        let gate: Option<String> = if IS_WASM {
+            Some(crate::t!("Reference changes are not available on web — the reference list is read-only.").into_owned())
+        } else if self.selected.is_empty() {
+            Some(crate::t!("Select a reference first.").into_owned())
+        } else if self.selection_has_nested() {
+            Some(
+                crate::t!("Nested references are read-only — edit them in their host drawing.")
+                    .into_owned(),
+            )
+        } else {
+            None
+        };
+        let op_btn = |label: String, op: XrefPaletteOp, gate: &Option<String>| match gate {
+            Some(reason) => toolbar_tip(label, reason.clone()),
+            None => toolbar_btn(label, Some(Message::XrefManagerOp(op))),
+        };
+        let detach = op_btn(
+            crate::t!("Detach").into_owned(),
+            XrefPaletteOp::Detach,
+            &gate,
+        );
+        let unload = op_btn(
+            crate::t!("Unload").into_owned(),
+            XrefPaletteOp::Unload,
+            &gate,
+        );
+        let reload = op_btn(
+            crate::t!("Reload").into_owned(),
+            XrefPaletteOp::Reload,
+            &gate,
+        );
+        let bind = op_btn(
+            crate::t!("Bind").into_owned(),
+            XrefPaletteOp::Bind,
+            &gate,
+        );
+        let overlay = op_btn(
+            crate::t!("Overlay").into_owned(),
+            XrefPaletteOp::Overlay,
+            &gate,
+        );
+        // Type control, both directions: Attach ↔ Overlay (same engine fn the
+        // CLI Overlay arm uses; images/PDFs report the drawing-only error).
+        let attach_type = op_btn(
+            crate::t!("Attach").into_owned(),
+            XrefPaletteOp::Attach,
+            &gate,
+        );
         let change_path = row![
-            text("Change Path:").size(11), // XREF-Task8: locale
-            toolbar_tip("Full", "path operations — Task 8"), // XREF-Task8: locale
-            toolbar_tip("Relative", "path operations — Task 8"), // XREF-Task8: locale
-            toolbar_tip("File name", "path operations — Task 8"), // XREF-Task8: locale
+            text(crate::t!("Change Path:")).size(11),
+            op_btn(
+                crate::t!("Full").into_owned(),
+                XrefPaletteOp::Pathtype(Pathtype::Full),
+                &gate,
+            ),
+            op_btn(
+                crate::t!("Relative").into_owned(),
+                XrefPaletteOp::Pathtype(Pathtype::Relative),
+                &gate,
+            ),
+            op_btn(
+                crate::t!("File name").into_owned(),
+                XrefPaletteOp::Pathtype(Pathtype::None),
+                &gate,
+            ),
         ]
         .spacing(2)
         .align_y(iced::Center);
-        // No docs hook exists yet — tooltip only, no docs files (Task 7).
         let help = toolbar_tip(
-            "Help", // XREF-Task8: locale
-            "Reference Manager — path operations ship with a later task.", // XREF-Task8: locale
+            crate::t!("Help").into_owned(),
+            crate::t!("Reference Manager — select rows, then Detach, Unload, Reload, Bind, Overlay, or a Change Path mode.").into_owned(),
         );
         let toolbar = container(
-            row![attach, image_btn, pdf_btn, refresh, mode_btn, change_path, help]
-                .spacing(4)
-                .align_y(iced::Center),
+            row![
+                attach,
+                refresh,
+                mode_btn,
+                detach,
+                unload,
+                reload,
+                bind,
+                overlay,
+                attach_type,
+                change_path,
+                help
+            ]
+            .spacing(4)
+            .align_y(iced::Center),
+        )
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.weak.color)),
+            ..Default::default()
+        })
+        .width(sizing.width)
+        .padding([4, 8]);
+
+        // ── Find & Replace / path-edit row ────────────────────────────────
+        let find_apply = if IS_WASM {
+            toolbar_tip(
+                crate::t!("Apply").into_owned(),
+                crate::t!("Reference changes are not available on web — the reference list is read-only.").into_owned(),
+            )
+        } else if self.find_input.is_empty() {
+            toolbar_tip(
+                crate::t!("Apply").into_owned(),
+                crate::t!("Type the path prefix to find first.").into_owned(),
+            )
+        } else {
+            toolbar_btn(
+                crate::t!("Apply").into_owned(),
+                Some(Message::XrefManagerFindReplaceApply),
+            )
+        };
+        // Path edit applies to the anchor entry; nested anchors stay disabled.
+        let anchor_nested = self
+            .anchor
+            .is_some_and(|a| self.nested.contains(&a));
+        let path_apply = match self.anchor.and_then(|i| self.entries.get(i)) {
+            Some(_) if IS_WASM => toolbar_tip(
+                crate::t!("Set Path").into_owned(),
+                crate::t!("Reference changes are not available on web — the reference list is read-only.").into_owned(),
+            ),
+            Some(_) if anchor_nested => toolbar_tip(
+                crate::t!("Set Path").into_owned(),
+                crate::t!("Nested references are read-only — edit them in their host drawing.")
+                    .into_owned(),
+            ),
+            Some(_) if !self.path_input.is_empty() => toolbar_btn(
+                crate::t!("Set Path").into_owned(),
+                Some(Message::XrefManagerPathApply),
+            ),
+            Some(_) => toolbar_tip(
+                crate::t!("Set Path").into_owned(),
+                crate::t!("Type a new path first.").into_owned(),
+            ),
+            None => toolbar_tip(
+                crate::t!("Set Path").into_owned(),
+                crate::t!("Select a reference first.").into_owned(),
+            ),
+        };
+        let edit_row = container(
+            row![
+                text(crate::t!("Find:")).size(11),
+                text_input(
+                    crate::t!("old path prefix").as_ref(),
+                    &self.find_input
+                )
+                .on_input(Message::XrefManagerFindInput)
+                .size(11)
+                .padding(4)
+                .width(Length::Fixed(150.0)),
+                text(crate::t!("Replace:")).size(11),
+                text_input(
+                    crate::t!("new path prefix").as_ref(),
+                    &self.replace_input
+                )
+                .on_input(Message::XrefManagerReplaceInput)
+                .size(11)
+                .padding(4)
+                .width(Length::Fixed(150.0)),
+                find_apply,
+                text(crate::t!("Path:")).size(11),
+                text_input(crate::t!("new path for selection").as_ref(), &self.path_input)
+                    .on_input(Message::XrefManagerPathInput)
+                    .size(11)
+                    .padding(4)
+                    .width(Length::Fill),
+                path_apply,
+            ]
+            .spacing(4)
+            .align_y(iced::Center),
         )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(theme.palette().background.weak.color)),
@@ -297,12 +515,12 @@ impl XrefManagerPanel {
         // ── Column header ─────────────────────────────────────────────────
         let col_header = container(
             row![
-                text("Reference").size(10).style(muted_style).width(Length::FillPortion(3)), // XREF-Task8: locale
-                text("Status").size(10).style(muted_style).width(Length::Fixed(88.0)), // XREF-Task8: locale
-                text("Size").size(10).style(muted_style).width(Length::Fixed(76.0)), // XREF-Task8: locale
-                text("Type").size(10).style(muted_style).width(Length::Fixed(76.0)), // XREF-Task8: locale
-                text("Date").size(10).style(muted_style).width(Length::Fixed(96.0)), // XREF-Task8: locale
-                text("Saved Path").size(10).style(muted_style).width(Length::FillPortion(4)), // XREF-Task8: locale
+                text(crate::t!("Reference")).size(10).style(muted_style).width(Length::FillPortion(3)),
+                text(crate::t!("Status")).size(10).style(muted_style).width(Length::Fixed(88.0)),
+                text(crate::t!("Size")).size(10).style(muted_style).width(Length::Fixed(76.0)),
+                text(crate::t!("Type")).size(10).style(muted_style).width(Length::Fixed(76.0)),
+                text(crate::t!("Date")).size(10).style(muted_style).width(Length::Fixed(96.0)),
+                text(crate::t!("Saved Path")).size(10).style(muted_style).width(Length::FillPortion(4)),
             ]
             .spacing(4)
             .width(sizing.width)
@@ -343,7 +561,7 @@ impl XrefManagerPanel {
         }
         let body: Element<'_, Message> = if self.entries.is_empty() {
             container(
-                text("No external references in this drawing") // XREF-Task8: locale
+                text(crate::t!("XREF  No external references in this drawing."))
                     .size(12)
                     .color(iced::Color {
                         r: 0.55,
@@ -361,10 +579,28 @@ impl XrefManagerPanel {
             scrollable(rows_col).height(Length::Fixed(TABLE_H)).into()
         };
 
-        // ── Details pane ──────────────────────────────────────────────────
+        // ── Missing-on-open notice + details pane ─────────────────────────
+        let notice: Option<Element<'_, Message>> = if missing > 0 {
+            Some(
+                container(text(crate::tf!(
+                    "{} reference(s) not found — open the reference manager with XREFMAN.",
+                    missing
+                )))
+                .padding([6, 8])
+                .width(Fill)
+                .into(),
+            )
+        } else {
+            None
+        };
         let details = details_pane(self.anchor.and_then(|i| self.entries.get(i)));
 
-        container(column![toolbar, col_header, body, details].spacing(0))
+        let mut content = column![toolbar, edit_row, col_header, body];
+        if let Some(notice) = notice {
+            content = content.push(notice);
+        }
+        content = content.push(details);
+        container(content.spacing(0))
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
                     theme.palette().background.base.color,
@@ -383,9 +619,6 @@ impl XrefManagerPanel {
 fn direct_identities(doc: &CadDocument) -> HashSet<(u64, String)> {
     use acadrust::entities::UnderlayType;
     use acadrust::objects::ObjectType;
-    use acadrust::types::Handle;
-    use acadrust::EntityType;
-    use rustc_hash::FxHashSet;
 
     let mut ids: HashSet<(u64, String)> = HashSet::new();
     for br in doc.block_records.iter() {
@@ -393,20 +626,10 @@ fn direct_identities(doc: &CadDocument) -> HashSet<(u64, String)> {
             ids.insert((br.handle.value(), br.xref_path.clone()));
         }
     }
-    let mut referenced_images: FxHashSet<Handle> = FxHashSet::default();
-    for e in doc.entities() {
-        if let EntityType::RasterImage(img) = e {
-            if let Some(h) = img.definition_handle {
-                referenced_images.insert(h);
-            }
-        }
-    }
     for (handle, obj) in doc.objects.iter() {
         match obj {
             ObjectType::ImageDefinition(def) => {
-                if referenced_images.contains(handle) {
-                    ids.insert((handle.value(), def.file_name.clone()));
-                }
+                ids.insert((handle.value(), def.file_name.clone()));
             }
             ObjectType::UnderlayDefinition(def) => {
                 if def.underlay_type == UnderlayType::Pdf {
@@ -419,36 +642,38 @@ fn direct_identities(doc: &CadDocument) -> HashSet<(u64, String)> {
     ids
 }
 
-/// Claim a normalized saved path for display; empty paths always pass, repeats
-/// are skipped (cycle guard).
-fn claim_path(seen: &mut HashSet<String>, saved_path: &str) -> bool {
+/// Claim a `(normalized saved path, entry name)` pair for display; empty
+/// paths always pass, exact repeats are skipped (cycle guard). Two entries
+/// sharing one file under different names both render.
+fn claim_path(seen: &mut HashSet<(String, String)>, saved_path: &str, name: &str) -> bool {
     if saved_path.is_empty() {
         return true;
     }
-    seen.insert(normalize_lexical(saved_path))
+    seen.insert((normalize_lexical(saved_path), name.to_string()))
 }
 
 // ── Text helpers ──────────────────────────────────────────────────────────
 
-fn status_text(status: RefStatus) -> &'static str {
+fn status_text(status: RefStatus) -> std::borrow::Cow<'static, str> {
     match status {
-        RefStatus::Loaded => "Loaded", // XREF-Task8: locale
-        RefStatus::Unloaded => "Unloaded", // XREF-Task8: locale
-        RefStatus::NotFound => "Not found", // XREF-Task8: locale
-        RefStatus::Failed => "Failed", // XREF-Task8: locale
-        RefStatus::Stale => "Stale", // XREF-Task8: locale
-        RefStatus::Orphaned => "Orphaned", // XREF-Task8: locale
+        RefStatus::Loaded => crate::t!("Loaded"),
+        RefStatus::Unloaded => crate::t!("Unloaded"),
+        RefStatus::NotFound => crate::t!("Not found"),
+        RefStatus::Failed => crate::t!("Failed"),
+        RefStatus::Stale => crate::t!("Stale"),
+        RefStatus::Orphaned => crate::t!("Orphaned"),
+        RefStatus::Unreferenced => crate::t!("Unreferenced"),
     }
 }
 
-fn type_text(entry: &ReferenceEntry) -> &'static str {
+fn type_text(entry: &ReferenceEntry) -> std::borrow::Cow<'static, str> {
     match entry.kind {
         RefKind::DwgXref => match entry.ref_type {
-            RefType::Attach => "Attach", // XREF-Task8: locale
-            RefType::Overlay => "Overlay", // XREF-Task8: locale
+            RefType::Attach => crate::t!("Attach"),
+            RefType::Overlay => crate::t!("Overlay"),
         },
-        RefKind::Image => "Image", // XREF-Task8: locale
-        RefKind::Pdf => "PDF", // XREF-Task8: locale
+        RefKind::Image => crate::t!("Image"),
+        RefKind::Pdf => crate::t!("PDF"),
     }
 }
 
@@ -513,7 +738,7 @@ fn row_button_style(selected: bool, index: usize) -> impl Fn(&Theme, button::Sta
     }
 }
 
-fn toolbar_btn<'a>(label: &'static str, msg: Option<Message>) -> Element<'a, Message> {
+fn toolbar_btn(label: String, msg: Option<Message>) -> Element<'static, Message> {
     let mut b = button(text(label).size(11))
         .style(|theme: &Theme, status| {
             let palette = theme.palette();
@@ -541,9 +766,9 @@ fn toolbar_btn<'a>(label: &'static str, msg: Option<Message>) -> Element<'a, Mes
     b.into()
 }
 
-/// Disabled toolbar affordance with an explanatory tooltip (Task 8 work or
-/// web-gated mutations).
-fn toolbar_tip<'a>(label: &'static str, tip: &'static str) -> Element<'a, Message> {
+/// Disabled toolbar affordance with an explanatory tooltip (gated
+/// operations, nested-selection blocks, or web-gated mutations).
+fn toolbar_tip(label: String, tip: String) -> Element<'static, Message> {
     let b = button(text(label).size(11).style(|theme: &Theme| {
         iced::widget::text::Style {
             color: Some(
@@ -582,7 +807,7 @@ fn xref_row<'a>(
 ) -> Element<'a, Message> {
     let mut name = entry.name.clone();
     if display.is_nested {
-        name.push_str(" (nested — not rendered)"); // XREF-Task8: locale
+        name.push_str(&crate::t!(" (nested — not rendered)"));
     }
     let mut name_cell = row![].spacing(2).align_y(iced::Center);
     if display.depth > 0 {
@@ -652,7 +877,7 @@ fn xref_row<'a>(
 
 fn details_pane(entry: Option<&ReferenceEntry>) -> Element<'_, Message> {
     let inner: Element<'_, Message> = match entry {
-        None => text("Select a reference to inspect its details") // XREF-Task8: locale
+        None => text(crate::t!("Select a reference to inspect its details"))
             .size(11)
             .style(muted_style)
             .into(),
@@ -666,13 +891,13 @@ fn details_pane(entry: Option<&ReferenceEntry>) -> Element<'_, Message> {
             let size = format_size(e.size_bytes);
             let date = format_date(e.modified);
             column![
-                detail_row("Reference", e.name.as_str()), // XREF-Task8: locale
-                detail_row("Status", status_text(e.status)), // XREF-Task8: locale
-                detail_row("Size", size), // XREF-Task8: locale
-                detail_row("Type", type_text(e)), // XREF-Task8: locale
-                detail_row("Date", date), // XREF-Task8: locale
-                detail_row("Found At", found), // XREF-Task8: locale
-                detail_row("Saved Path", saved), // XREF-Task8: locale
+                detail_row(crate::t!("Reference"), e.name.as_str()),
+                detail_row(crate::t!("Status"), status_text(e.status)),
+                detail_row(crate::t!("Size"), size),
+                detail_row(crate::t!("Type"), type_text(e)),
+                detail_row(crate::t!("Date"), date),
+                detail_row(crate::t!("Found At"), found),
+                detail_row(crate::t!("Saved Path"), saved),
             ]
             .spacing(1)
             .into()
@@ -680,7 +905,7 @@ fn details_pane(entry: Option<&ReferenceEntry>) -> Element<'_, Message> {
     };
     container(
         column![
-            text("Details").size(10).style(muted_style), // XREF-Task8: locale
+            text(crate::t!("Details")).size(10).style(muted_style),
             inner,
         ]
         .spacing(2),
@@ -699,7 +924,11 @@ fn details_pane(entry: Option<&ReferenceEntry>) -> Element<'_, Message> {
     .into()
 }
 
-fn detail_row<'a>(label: &'static str, value: impl Into<std::borrow::Cow<'a, str>>) -> Element<'a, Message> {
+fn detail_row<'a>(
+    label: impl Into<std::borrow::Cow<'a, str>>,
+    value: impl Into<std::borrow::Cow<'a, str>>,
+) -> Element<'a, Message> {
+    let label: std::borrow::Cow<'a, str> = label.into();
     let value: std::borrow::Cow<'a, str> = value.into();
     row![
         text(label).size(11).style(muted_style).width(Length::Fixed(84.0)),
@@ -765,26 +994,43 @@ mod tests {
             entry(3, "B2", "b.dwg"),
         ];
         panel.tree = true;
-        // Repeats collapse even among roots: B2 shares B's path.
-        assert_eq!(panel.display_rows().len(), 2);
-        // Mark B2 nested under A: the repeat path now collapses away —
-        // A claims a.dwg, B2-as-child claims b.dwg, the B root is a repeat.
+        // Same file under two names renders twice; only exact
+        // (path, name) repeats collapse.
+        assert_eq!(panel.display_rows().len(), 3);
+        panel.entries.push(entry(4, "B", "b.dwg"));
+        assert_eq!(panel.display_rows().len(), 3);
+        // Mark B2 nested under A: A claims (a.dwg, A), B2-as-child claims
+        // (b.dwg, B2); the B root still renders as (b.dwg, B).
         panel.nested.insert(2);
         panel.children.insert(1, vec![2]);
         panel.expanded.insert(1);
         let rows = panel.display_rows();
-        assert_eq!(rows.len(), 2); // A, B-as-child-of-A
+        assert_eq!(rows.len(), 3); // A, B2-as-child-of-A, B
         assert!(rows.iter().any(|r| r.index == 2 && r.is_nested));
-        // A second parent claiming the same path shows nothing twice.
-        panel.entries.push(entry(4, "C", "c.dwg"));
-        panel.children.insert(4, vec![2]);
-        panel.expanded.insert(4);
+        // A second parent claiming the same child shows nothing twice.
+        panel.entries.push(entry(5, "C", "c.dwg"));
+        panel.children.insert(5, vec![2]);
+        panel.expanded.insert(5);
         let count = panel
             .display_rows()
             .iter()
             .filter(|r| r.index == 2)
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn actionable_selection_skips_nested() {
+        let mut panel = XrefManagerPanel::default();
+        panel.entries = vec![entry(1, "A", "a.dwg"), entry(2, "B", "b.dwg")];
+        panel.nested.insert(1);
+        panel.toggle_select(0);
+        panel.toggle_select(1);
+        assert!(panel.selection_has_nested());
+        // Only the direct row is actionable; the nested row stays read-only.
+        assert_eq!(panel.actionable_selection(), vec![0]);
+        panel.toggle_select(1);
+        assert!(!panel.selection_has_nested());
     }
 
     #[test]

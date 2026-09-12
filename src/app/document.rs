@@ -195,6 +195,16 @@ pub(super) struct DocumentTab {
     pub(super) active_mleader_style: String,
     /// Last camera_generation value written back to the document.
     pub(super) last_synced_camera_gen: u64,
+    /// Session set of unloaded reference keys (Task 8b). Owns the set that
+    /// `collect_entries` takes as `unloaded`, so CLI and palette agree.
+    pub(super) xref_unloaded: crate::io::xref_model::UnloadSet,
+    /// Load-time mtimes per reference key (Task 8b). Written on every
+    /// palette refresh; `Stale` is detectable from the second refresh on.
+    pub(super) xref_stat_cache: crate::io::xref_model::RefStatCache,
+    /// NotFound count from the last file-open xref resolution (Task 8b).
+    /// The palette renders a neutral "open XREFMAN" notice while non-zero;
+    /// never auto-opens a modal. Cleared by a clean palette refresh.
+    pub(super) xref_missing: usize,
     /// Sentinel "Welcome / Start" tab. Always at index 0 when present.
     /// Cannot be closed; the viewport area renders a welcome page instead
     /// of the model-space shader. The scene is still constructed so the
@@ -615,6 +625,9 @@ impl DocumentTab {
             active_block_edit: None,
             active_mleader_style: "Standard".to_string(),
             last_synced_camera_gen: 0,
+            xref_unloaded: crate::io::xref_model::UnloadSet::default(),
+            xref_stat_cache: crate::io::xref_model::RefStatCache::default(),
+            xref_missing: 0,
             is_start: false,
             pan_mode: false,
             orbit_mode: false,

@@ -20,8 +20,7 @@ impl OpenCADStudio {
             Some(K::UpdateNotice) => crate::tr!("modal", "update-available"),
             Some(K::DonationPrompt) => crate::tr!("donation", "title"),
             Some(K::Layers) => crate::tr!("modal", "layer-manager"),
-            // XREF-Task8: locale (hardcoded until Task 8 batches locale strings).
-            Some(K::XrefManager) => "Reference Manager".to_string(),
+            Some(K::XrefManager) => crate::t!("Reference Manager").into_owned(),
             Some(K::LayerStateManager) => crate::tr!("modal", "layer-state-manager"),
             Some(K::LayerTranslator) => crate::t!("Layer Translator").into_owned(),
             Some(K::DrawingUnits) => crate::t!("Drawing Units").into_owned(),
@@ -397,8 +396,9 @@ impl OpenCADStudio {
                 )
             }
             super::super::ModalKind::XrefManager => {
-                sized_flow(ex, 960, 520, |flow| {
-                    self.xref_manager.view_window(flow)
+                sized_flow(ex, 960, 560, |flow| {
+                    let missing = self.tabs[self.active_tab].xref_missing;
+                    self.xref_manager.view_window(flow, missing)
                 })
             }
             super::super::ModalKind::LayerTranslator => {

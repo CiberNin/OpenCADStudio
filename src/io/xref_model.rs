@@ -1,41 +1,61 @@
 // XREF path model — lexical identity for external references (Task 2).
 
-/// Lexical path normalization for reference identity. Never touches the
-/// filesystem (canonicalize fails on missing files; NotFound is common).
-/// Backslash→slash, `.`/`..` component cleanup, case-fold on Windows.
-pub fn normalize_lexical(raw: &str) -> String {
+/// Shared lexical walk for [`normalize_lexical`] (identity: case-folded on
+/// Windows) and [`normalize_display`] (display: case-preserving). One
+/// implementation so the two can never drift apart.
+///
+/// `fold_case` lowercases the drive prefix and the joined remainder.
+/// UNC shares (`//server/share/…`) additionally clamp `..` at the share root
+/// (`floor == 2`): climbing above the share is deterministic garbage
+/// otherwise, and a share root behaves like a filesystem root for this
+/// purpose. Drive-absolute paths clamp at `/`; relative paths retain
+/// surplus `..` (it still means "up").
+fn normalize_core(raw: &str, fold_case: bool) -> String {
     // 1. Separator unification. Pure string op — no I/O, so missing files
     // (the common NotFound case) normalize exactly like present ones.
     let slashed = raw.replace('\\', "/");
 
-    // 2. Prefix split: drive (`C:`), UNC (`//`), or none. The prefix is
-    // lowercased so `C:\x` and `c:/x` hash to the same identity.
+    // 2. Prefix split: drive (`C:`), UNC (`//`), or none.
     let bytes = slashed.as_bytes();
-    let (prefix, mut rest) = if bytes.len() >= 2
+    let (prefix, mut rest, unc) = if bytes.len() >= 2
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
     {
-        (slashed[..2].to_ascii_lowercase(), slashed[2..].to_string())
-    } else if slashed.starts_with("//") {
-        ("//".to_string(), slashed[2..].to_string())
+        let drive = &slashed[..2];
+        (
+            if fold_case {
+                drive.to_ascii_lowercase()
+            } else {
+                drive.to_string()
+            },
+            slashed[2..].to_string(),
+            false,
+        )
+    } else if let Some(stripped) = slashed.strip_prefix("//") {
+        ("//".to_string(), stripped.to_string(), true)
     } else {
-        (String::new(), slashed)
+        (String::new(), slashed, false)
     };
-    if prefix == "//" {
+    if unc {
         // Collapse `///share` → `//share` so the rejoin can't triple-slash.
         rest = rest.trim_start_matches('/').to_string();
     }
     let absolute = rest.starts_with('/');
+    // Components below this stack depth survive `..`: 2 for UNC
+    // (server + share), 0 otherwise (absolute roots clamp via `absolute`).
+    let floor = if unc { 2 } else { 0 };
+    let climb = !(absolute || unc);
 
     // 3. Lexical component cleanup: drop empties/`.`, resolve `..` by
-    // popping. A relative path that climbs past its root keeps the surplus
-    // `..` (it still means "up"); an absolute path clamps at its root.
+    // popping subject to the floor above.
     let mut stack: Vec<&str> = Vec::new();
     for comp in rest.split('/') {
         if comp.is_empty() || comp == "." {
             continue;
         } else if comp == ".." {
-            if stack.pop().is_none() && !absolute {
+            if stack.len() > floor {
+                stack.pop();
+            } else if climb {
                 stack.push("..");
             }
         } else {
@@ -46,7 +66,7 @@ pub fn normalize_lexical(raw: &str) -> String {
     // 4. Case fold: Windows filesystems are case-insensitive, so identity
     // must be too. Elsewhere case is significant and preserved.
     let mut joined = stack.join("/");
-    if cfg!(windows) {
+    if fold_case && cfg!(windows) {
         joined = joined.to_lowercase();
     }
 
@@ -55,6 +75,18 @@ pub fn normalize_lexical(raw: &str) -> String {
         joined = format!("/{joined}");
     }
     format!("{prefix}{joined}")
+}
+
+/// Lexical path normalization for reference identity. Never touches the
+/// filesystem (canonicalize fails on missing files; NotFound is common).
+/// Backslash→slash, `.`/`..` component cleanup, case-fold on Windows.
+pub fn normalize_lexical(raw: &str) -> String {
+    // `fold_case` is passed as true unconditionally: `normalize_core` still
+    // gates the actual fold on `cfg!(windows)`, so non-Windows builds keep
+    // case-sensitive identity (folding there would conflate distinct files).
+    // `root_key` lowercases its own input separately for root comparison, so
+    // identity regimes stay aligned across targets without touching this.
+    normalize_core(raw, true)
 }
 
 /// How an XREF path is stored relative to its host drawing.
@@ -72,40 +104,10 @@ pub enum PathtypeError {
     UnsavedHost,
 }
 
+/// Case-preserving sibling of [`normalize_lexical`] for stored/display paths.
+/// Same walk, no case folding.
 fn normalize_display(raw: &str) -> String {
-    let slashed = raw.replace('\\', "/");
-    let bytes = slashed.as_bytes();
-    let (prefix, mut rest) = if bytes.len() >= 2
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-    {
-        (slashed[..2].to_string(), slashed[2..].to_string())
-    } else if slashed.starts_with("//") {
-        ("//".to_string(), slashed[2..].to_string())
-    } else {
-        (String::new(), slashed)
-    };
-    if prefix == "//" {
-        rest = rest.trim_start_matches('/').to_string();
-    }
-    let absolute = rest.starts_with('/');
-    let mut stack: Vec<&str> = Vec::new();
-    for comp in rest.split('/') {
-        if comp.is_empty() || comp == "." {
-            continue;
-        } else if comp == ".." {
-            if stack.pop().is_none() && !absolute {
-                stack.push("..");
-            }
-        } else {
-            stack.push(comp);
-        }
-    }
-    let mut joined = stack.join("/");
-    if absolute {
-        joined = format!("/{joined}");
-    }
-    format!("{prefix}{joined}")
+    normalize_core(raw, false)
 }
 
 fn root_key(normalized: &str) -> String {
@@ -181,7 +183,19 @@ pub fn to_pathtype_result(
     pathtype: Pathtype,
 ) -> Result<String, PathtypeError> {
     match pathtype {
-        Pathtype::Full => Ok(normalize_display(path)),
+        // Absolute output: a stored relative path is resolved against the
+        // host folder first, so `Full` is never a silent no-op on one.
+        Pathtype::Full => {
+            if is_relative_path(&normalize_lexical(path)) && !normalize_lexical(path).is_empty() {
+                if let Some(dir) = host.parent() {
+                    if !dir.as_os_str().is_empty() {
+                        let joined = dir.join(normalize_display(path)).to_string_lossy().into_owned();
+                        return Ok(normalize_display(&joined));
+                    }
+                }
+            }
+            Ok(normalize_display(path))
+        }
         Pathtype::None => Ok(file_name_only(path)),
         Pathtype::Relative => {
             let parent = host.parent();
@@ -215,20 +229,18 @@ pub fn to_pathtype_result(
             {
                 k += 1;
             }
+            // Display components mirror normalized ones 1:1 (case folding
+            // cannot change component counts), so the display tail is reused
+            // to preserve the stored casing in the output.
             let target_disp = normalize_display(path);
             let target_comps_disp = comps_after_root(&target_disp);
+            debug_assert_eq!(target_comps_disp.len(), target_comps_norm.len());
             let mut parts: Vec<String> = Vec::new();
             for _ in 0..host_comps_norm.len().saturating_sub(k) {
                 parts.push("..".to_string());
             }
-            if target_comps_disp.len() == target_comps_norm.len() {
-                for c in target_comps_disp.iter().skip(k) {
-                    parts.push(c.to_string());
-                }
-            } else {
-                for c in target_comps_norm.iter().skip(k) {
-                    parts.push(c.to_string());
-                }
+            for c in target_comps_disp.iter().skip(k) {
+                parts.push(c.to_string());
             }
             if parts.is_empty() {
                 return Ok(file_name_only(path));
@@ -299,7 +311,11 @@ pub enum RefStatus {
     NotFound,
     Failed,
     Stale,
+    /// A nested entry whose host failed (distinct from [`RefStatus::Unreferenced`).
     Orphaned,
+    /// A definition with no placed instances (e.g. an image definition no
+    /// entity references). Listed so it can be managed, never merged.
+    Unreferenced,
 }
 
 /// How a DWG xref attaches: full re-export (`Attach`) vs local-only (`Overlay`).
@@ -314,10 +330,10 @@ pub enum RefType {
 /// `key` is the block-record handle (DWG xref) or definition-object handle
 /// (image / PDF) for top-level entries — stable across renames, so
 /// [`renamed`](Self::renamed) keeps it. Nested child entries (enumerated from
-/// a host file, never merged) use [`child_key`] — a stable hash of
-/// `(parent_key, name, saved_path)` — so a foreign handle that collides with
-/// a host handle can never alias a host row. `saved_path` is the raw stored
-/// string verbatim, never synthesized; `found_at` is where it actually
+/// a host file, never merged) use [`child_key`] — an FNV-1a namespaced hash
+/// of `(parent_key, name, saved_path)` — so a foreign handle that collides
+/// with a host handle can never alias a host row. `saved_path` is the raw
+/// stored string verbatim, never synthesized; `found_at` is where it actually
 /// resolved, if anywhere.
 ///
 /// `parent_key` is `None` for roots and `Some(host_key)` for nested children.
@@ -334,7 +350,6 @@ pub struct ReferenceEntry {
     pub modified: Option<std::time::SystemTime>,
     pub saved_path: String,
     pub found_at: Option<String>,
-    pub loaded: bool,
     pub parent_key: Option<u64>,
 }
 
@@ -350,7 +365,6 @@ impl ReferenceEntry {
             modified: None,
             saved_path: String::new(),
             found_at: None,
-            loaded: true,
             parent_key: None,
         }
     }
@@ -365,40 +379,57 @@ impl ReferenceEntry {
     }
 }
 
-/// Bind-style symbol name for a nested xref block: AutoCAD's `BIND` inserts
-/// `$0$` separators, so `PLAN` → `DETAIL` → `WALLS` reads transitively.
+/// Bind-style symbol name for a nested xref block: the industry-standard
+/// CAD bind scheme inserts `$0$` separators, so `PLAN` → `DETAIL` → `WALLS`
+/// reads transitively.
 pub fn bind_symbol(parent: &str, child: &str, sym: &str) -> String {
     format!("{parent}$0${child}$0${sym}")
 }
 /// [`bind_symbol`] for the two-level case, bumping the `$N$` counter past
 /// every collision in `taken` (`PLAN$0$WALLS` taken → `PLAN$1$WALLS`).
+///
+/// Always terminates: `taken` holds N names, so one of the N+1 candidates
+/// `0..=N` is necessarily free (pigeonhole) — no counter cap needed.
 pub fn bind_symbol_taken(parent: &str, sym: &str, taken: &[impl AsRef<str>]) -> String {
-    let mut n = 0u32;
-    loop {
+    for n in 0..=taken.len() as u32 {
         let candidate = format!("{parent}${n}${sym}");
         if !taken.iter().any(|t| t.as_ref() == candidate) {
             return candidate;
         }
-        n += 1;
     }
+    // Unreachable by the argument above; kept total instead of panicking.
+    format!("{parent}$4294967295${sym}")
 }
 
 /// Stable key for a nested child entry.
 ///
 /// Top-level entries keep the host handle value unchanged. Nested children
 /// come from foreign files whose handle values can collide with host handles,
-/// so they are namespaced via `DefaultHasher(parent_key, name, saved_path)`.
-/// Deterministic within a run; same derivation is used everywhere
+/// so they are namespaced via FNV-1a over `(parent_key, name, saved_path)`
+/// with the top bit forced set (`0x8000_0000_0000_0000`). The high bit is the
+/// namespace tag: host handles (sequentially allocated, nowhere near 2^63)
+/// never have it set, so a nested key can never alias a host key — in the
+/// stat cache, the unload set's raw views, or anywhere else a bare `u64`
+/// travels. FNV-1a is chosen over `DefaultHasher` deliberately: the algorithm
+/// is fixed, so keys are stable across runs and toolchain versions (a
+/// `DefaultHasher` key would become a persistence-format hazard the moment
+/// unload state is ever persisted). Same derivation is used everywhere
 /// `collect_entries` output is consumed, so palette `(key, saved_path)` rows
 /// keep resolving.
 pub fn child_key(parent_key: u64, name: &str, saved_path: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    parent_key.hash(&mut h);
-    name.hash(&mut h);
-    saved_path.hash(&mut h);
-    h.finish()
+    // FNV-1a/64 (offset 14695981039346656037, prime 1099511628211).
+    let mut h: u64 = 14695981039346656037;
+    for b in parent_key
+        .to_le_bytes()
+        .iter()
+        .chain(name.as_bytes())
+        .chain([0u8].iter())
+        .chain(saved_path.as_bytes())
+    {
+        h ^= *b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    h | 0x8000_0000_0000_0000
 }
 
 /// Pure status decision for one entry (no filesystem).
@@ -407,11 +438,15 @@ pub fn child_key(parent_key: u64, name: &str, saved_path: &str) -> u64 {
 ///   never reaches here — it is decided before stat).
 /// - `live` is the current mtime, `cached` the load-time mtime from the
 ///   previous refresh (`None` on first call → no `Stale` on bootstrap).
+///   The comparison is absolute in both directions: a file restored from
+///   backup (live < cached) changed content just as much as an edited one.
 /// - `parent_failed` is true for nested children whose host entry is
 ///   `NotFound`/`Failed` → `Loaded` is overridden to `Orphaned`.
 ///
 /// The 1s slack absorbs filesystem timestamp granularity so a file that did
-/// not actually change is not flagged `Stale`.
+/// not actually change is not flagged `Stale`. Conversely, changes landing
+/// between document open and the first refresh are invisible that session —
+/// the baseline only exists from the first stat on (no file watcher in v1).
 pub fn decide_status(
     resolved: RefStatus,
     live: Option<std::time::SystemTime>,
@@ -423,10 +458,9 @@ pub fn decide_status(
     }
     if resolved == RefStatus::Loaded {
         if let (Some(l), Some(c)) = (live, cached) {
-            if let Ok(delta) = l.duration_since(c) {
-                if delta > std::time::Duration::from_secs(1) {
-                    return RefStatus::Stale;
-                }
+            let delta = l.duration_since(c).ok().or_else(|| c.duration_since(l).ok());
+            if delta.is_some_and(|d| d > std::time::Duration::from_secs(1)) {
+                return RefStatus::Stale;
             }
         }
     }
@@ -435,27 +469,55 @@ pub fn decide_status(
 
 /// Session set of unloaded reference keys.
 ///
-/// Owns the `HashSet<u64>` that `collect_entries` takes as `unloaded`.
+/// Owns the `HashSet<UnloadKey>` that `collect_entries` takes as `unloaded`.
 /// Task 8b wires session state; the set itself lives here so both sides
-/// share one owner. Keys are top-level handle values (nested children are
-/// never unloadable on their own).
+/// share one owner.
+///
+/// Keys are domain-tagged: [`UnloadKey::Direct`] wraps a top-level handle
+/// value (nested children are never unloadable on their own) while
+/// [`UnloadKey::Nested`] wraps a nested [`child_key`] hash. The tag keeps a
+/// nested hash from ever aliasing a host handle with the same numeric value.
+/// NOTE (nested-key invariant): only [`add_key`](UnloadSet::add_key) may
+/// insert `Nested` keys and only [`contains_key`](UnloadSet::contains_key) /
+/// [`is_unloaded_key`](UnloadSet::is_unloaded_key) may query them — every op
+/// site guards nested rows before touching session state, so the untagged
+/// `add`/`contains`/`is_unloaded`/`remove` helpers below only ever see
+/// direct keys. New code must use the `_key` variants for nested entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnloadKey {
+    Direct(u64),
+    Nested(u64),
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct UnloadSet(pub std::collections::HashSet<u64>);
+pub struct UnloadSet(pub std::collections::HashSet<UnloadKey>);
 
 impl UnloadSet {
     pub fn add(&mut self, key: u64) {
+        self.0.insert(UnloadKey::Direct(key));
+    }
+    pub fn add_key(&mut self, key: UnloadKey) {
         self.0.insert(key);
     }
     pub fn remove(&mut self, key: &u64) {
+        self.0.remove(&UnloadKey::Direct(*key));
+    }
+    pub fn remove_key(&mut self, key: &UnloadKey) {
         self.0.remove(key);
     }
     pub fn contains(&self, key: &u64) -> bool {
+        self.0.contains(&UnloadKey::Direct(*key))
+    }
+    pub fn contains_key(&self, key: &UnloadKey) -> bool {
         self.0.contains(key)
     }
     pub fn is_unloaded(&self, key: u64) -> bool {
+        self.0.contains(&UnloadKey::Direct(key))
+    }
+    pub fn is_unloaded_key(&self, key: UnloadKey) -> bool {
         self.0.contains(&key)
     }
-    pub fn as_set(&self) -> &std::collections::HashSet<u64> {
+    pub fn as_set(&self) -> &std::collections::HashSet<UnloadKey> {
         &self.0
     }
 }
@@ -464,8 +526,14 @@ impl UnloadSet {
 ///
 /// `Stale` is detectable only thereafter: an empty cache means bootstrap, so
 /// `decide_status` never reports `Stale` without a cached baseline. Reload
-/// clears the key (fresh baseline on next refresh). Task 8b owns session
-/// wiring; the map type lives here.
+/// clears the key (fresh baseline on next refresh).
+///
+/// KEY NAMESPACE: keys are host-handle values for direct entries and
+/// high-bit-tagged [`child_key`] hashes for nested children (see
+/// [`child_key`]: the tag bit keeps the two spaces disjoint, so sharing one
+/// `u64` map is sound — the same discipline as [`UnloadKey`], encoded in the
+/// key itself because every call site here already threads bare `u64`s).
+/// Never insert a foreign handle that is neither.
 #[derive(Debug, Clone, Default)]
 pub struct RefStatCache(pub std::collections::HashMap<u64, std::time::SystemTime>);
 
@@ -483,7 +551,7 @@ impl RefStatCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_lexical, to_pathtype, to_pathtype_result, wildcard_match, Pathtype, PathtypeError};
+    use super::{normalize_display, normalize_lexical, to_pathtype, to_pathtype_result, wildcard_match, Pathtype, PathtypeError};
     use super::{bind_symbol, bind_symbol_taken, RefKind, ReferenceEntry};
     use super::{child_key, decide_status, RefStatCache, RefStatus, UnloadSet};
 
@@ -494,9 +562,70 @@ mod tests {
         let host_key = 42u64;
         let nested = child_key(100, "DETAIL", "refs/detail.dwg");
         assert_ne!(nested, host_key);
+        // High-bit namespace tag: host handles never carry it.
+        assert_ne!(nested & 0x8000_0000_0000_0000, 0);
         // Stable: same inputs → same key; different parent → different key.
         assert_eq!(nested, child_key(100, "DETAIL", "refs/detail.dwg"));
         assert_ne!(nested, child_key(101, "DETAIL", "refs/detail.dwg"));
+    }
+
+    #[test]
+    fn normalize_is_idempotent() {
+        // normalize(normalize(x)) == normalize(x) across drives, UNC,
+        // relative, dot-segments, and empty inputs.
+        let cases = [
+            "C:\\Host\\PLAN.dwg",
+            "c:/host/./plan.dwg",
+            "//SERVER/Share/../Share/f.dwg",
+            "//s/sh/../../x.dwg",
+            "rel/../../x.dwg",
+            "c:/a/../../b.dwg",
+            "a//b\\\\c.dwg",
+            "../up/ref.dwg",
+            "",
+            ".",
+        ];
+        for c in cases {
+            let once = normalize_lexical(c);
+            assert_eq!(normalize_lexical(&once), once, "idempotence for {c:?}");
+            assert_eq!(normalize_display(&once), once, "display-stable for {c:?}");
+        }
+        // UNC climbs clamp at the share root instead of producing garbage.
+        assert_eq!(normalize_lexical("//s/sh/../../x.dwg"), "//s/sh/x.dwg");
+    }
+
+    #[test]
+    fn relative_roundtrip_invariant() {
+        // The Relative branch's real contract: converting an absolute path to
+        // Relative and resolving it against the same host must recover the
+        // normalized absolute path.
+        let host = std::path::Path::new("C:/Drawings/host.dwg");
+        for target in [
+            "C:/Drawings/refs/plan.dwg",
+            "C:/Drawings/plan.dwg",
+            "C:/Lib/detail.dwg",
+        ] {
+            let rel = to_pathtype(target, host, Pathtype::Relative);
+            let back = std::path::Path::new("C:/Drawings").join(&rel);
+            assert_eq!(
+                normalize_lexical(&back.to_string_lossy()),
+                normalize_lexical(target),
+                "roundtrip for {target:?} via {rel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decide_status_backwards_mtime_is_stale() {
+        // A file restored from backup (live < cached) changed content just
+        // as much as an edited one: absolute difference, both directions.
+        use std::time::{Duration, UNIX_EPOCH};
+        let cached = UNIX_EPOCH + Duration::from_secs(1_000);
+        let older = cached - Duration::from_secs(30);
+        assert_eq!(
+            decide_status(RefStatus::Loaded, Some(older), Some(cached), false),
+            RefStatus::Stale
+        );
     }
 
     #[test]
@@ -553,6 +682,23 @@ mod tests {
     }
 
     #[test]
+    fn unload_set_namespaces_direct_vs_nested() {
+        use super::UnloadKey;
+        // Crafted collision: host handle 42 vs nested child hash 42 must not
+        // cross-trigger — the domain tag keeps the two spaces apart.
+        let mut s = UnloadSet::default();
+        s.add(42);
+        assert!(s.is_unloaded(42));
+        assert!(!s.contains_key(&UnloadKey::Nested(42)));
+        assert!(!s.is_unloaded_key(UnloadKey::Nested(42)));
+        let mut t = UnloadSet::default();
+        t.add_key(UnloadKey::Nested(42));
+        assert!(!t.is_unloaded(42));
+        assert!(!t.contains(&42));
+        assert!(t.is_unloaded_key(UnloadKey::Nested(42)));
+    }
+
+    #[test]
     fn ref_stat_cache_roundtrip() {
         use std::time::{Duration, UNIX_EPOCH};
         let mut c = RefStatCache::default();
@@ -601,8 +747,14 @@ mod tests {
         use acadrust::tables::BlockRecord;
         use acadrust::CadDocument;
 
-        let dir =
-            std::path::PathBuf::from(r"C:\Users\apolius\AppData\Local\Temp\opencode\xref_probe");
+        let dir = std::env::temp_dir().join(format!(
+            "ocs_xref_probe_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         std::fs::create_dir_all(&dir).expect("probe dir");
 
         let mut doc = CadDocument::new();
@@ -671,6 +823,7 @@ mod tests {
             back.header.retain_xref_visibility,
             "retain_xref_visibility round-trips as true"
         );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

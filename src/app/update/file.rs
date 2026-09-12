@@ -1420,6 +1420,21 @@ impl OpenCADStudio {
             idx
         };
 
+        // Missing-on-open: neutral command-line notice plus a flag
+        // the Reference Manager reads. Never an auto-open modal.
+        let missing = caches
+            .xrefs
+            .iter()
+            .filter(|item| item.status == crate::io::xref::XrefStatus::NotFound)
+            .count();
+        self.tabs[i].xref_missing = missing;
+        if missing > 0 {
+            self.command_line.push_output(crate::tf!(
+                "{} reference(s) not found — open the reference manager with EXTERNALREFERENCES.",
+                missing
+            ).as_ref());
+        }
+
         let mut recovery_report = recovery_needed.then(|| {
             crate::io::recovery::RecoveryReport::recovered(
                 self.tabs[i].id,
@@ -2037,7 +2052,25 @@ impl OpenCADStudio {
             crate::ui::wrap_bar::dropdown_bounds(crate::app::view::VIEWPORT_CAPTURE_BOUNDS_ID)
         });
         let clone_started = iced::time::Instant::now();
-        let snapshot = self.tabs[i].scene.document.clone();
+        let mut snapshot = self.tabs[i].scene.document.clone();
+        // Save-As across folders: rebase relative reference paths onto the
+        // new base dir inside the snapshot only (live strings are untouched).
+        if purpose == crate::app::SavePurpose::SaveAs {
+            let old_base = self.tabs[i]
+                .current_path
+                .as_ref()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+            let new_base = path.parent().map(|p| p.to_path_buf());
+            if let (Some(old), Some(new)) = (old_base, new_base) {
+                if old != new {
+                    crate::io::xref::rebase_relative_paths_for_save_as(
+                        &mut snapshot,
+                        &old,
+                        &new,
+                    );
+                }
+            }
+        }
         let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
         if crate::perf::enabled() {
             crate::perf_record!(
@@ -2321,10 +2354,30 @@ impl OpenCADStudio {
                     }
                 }
                 if outcome.set_current_path {
+                    let old_path = self.tabs[i].current_path.clone();
                     self.tabs[i].current_path = Some(outcome.path.clone());
                     self.tabs[i].scene.document.version = outcome.version;
                     if outcome.purpose == crate::app::SavePurpose::SaveAs {
                         self.tabs[i].recovery_save_as_required = false;
+                        // Save-As across folders: the save snapshot was rebased
+                        // in `queue_native_save`; rebase the live document too
+                        // so the running session agrees with the file just
+                        // written. Saves are not undoable, so no undo snapshot
+                        // is pushed.
+                        if let Some(old) = old_path.as_deref() {
+                            let old_base = old.parent().map(|p| p.to_path_buf());
+                            let new_base =
+                                outcome.path.parent().map(|p| p.to_path_buf());
+                            if let (Some(old), Some(new)) = (old_base, new_base) {
+                                if old != new {
+                                    crate::io::xref::rebase_relative_paths_for_save_as(
+                                        &mut self.tabs[i].scene.document,
+                                        &old,
+                                        &new,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 tasks.push(self.push_recent(outcome.path.clone()));
