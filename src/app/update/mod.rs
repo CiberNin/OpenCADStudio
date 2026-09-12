@@ -2131,12 +2131,15 @@ impl OpenCADStudio {
             }
 
             Message::ToggleXrefManager => {
-                if self.active_modal == Some(super::ModalKind::XrefManager) {
-                    self.active_modal = None;
-                    self.reset_modal_geometry();
-                } else {
+                self.show_external_references ^= true;
+                if self.show_external_references {
+                    use crate::app::config::DockSide;
+                    use crate::ui::dock::PanelId;
+                    if self.dock.location(PanelId::ExternalReferences).is_none() {
+                        self.dock.dock(PanelId::ExternalReferences, DockSide::Right, usize::MAX);
+                    }
+                    self.dock_expanded = Some(PanelId::ExternalReferences);
                     self.refresh_xref_manager();
-                    self.active_modal = Some(super::ModalKind::XrefManager);
                 }
                 Task::none()
             }
@@ -2150,6 +2153,90 @@ impl OpenCADStudio {
             }
             Message::XrefManagerToggleTree => {
                 self.xref_manager.toggle_tree();
+                Task::none()
+            }
+            Message::XrefManagerTogglePreview => {
+                self.xref_manager.show_preview ^= true;
+                Task::none()
+            }
+            Message::XrefManagerAttachMenu => {
+                self.xref_manager.attach_open ^= true;
+                self.xref_manager.refresh_open = false;
+                self.xref_manager.path_open = false;
+                Task::none()
+            }
+            Message::XrefManagerRefreshMenu => {
+                self.xref_manager.refresh_open ^= true;
+                self.xref_manager.attach_open = false;
+                self.xref_manager.path_open = false;
+                Task::none()
+            }
+            Message::XrefManagerPathMenu => {
+                self.xref_manager.path_open ^= true;
+                self.xref_manager.attach_open = false;
+                self.xref_manager.refresh_open = false;
+                Task::none()
+            }
+            Message::XrefManagerDismissMenus => {
+                self.xref_manager.attach_open = false;
+                self.xref_manager.refresh_open = false;
+                self.xref_manager.path_open = false;
+                Task::none()
+            }
+            Message::XrefPathPick => Task::perform(
+                async {
+                    let handle = crate::sys::file_dialog()
+                        .set_title(crate::t!("Select New Path").as_ref())
+                        .pick_file()
+                        .await;
+                    match handle {
+                        Some(h) => Ok(crate::sys::handle_path(&h)),
+                        None => Err("Cancelled".to_string()),
+                    }
+                },
+                Message::XrefPathPickResult,
+            ),
+            Message::XrefPathPickResult(Ok(path)) => {
+                // Select New Path applies the picked file to the single
+                // direct anchor entry (menu gates the rest).
+                let i = self.active_tab;
+                let anchor = self.xref_manager.anchor.and_then(|a| {
+                    self.xref_manager
+                        .entries
+                        .get(a)
+                        .filter(|_| !self.xref_manager.nested.contains(&a))
+                        .map(|e| (e.key, e.name.clone()))
+                });
+                let Some((key, _)) = anchor else {
+                    return Task::none();
+                };
+                let new_raw = path.to_string_lossy().into_owned();
+                self.push_undo_snapshot(i, "XREF-PATH");
+                match crate::io::xref::set_ref_path(
+                    &mut self.tabs[i].scene.document,
+                    key,
+                    &new_raw,
+                ) {
+                    Ok(name) => {
+                        self.command_line.push_output(crate::tf!(
+                            "XREF: Path set for \"{}\" — Reload to apply.",
+                            name
+                        ).as_ref());
+                        self.post_ref_op(i);
+                    }
+                    Err(msg) => self.command_line.push_error(msg.as_str()),
+                }
+                self.refresh_xref_manager();
+                Task::none()
+            }
+            Message::XrefPathPickResult(Err(e)) => {
+                if e != "Cancelled" {
+                    self.command_line.push_error(crate::tf!("XREF: {e}").as_ref());
+                }
+                Task::none()
+            }
+            Message::XrefManagerReloadAll => {
+                self.xref_manager_reload_all();
                 Task::none()
             }
             Message::XrefManagerToggleExpand(key) => {

@@ -574,10 +574,24 @@ impl OpenCADStudio {
                 }
             }
 
-            // XREFMAN — open/focus the Reference Manager palette (display-only,
-            // Task 7). The XREF command below is untouched.
-            "XREFMAN" => {
-                return Some(Task::done(Message::ToggleXrefManager));
+            // EXTERNALREFERENCES — toggle the docked External References panel.
+            // (XREFMAN was a provisional name and is not kept, not even as an
+            // alias.) The XREF command below is untouched.
+            "EXTERNALREFERENCES" => {
+                self.show_external_references ^= true;
+                if self.show_external_references {
+                    // Always open expanded so the panel is immediately usable;
+                    // dock it on the right if the user closed it from the layout.
+                    if self.dock.location(crate::ui::dock::PanelId::ExternalReferences).is_none() {
+                        self.dock.dock(
+                            crate::ui::dock::PanelId::ExternalReferences,
+                            crate::app::config::DockSide::Right,
+                            usize::MAX,
+                        );
+                    }
+                    self.dock_expanded = Some(crate::ui::dock::PanelId::ExternalReferences);
+                    self.refresh_xref_manager();
+                }
             }
 
             cmd if cmd.eq_ignore_ascii_case("XREF") || cmd.to_ascii_uppercase().starts_with("XREF ") || cmd.eq_ignore_ascii_case("-XREF") || cmd.to_ascii_uppercase().starts_with("-XREF ") => {                // XREF sub-option dispatcher (Task 5). The verb is
@@ -1450,6 +1464,35 @@ mod tests {
         let mut app = fresh_app();
         let out = run_capture(&mut app, "XREF ?");
         assert!(out.contains("No external references") || out.contains("External references"));
+    }
+
+    #[test]
+    fn externalreferences_opens_palette() {
+        // EXTERNALREFERENCES is the palette command; XREFMAN is not kept,
+        // not even as an alias (single-token verbs take the no-suggest path,
+        // so an unknown verb reports "Unknown command").
+        let mut app = fresh_app();
+        let out = run_capture(&mut app, "EXTERNALREFERENCES");
+        assert!(!out.contains("Unknown command"), "got: {out:?}");
+        let out_old = run_capture(&mut app, "XREFMAN");
+        assert!(out_old.contains("Unknown command"), "got: {out_old:?}");
+    }
+
+    #[test]
+    fn externalreferences_populates_panel_table() {
+        // The panel table must list whatever `XREF ?` lists: opening the
+        // palette refreshes entries synchronously in the command arm.
+        let mut app = fresh_app();
+        add_dwg_xref(&mut app, "PLAN", "old/plan.dwg");
+        let list = run_capture(&mut app, "XREF ?");
+        assert!(list.contains("PLAN"), "CLI lists it, got: {list:?}");
+        let _ = run_capture(&mut app, "EXTERNALREFERENCES");
+        assert!(app.show_external_references);
+        assert!(
+            app.xref_manager.entries.iter().any(|e| e.name == "PLAN"),
+            "panel table must list what XREF lists"
+        );
+        assert!(app.xref_manager.display_rows().len() >= 2);
     }
 
     #[test]

@@ -1812,6 +1812,7 @@ bg={bg_ms:.1}ms n={view_count}"
             match id {
                 crate::ui::dock::PanelId::Properties => self.show_properties,
                 crate::ui::dock::PanelId::BlockPalette => self.show_block_palette,
+                crate::ui::dock::PanelId::ExternalReferences => self.show_external_references,
             }
         };
         let edge_stack = |side: crate::app::config::DockSide| -> Option<Element<'_, Message>> {
@@ -2839,6 +2840,12 @@ impl OpenCADStudio {
             crate::ui::dock::PanelId::BlockPalette => {
                 crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse)
             }
+            crate::ui::dock::PanelId::ExternalReferences => self.xref_manager.view(
+                width,
+                auto_collapse,
+                tab.xref_missing,
+                &tab.scene.document,
+            ),
         };
         let divider = dock_divider(id);
         match side {

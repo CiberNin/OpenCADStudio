@@ -41,6 +41,7 @@ pub enum DockMsg {
 pub enum PanelId {
     Properties,
     BlockPalette,
+    ExternalReferences,
 }
 
 impl PanelId {
@@ -49,6 +50,7 @@ impl PanelId {
         match self {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
+            PanelId::ExternalReferences => "External References",
         }
     }
 
@@ -57,6 +59,7 @@ impl PanelId {
         match self {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
+            PanelId::ExternalReferences => 300.0,
         }
     }
 }
@@ -131,7 +134,7 @@ impl DockState {
     /// resize never hit a missing configuration. Also a cheap heal for configs
     /// written by an older version.
     pub fn ensure_settings(&mut self) {
-        for id in [PanelId::Properties, PanelId::BlockPalette] {
+        for id in [PanelId::Properties, PanelId::BlockPalette, PanelId::ExternalReferences] {
             self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
         }
     }

@@ -693,6 +693,8 @@ pub(super) struct OpenCADStudio {
     show_properties: bool,
     /// Docked Insert Block panel visibility.
     pub(crate) show_block_palette: bool,
+    /// Docked External References panel visibility (EXTERNALREFERENCES).
+    pub(crate) show_external_references: bool,
     /// General edge-stack dock layout for the side panels.
     pub(crate) dock: crate::ui::dock::DockState,
     /// Which panel is currently floated at full height (hovered, or a pinned
@@ -1730,7 +1732,6 @@ pub enum ModalKind {
     UpdateNotice,
     DonationPrompt,
     Layers,
-    XrefManager,
     LayerStateManager,
     LayerTranslator,
     DrawingUnits,
@@ -2355,6 +2356,22 @@ pub enum Message {
     XrefManagerSelect(usize),
     /// Flip the palette's list/tree presentation.
     XrefManagerToggleTree,
+    /// Flip the palette's details/preview lower pane.
+    XrefManagerTogglePreview,
+    /// Toggle the Attach dropdown menu.
+    XrefManagerAttachMenu,
+    /// Toggle the Refresh dropdown menu.
+    XrefManagerRefreshMenu,
+    /// Toggle the Change Path dropdown menu.
+    XrefManagerPathMenu,
+    /// Close all palette dropdown menus (overlay dismissal).
+    XrefManagerDismissMenus,
+    /// Open the file picker for Select New Path (anchor entry).
+    XrefPathPick,
+    /// Result of the Select New Path picker.
+    XrefPathPickResult(Result<std::path::PathBuf, String>),
+    /// Reload every direct reference (toolbar Reload All).
+    XrefManagerReloadAll,
     /// Expand/collapse one tree parent (block-record handle key).
     XrefManagerToggleExpand(u64),
     /// Selection-scoped palette operation (detach/unload/reload/overlay/pathtype).
@@ -3733,6 +3750,7 @@ impl OpenCADStudio {
             render_mode_preview: None,
             show_properties: true,
             show_block_palette: false,
+            show_external_references: false,
             block_palette: Default::default(),
             xref_manager: Default::default(),
             dock: Default::default(),

@@ -20,7 +20,6 @@ impl OpenCADStudio {
             Some(K::UpdateNotice) => crate::tr!("modal", "update-available"),
             Some(K::DonationPrompt) => crate::tr!("donation", "title"),
             Some(K::Layers) => crate::tr!("modal", "layer-manager"),
-            Some(K::XrefManager) => crate::t!("Reference Manager").into_owned(),
             Some(K::LayerStateManager) => crate::tr!("modal", "layer-state-manager"),
             Some(K::LayerTranslator) => crate::t!("Layer Translator").into_owned(),
             Some(K::DrawingUnits) => crate::t!("Drawing Units").into_owned(),
@@ -394,12 +393,6 @@ impl OpenCADStudio {
                     360,
                     |flow| tab.layers.view_window(self.layer_name_col_w, flow),
                 )
-            }
-            super::super::ModalKind::XrefManager => {
-                sized_flow(ex, 960, 560, |flow| {
-                    let missing = self.tabs[self.active_tab].xref_missing;
-                    self.xref_manager.view_window(flow, missing)
-                })
             }
             super::super::ModalKind::LayerTranslator => {
                 use crate::modules::draw::layers::laytrans;

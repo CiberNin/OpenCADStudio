@@ -599,6 +599,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.show_block_palette = false;
                         self.block_palette.placing = None;
                     }
+                    PanelId::ExternalReferences => {
+                        self.show_external_references = false;
+                    }
                     PanelId::Properties => {
                         self.show_properties = false;
                         self.ribbon.set_properties(false);
@@ -692,6 +695,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         match id {
             PanelId::Properties => self.show_properties,
             PanelId::BlockPalette => self.show_block_palette,
+            PanelId::ExternalReferences => self.show_external_references,
         }
     }
 
@@ -772,6 +776,15 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let tab_id = self.tabs[i].id;
         let revision = self.tabs[i].edit_revision;
+        let (host_name, host_path) = match &self.tabs[i].current_path {
+            Some(p) => (
+                p.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                p.to_string_lossy().into_owned(),
+            ),
+            None => (String::new(), String::new()),
+        };
         let baselines = {
             let tab = &self.tabs[i];
             self.xref_manager.refresh(
@@ -779,6 +792,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 &base_dir,
                 tab.xref_unloaded.as_set(),
                 &tab.xref_stat_cache.0,
+                &host_name,
+                &host_path,
             )
         };
         let tab = &mut self.tabs[i];
@@ -803,7 +818,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
     /// XOPEN-return edit, undo/redo — all bump `edit_revision`). Cheap:
     /// `collect_entries` stats files without re-parsing the host.
     pub(crate) fn refresh_xref_manager_if_stale(&mut self) {
-        if self.active_modal != Some(crate::app::ModalKind::XrefManager) {
+        if !self.dock_panel_visible(crate::ui::dock::PanelId::ExternalReferences) {
             return;
         }
         let i = self.active_tab;
@@ -1161,6 +1176,62 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         if done > 0 {
             self.post_ref_op(i);
         }
+        self.refresh_xref_manager();
+    }
+
+    /// Reload every direct drawing reference (toolbar Reload All). Same
+    /// engine path as `XRELOAD`: undo snapshot, session flags cleared,
+    /// full resolve, per-ref report, stat baselines refreshed.
+    pub(crate) fn xref_manager_reload_all(&mut self) {
+        if cfg!(target_arch = "wasm32") {
+            self.command_line.push_error(crate::t!("Reference changes are not available on web — the reference list is read-only.").as_ref());
+            return;
+        }
+        let i = self.active_tab;
+        let Some(path) = self.tabs[i].current_path.clone() else {
+            self.command_line
+                .push_error(crate::t!("XREF  Save the drawing first to resolve relative XREF paths.").as_ref());
+            return;
+        };
+        let Some(base_dir) = path.parent().map(|p| p.to_path_buf()) else {
+            self.command_line
+                .push_error(crate::t!("XREF  Save the drawing first to resolve relative XREF paths.").as_ref());
+            return;
+        };
+        let reload_keys: Vec<u64> = crate::io::xref::collect_entries_with_prev(
+            &self.tabs[i].scene.document,
+            &base_dir,
+            self.tabs[i].xref_unloaded.as_set(),
+            &self.tabs[i].xref_stat_cache.0,
+        )
+        .iter()
+        .filter(|e| e.kind == crate::io::xref_model::RefKind::DwgXref && e.parent_key.is_none())
+        .map(|e| e.key)
+        .collect();
+        self.push_undo_snapshot(i, "XREF-RELOAD");
+        for key in &reload_keys {
+            self.tabs[i].xref_unloaded.remove(key);
+            self.tabs[i].xref_stat_cache.remove(key);
+        }
+        let (infos, _dropped) =
+            crate::io::xref::resolve_xrefs(&mut self.tabs[i].scene.document, &base_dir);
+        let fresh = crate::io::xref::collect_entries_with_prev(
+            &self.tabs[i].scene.document,
+            &base_dir,
+            self.tabs[i].xref_unloaded.as_set(),
+            &self.tabs[i].xref_stat_cache.0,
+        );
+        for e in &fresh {
+            if e.status == crate::io::xref_model::RefStatus::Loaded {
+                if let Some(m) = e.modified {
+                    self.tabs[i].xref_stat_cache.insert(e.key, m);
+                }
+            }
+        }
+        for info in &infos {
+            self.report_xref_status(info);
+        }
+        self.post_ref_op(i);
         self.refresh_xref_manager();
     }
 

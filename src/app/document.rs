@@ -202,7 +202,7 @@ pub(super) struct DocumentTab {
     /// palette refresh; `Stale` is detectable from the second refresh on.
     pub(super) xref_stat_cache: crate::io::xref_model::RefStatCache,
     /// NotFound count from the last file-open xref resolution (Task 8b).
-    /// The palette renders a neutral "open XREFMAN" notice while non-zero;
+    /// The palette renders a neutral "open EXTERNALREFERENCES" notice while non-zero;
     /// never auto-opens a modal. Cleared by a clean palette refresh.
     pub(super) xref_missing: usize,
     /// Sentinel "Welcome / Start" tab. Always at index 0 when present.
