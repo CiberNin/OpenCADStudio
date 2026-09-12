@@ -16,6 +16,7 @@ pub mod recovery;
 pub mod step;
 pub mod stl;
 pub mod xref;
+pub mod xref_model;
 pub mod linetypes;
 pub mod patterns;
 pub mod update_check;

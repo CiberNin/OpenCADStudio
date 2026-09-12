@@ -539,3 +539,217 @@ fn is_sentinel_linetype(name: &str) -> bool {
 fn set_handle(entity: &mut EntityType, h: Handle) {
     entity.common_mut().handle = h;
 }
+
+/// Unified reference list for the XREF manager.
+///
+/// Scans `doc` for DWG xref block-records, RasterImage-linked image
+/// definitions, and PDF underlay definitions. `saved_path` is always the raw
+/// stored string verbatim; `found_at`/`size_bytes`/`modified` come from
+/// [`resolve_path`] against `base_dir`. Keys in `unloaded` come back as
+/// `Unloaded` (loaded=false) without touching the filesystem.
+///
+/// `Stale` (file changed since load) and `Orphaned` (definition with no
+/// referencing entity) are Task 8 — this pass only emits
+/// Loaded/Unloaded/NotFound.
+///
+/// Nested enumeration (SPIKE5): each LOADED DwgXref whose file resolved is
+/// opened read-only and its *direct* xref block-records are appended as child
+/// entries (status Loaded, no geometry merge). Parsed docs live in a per-path
+/// cache inside the call; already-seen normalized `saved_path`s are skipped,
+/// so a self- or cyclic reference enumerates once and never recurses. A
+/// nested file that fails to parse is skipped silently — no diagnostics
+/// plumbing exists yet (Task 8). Synchronous by design; async stat is Task 8.
+pub fn collect_entries(
+    doc: &acadrust::CadDocument,
+    base_dir: &Path,
+    unloaded: &std::collections::HashSet<u64>,
+) -> Vec<crate::io::xref_model::ReferenceEntry> {
+    use acadrust::entities::UnderlayType;
+    use acadrust::objects::ObjectType;
+    use crate::io::xref_model::{normalize_lexical, RefKind, RefStatus, RefType, ReferenceEntry};
+
+    /// Resolve `raw` via `base_dir`; on success record `found_at`, stat
+    /// size/mtime, and flip the entry to Loaded. Missing/empty stays NotFound.
+    fn stat_into(entry: &mut ReferenceEntry, raw: &str, base_dir: &Path) {
+        if raw.is_empty() {
+            return;
+        }
+        let Some(found) = resolve_path(raw, base_dir) else {
+            return;
+        };
+        entry.found_at = Some(found.to_string_lossy().into_owned());
+        entry.status = RefStatus::Loaded;
+        if let Ok(meta) = std::fs::metadata(&found) {
+            entry.size_bytes = Some(meta.len());
+            entry.modified = meta.modified().ok();
+        }
+    }
+
+    fn file_name_only(raw: &str) -> &str {
+        raw.rsplit(['/', '\\']).next().unwrap_or(raw)
+    }
+
+    let mut entries: Vec<ReferenceEntry> = Vec::new();
+
+    // ── DWG xrefs ──
+    for br in doc.block_records.iter() {
+        if !(br.flags.is_xref || br.flags.is_xref_overlay) {
+            continue;
+        }
+        let key = br.handle.value();
+        let mut entry = ReferenceEntry::new(key, br.name.clone(), RefKind::DwgXref);
+        entry.ref_type = if br.flags.is_xref_overlay {
+            RefType::Overlay
+        } else {
+            RefType::Attach
+        };
+        entry.saved_path = br.xref_path.clone();
+        if unloaded.contains(&key) {
+            entry.status = RefStatus::Unloaded;
+            entry.loaded = false;
+        } else {
+            stat_into(&mut entry, &br.xref_path, base_dir);
+        }
+        entries.push(entry);
+    }
+
+    // ── Raster images: only definitions actually referenced by an entity ──
+    // (same file_name lookup direction as `resolve_raster_image_paths`).
+    let mut referenced_images: HashSet<Handle> = HashSet::default();
+    for e in doc.entities() {
+        if let EntityType::RasterImage(img) = e {
+            if let Some(h) = img.definition_handle {
+                referenced_images.insert(h);
+            }
+        }
+    }
+    for (handle, obj) in doc.objects.iter() {
+        let ObjectType::ImageDefinition(def) = obj else {
+            continue;
+        };
+        if !referenced_images.contains(handle) {
+            continue;
+        }
+        let key = handle.value();
+        let mut entry = ReferenceEntry::new(key, file_name_only(&def.file_name), RefKind::Image);
+        entry.saved_path = def.file_name.clone();
+        if unloaded.contains(&key) {
+            entry.status = RefStatus::Unloaded;
+            entry.loaded = false;
+        } else {
+            stat_into(&mut entry, &def.file_name, base_dir);
+        }
+        entries.push(entry);
+    }
+
+    // ── PDF underlays ──
+    for (handle, obj) in doc.objects.iter() {
+        let ObjectType::UnderlayDefinition(def) = obj else {
+            continue;
+        };
+        if def.underlay_type != UnderlayType::Pdf {
+            continue;
+        }
+        let key = handle.value();
+        let name = if def.name.trim().is_empty() {
+            file_name_only(&def.file_path).to_owned()
+        } else {
+            def.name.clone()
+        };
+        let mut entry = ReferenceEntry::new(key, name, RefKind::Pdf);
+        entry.saved_path = def.file_path.clone();
+        if unloaded.contains(&key) {
+            entry.status = RefStatus::Unloaded;
+            entry.loaded = false;
+        } else {
+            stat_into(&mut entry, &def.file_path, base_dir);
+        }
+        entries.push(entry);
+    }
+
+    // ── Nested enumeration: one level, read-only, no merge ──
+    let mut seen: HashSet<String> = HashSet::default();
+    for e in &entries {
+        seen.insert(normalize_lexical(&e.saved_path));
+    }
+    let mut nested_cache: HashMap<String, CadDocument> = HashMap::default();
+    let nested_hosts: Vec<(String, PathBuf)> = entries
+        .iter()
+        .filter(|e| e.kind == RefKind::DwgXref && e.status == RefStatus::Loaded)
+        .filter_map(|e| {
+            e.found_at
+                .as_ref()
+                .map(|found| (normalize_lexical(&e.saved_path), PathBuf::from(found)))
+        })
+        .collect();
+    for (cache_key, found_path) in nested_hosts {
+        let nested_doc = if let Some(cached) = nested_cache.get(&cache_key) {
+            cached
+        } else {
+            match super::load_file(&found_path) {
+                Ok(nested) => nested_cache.entry(cache_key.clone()).or_insert(nested),
+                Err(_) => continue,
+            }
+        };
+        for br in nested_doc.block_records.iter() {
+            if !(br.flags.is_xref || br.flags.is_xref_overlay) {
+                continue;
+            }
+            // Cycle-guard: a nested path already seen (self-path or repeat)
+            // enumerates nothing — skip it.
+            if !seen.insert(normalize_lexical(&br.xref_path)) {
+                continue;
+            }
+            let mut child =
+                ReferenceEntry::new(br.handle.value(), br.name.clone(), RefKind::DwgXref);
+            child.ref_type = if br.flags.is_xref_overlay {
+                RefType::Overlay
+            } else {
+                RefType::Attach
+            };
+            child.saved_path = br.xref_path.clone();
+            child.status = RefStatus::Loaded;
+            entries.push(child);
+        }
+    }
+
+    entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_entries;
+    use crate::io::xref_model::{RefKind, RefStatus};
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn collect_single_xref_loaded_with_verbatim_path() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ocs_xref_collect_{}_{}.dwg",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&tmp, b"").unwrap();
+        let saved = tmp.to_string_lossy().into_owned();
+
+        let mut doc = acadrust::CadDocument::new();
+        let mut br = acadrust::tables::BlockRecord::new("PLAN");
+        br.flags.is_xref = true;
+        br.xref_path = saved.clone();
+        br.handle = doc.allocate_handle();
+        doc.block_records.add(br).expect("add xref block record");
+
+        let base = tmp.parent().unwrap();
+        let entries = collect_entries(&doc, base, &std::collections::HashSet::new());
+
+        std::fs::remove_file(&tmp).ok();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, RefStatus::Loaded);
+        assert_eq!(entries[0].saved_path, saved);
+        assert_eq!(entries[0].kind, RefKind::DwgXref);
+    }
+}
