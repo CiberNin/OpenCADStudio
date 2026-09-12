@@ -708,6 +708,10 @@ pub(super) struct OpenCADStudio {
     pub(crate) dock_drag_last: Option<iced::Point>,
     /// Live drag target (side + index), shown as a highlight while dragging.
     pub(crate) dock_drag_target: Option<(crate::app::config::DockSide, usize)>,
+    /// Reference-table column currently being width-resized (column index),
+    /// with the last pointer position. Mirrors the Layers Name-column drag.
+    pub(crate) xref_col_drag: Option<usize>,
+    pub(crate) xref_col_last: Option<iced::Point>,
     /// Docked Insert Block panel state (search, preview size, cached thumbnails).
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
     /// Reference Manager palette state (display-only in Task 7).
@@ -2354,8 +2358,17 @@ pub enum Message {
     XrefManagerRefresh,
     /// Toggle one palette row (entry index) in the multi-selection set.
     XrefManagerSelect(usize),
+    /// Right-click on a palette row: single-select it when outside the
+    /// selection (the context menu then acts on the selection).
+    XrefRowRightClick(usize),
     /// Flip the palette's list/tree presentation.
     XrefManagerToggleTree,
+    /// Start a reference-table column divider drag (column index).
+    XrefColGrab(usize),
+    /// Pointer moved (table header space) during a column drag.
+    XrefColMove(iced::Point),
+    /// Pointer released during a column drag.
+    XrefColRelease,
     /// Flip the palette's details/preview lower pane.
     XrefManagerTogglePreview,
     /// Toggle the Attach dropdown menu.
@@ -2380,11 +2393,9 @@ pub enum Message {
     XrefManagerPathInput(String),
     /// Apply the "new path" draft to the anchor entry.
     XrefManagerPathApply,
-    /// Find & Replace row drafts.
-    XrefManagerFindInput(String),
-    XrefManagerReplaceInput(String),
-    /// Apply Find & Replace across all direct references.
-    XrefManagerFindReplaceApply,
+    /// Prefill the command line for Find & Replace across references
+    /// (`XREF Path Find <old> <new>`); the CLI parses and runs it.
+    XrefFindReplacePrompt,
     LayerToggleVisible(usize),
     LayerToggleLock(usize),
     LayerToggleFreeze(usize),
@@ -3759,6 +3770,8 @@ impl OpenCADStudio {
             dock_resizing: None,
             dock_drag_last: None,
             dock_drag_target: None,
+            xref_col_drag: None,
+            xref_col_last: None,
             show_file_tabs: true,
             show_layout_tabs: true,
             last_point: None,

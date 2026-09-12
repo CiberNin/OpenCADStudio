@@ -638,6 +638,11 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 iced::Task::none()
             }
             DockMsg::DragMove(point) => {
+                // NOTE: xref column drags intentionally do NOT ride this
+                // path: its points live in workspace space while the header
+                // tracker reports header-local points, and mixing the two
+                // produced a one-time jump plus a stuck drag. Column moves
+                // arrive via Message::XrefColMove only.
                 if self.dock_dragging.is_some() {
                     let avail = self.tabs[self.active_tab].scene.selection.borrow().vp_size.1;
                     let side = if point.x < self.win_size.0 * 0.5 {
@@ -679,6 +684,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 self.dock_resizing = None;
                 self.dock_drag_last = None;
                 self.dock_drag_target = None;
+                self.xref_col_drag = None;
+                self.xref_col_last = None;
                 iced::Task::none()
             }
         }
@@ -1268,37 +1275,6 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 self.post_ref_op(i);
             }
             Err(msg) => self.command_line.push_error(msg.as_str()),
-        }
-        self.refresh_xref_manager();
-    }
-
-    /// Apply Find & Replace across all direct references (same engine fn
-    /// as `XREF Path Find`).
-    pub(crate) fn xref_manager_find_replace_apply(&mut self) {
-        if cfg!(target_arch = "wasm32") {
-            self.command_line.push_error(crate::t!("Reference changes are not available on web — the reference list is read-only.").as_ref());
-            return;
-        }
-        let i = self.active_tab;
-        let old = self.xref_manager.find_input.clone();
-        let new = self.xref_manager.replace_input.clone();
-        if old.is_empty() || new.is_empty() {
-            self.command_line
-                .push_error(crate::t!("Usage: XREF Path Find <old> <new>").as_ref());
-            return;
-        }
-        self.push_undo_snapshot(i, "XREF-PATH");
-        let n = crate::io::xref::replace_path_prefix(
-            &mut self.tabs[i].scene.document,
-            &old,
-            &new,
-        );
-        self.command_line.push_output(crate::tf!(
-            "XREF: updated {} reference(s).",
-            n
-        ).as_ref());
-        if n > 0 {
-            self.post_ref_op(i);
         }
         self.refresh_xref_manager();
     }

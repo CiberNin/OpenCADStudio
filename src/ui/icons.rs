@@ -69,6 +69,7 @@ pub static SPLIT_H: &[u8] = include_bytes!("../../assets/icons/ui/split_h.svg");
 pub static GRID: &[u8] = include_bytes!("../../assets/icons/ui/grid.svg");
 pub static SNAP: &[u8] = include_bytes!("../../assets/icons/ui/snap.svg");
 pub static DOC_NEW: &[u8] = include_bytes!("../../assets/icons/ui/doc_new.svg");
+pub static DOC: &[u8] = include_bytes!("../../assets/icons/ui/doc.svg");
 pub static FOLDER_OPEN: &[u8] = include_bytes!("../../assets/icons/ui/folder_open.svg");
 pub static SAVE: &[u8] = include_bytes!("../../assets/icons/ui/save.svg");
 pub static FILE_EXPORT: &[u8] = include_bytes!("../../assets/icons/ui/file_export.svg");

@@ -2148,11 +2148,48 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::XrefManagerSelect(index) => {
-                self.xref_manager.toggle_select(index);
+                use crate::ui::window::xref_manager::SelectExtend;
+                // Normal GUI list behavior off the globally tracked
+                // modifiers (same source as the layer list): plain click
+                // selects one row, Ctrl/Cmd toggles, Shift extends a range.
+                let extend = if self.ctrl_down {
+                    SelectExtend::Toggle
+                } else if self.shift_down {
+                    SelectExtend::Range
+                } else {
+                    SelectExtend::Single
+                };
+                self.xref_manager.click_select(index, extend);
+                Task::none()
+            }
+            Message::XrefRowRightClick(index) => {
+                self.xref_manager.right_click_select(index);
                 Task::none()
             }
             Message::XrefManagerToggleTree => {
                 self.xref_manager.toggle_tree();
+                Task::none()
+            }
+            Message::XrefColGrab(i) => {
+                // Start a table-column divider drag; moves arrive via the
+                // header's mouse_area (XrefColMove), like the Layers
+                // Name-column divider rides ModalDragMove.
+                self.xref_col_drag = Some(i);
+                self.xref_col_last = None;
+                Task::none()
+            }
+            Message::XrefColMove(p) => {
+                if let Some(i) = self.xref_col_drag {
+                    if let Some(last) = self.xref_col_last {
+                        self.xref_manager.drag_col_by(i, p.x - last.x);
+                    }
+                    self.xref_col_last = Some(p);
+                }
+                Task::none()
+            }
+            Message::XrefColRelease => {
+                self.xref_col_drag = None;
+                self.xref_col_last = None;
                 Task::none()
             }
             Message::XrefManagerTogglePreview => {
@@ -2255,17 +2292,13 @@ impl OpenCADStudio {
                 self.xref_manager_path_apply();
                 Task::none()
             }
-            Message::XrefManagerFindInput(text) => {
-                self.xref_manager.find_input = text;
-                Task::none()
-            }
-            Message::XrefManagerReplaceInput(text) => {
-                self.xref_manager.replace_input = text;
-                Task::none()
-            }
-            Message::XrefManagerFindReplaceApply => {
-                self.xref_manager_find_replace_apply();
-                Task::none()
+            Message::XrefFindReplacePrompt => {
+                // No fields in the panel: prefill the command line so the
+                // existing `XREF Path Find <old> <new>` parsing runs it.
+                self.command_line.input = "XREF Path Find ".to_string();
+                self.command_line.autocomplete_cursor = None;
+                self.command_line.cancel_history_navigation();
+                return self.focus_cmd_input();
             }
 
             Message::LayerStateManagerOpen => {
