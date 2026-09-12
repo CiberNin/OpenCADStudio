@@ -30,9 +30,9 @@ glam = { version = "0.33", features = ["bytemuck"] }
 rfd = "0.17"
 clap = { version = "4", features = ["derive", "string"] }
 env_logger = "0.11"
-acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "88fdb556dc8a292931a52b52ba42fc322dd39c23", features = ["serde"] }
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "a3185be8189d78d6e93b4ea5b9238b184da4f3cf", features = ["acis", "offset"] }
-cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "a3185be8189d78d6e93b4ea5b9238b184da4f3cf" }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "6f3711809e39e9ffdf16a63086079b6475d97175", features = ["serde"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "935d90b86a99377dc95cba92e99a9b109180e2f6", features = ["acis", "offset"] }
+cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "935d90b86a99377dc95cba92e99a9b109180e2f6" }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }

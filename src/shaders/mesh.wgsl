@@ -583,6 +583,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
     material_alpha *= 1.0 - clamp(surface.ambient.a * max(surface.advanced.w, 0.0), 0.0, 0.95);
     material_alpha *= clamp(u.visual_style.y, 0.0, 1.0);
+    if (u.transparency_enable > 0.5 && material_alpha <= 0.001) {
+        discard;
+    }
     let alpha = select(1.0, material_alpha, u.transparency_enable > 0.5);
     return vec4<f32>(rgb, alpha);
 }

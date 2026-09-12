@@ -1,4 +1,5 @@
 use acadrust::objects::{Material, MaterialColor, MaterialMap, ObjectType};
+use acadrust::xdata::XDataValue;
 use acadrust::{CadDocument, EntityType, Handle};
 use std::path::Path;
 use std::sync::Arc;
@@ -39,6 +40,7 @@ pub struct MeshMaterial {
     pub final_gather: i16,
     pub color_bleed_scale: f32,
     pub advanced_data_present: bool,
+    pub mapper: Option<MeshMaterialMapper>,
     pub diffuse_map: MeshTextureMap,
     pub specular_map: MeshTextureMap,
     pub reflection_map: MeshTextureMap,
@@ -46,6 +48,82 @@ pub struct MeshMaterial {
     pub bump_map: MeshTextureMap,
     pub refraction_map: MeshTextureMap,
     pub normal_map: MeshTextureMap,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MeshMaterialMapper {
+    pub origin: [f64; 3],
+    pub inverse_basis: [[f64; 3]; 3],
+    pub normal_basis: [[f64; 3]; 3],
+}
+
+impl MeshMaterialMapper {
+    pub fn map_position(&self, high: [f32; 3], low: [f32; 3]) -> [f32; 3] {
+        let point = [
+            high[0] as f64 + low[0] as f64 - self.origin[0],
+            high[1] as f64 + low[1] as f64 - self.origin[1],
+            high[2] as f64 + low[2] as f64 - self.origin[2],
+        ];
+        [
+            (self.inverse_basis[0][0] * point[0]
+                + self.inverse_basis[0][1] * point[1]
+                + self.inverse_basis[0][2] * point[2]) as f32,
+            (self.inverse_basis[1][0] * point[0]
+                + self.inverse_basis[1][1] * point[1]
+                + self.inverse_basis[1][2] * point[2]) as f32,
+            (self.inverse_basis[2][0] * point[0]
+                + self.inverse_basis[2][1] * point[1]
+                + self.inverse_basis[2][2] * point[2]) as f32,
+        ]
+    }
+
+    pub fn map_normal(&self, normal: [f32; 3]) -> [f32; 3] {
+        let mapped = [
+            self.normal_basis[0][0] * normal[0] as f64
+                + self.normal_basis[0][1] * normal[1] as f64
+                + self.normal_basis[0][2] * normal[2] as f64,
+            self.normal_basis[1][0] * normal[0] as f64
+                + self.normal_basis[1][1] * normal[1] as f64
+                + self.normal_basis[1][2] * normal[2] as f64,
+            self.normal_basis[2][0] * normal[0] as f64
+                + self.normal_basis[2][1] * normal[1] as f64
+                + self.normal_basis[2][2] * normal[2] as f64,
+        ];
+        let length =
+            (mapped[0] * mapped[0] + mapped[1] * mapped[1] + mapped[2] * mapped[2]).sqrt();
+        if length > f64::EPSILON {
+            [
+                (mapped[0] / length) as f32,
+                (mapped[1] / length) as f32,
+                (mapped[2] / length) as f32,
+            ]
+        } else {
+            normal
+        }
+    }
+
+    pub fn map_bounds(&self, bounds: [f32; 6]) -> [f32; 6] {
+        let mut mapped = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for x in [bounds[0], bounds[3]] {
+            for y in [bounds[1], bounds[4]] {
+                for z in [bounds[2], bounds[5]] {
+                    let point = self.map_position([x, y, z], [0.0; 3]);
+                    for axis in 0..3 {
+                        mapped[axis] = mapped[axis].min(point[axis]);
+                        mapped[axis + 3] = mapped[axis + 3].max(point[axis]);
+                    }
+                }
+            }
+        }
+        mapped
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +224,7 @@ impl MeshMaterial {
             final_gather: 0,
             color_bleed_scale: 1.0,
             advanced_data_present: false,
+            mapper: None,
             diffuse_map: MeshTextureMap::default(),
             specular_map: MeshTextureMap::default(),
             reflection_map: MeshTextureMap::default(),
@@ -210,6 +289,7 @@ impl MeshMaterial {
             final_gather: material.final_gather,
             color_bleed_scale: material.color_bleed_scale as f32,
             advanced_data_present: material.advanced_data_present,
+            mapper: None,
             diffuse_map,
             specular_map,
             reflection_map,
@@ -283,7 +363,7 @@ fn procedural_map_image(map: &MaterialMap) -> Option<Arc<MaterialImage>> {
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
-            let color = if ((x / 8) + (y / 8)) & 1 == 0 {
+            let color = if (x < size / 2) == (y < size / 2) {
                 color1
             } else {
                 color2
@@ -315,9 +395,11 @@ pub fn resolve_material_with_base(
 ) -> MeshMaterial {
     let common = entity.common();
     if common.material_flags == 1 {
-        return by_block
+        let mut material = by_block
             .cloned()
             .unwrap_or_else(|| MeshMaterial::entity_color(entity_color));
+        material.mapper = entity_material_mapper(entity);
+        return material;
     }
     let handle = if common.material_flags == 3 {
         common.material_handle
@@ -331,7 +413,7 @@ pub fn resolve_material_with_base(
     let Some(handle) = handle else {
         return MeshMaterial::entity_color(entity_color);
     };
-    match document.objects.get(&handle) {
+    let mut material = match document.objects.get(&handle) {
         Some(ObjectType::Material(material))
             if material.name.eq_ignore_ascii_case("ByLayer")
                 || material.name.eq_ignore_ascii_case("ByBlock") =>
@@ -342,7 +424,58 @@ pub fn resolve_material_with_base(
             MeshMaterial::from_dwg(handle, material, entity_color, base_dir)
         }
         _ => MeshMaterial::entity_color(entity_color),
+    };
+    material.mapper = entity_material_mapper(entity);
+    material
+}
+
+fn entity_material_mapper(entity: &EntityType) -> Option<MeshMaterialMapper> {
+    let record = entity
+        .common()
+        .extended_data
+        .get_record("ACAD_MATERIAL_MAPPER")?;
+    let mut positions = record.values.iter().filter_map(|value| match value {
+        XDataValue::Position3D(point) => Some([point.x, point.y, point.z]),
+        _ => None,
+    });
+    let origin = positions.next()?;
+    let x = positions.next()?;
+    let y = positions.next()?;
+    let z = positions.next()?;
+    let basis = glam::DMat3::from_cols(
+        glam::DVec3::from_array([
+            x[0] - origin[0],
+            x[1] - origin[1],
+            x[2] - origin[2],
+        ]),
+        glam::DVec3::from_array([
+            y[0] - origin[0],
+            y[1] - origin[1],
+            y[2] - origin[2],
+        ]),
+        glam::DVec3::from_array([
+            z[0] - origin[0],
+            z[1] - origin[1],
+            z[2] - origin[2],
+        ]),
+    );
+    if basis.determinant().abs() <= f64::EPSILON {
+        return None;
     }
+    let inverse = basis.inverse().to_cols_array();
+    Some(MeshMaterialMapper {
+        origin,
+        inverse_basis: [
+            [inverse[0], inverse[3], inverse[6]],
+            [inverse[1], inverse[4], inverse[7]],
+            [inverse[2], inverse[5], inverse[8]],
+        ],
+        normal_basis: [
+            [x[0] - origin[0], x[1] - origin[1], x[2] - origin[2]],
+            [y[0] - origin[0], y[1] - origin[1], y[2] - origin[2]],
+            [z[0] - origin[0], z[1] - origin[1], z[2] - origin[2]],
+        ],
+    })
 }
 
 pub fn resolve_layer_material_with_base(
@@ -384,7 +517,9 @@ pub fn resolve_material_handle_with_base(
             fallback.clone()
         }
         Some(ObjectType::Material(material)) => {
-            MeshMaterial::from_dwg(handle, material, fallback.diffuse, base_dir)
+            let mut material = MeshMaterial::from_dwg(handle, material, fallback.diffuse, base_dir);
+            material.mapper = fallback.mapper;
+            material
         }
         _ => fallback.clone(),
     }
@@ -441,4 +576,57 @@ fn load_map_image(map: &MaterialMap, base_dir: Option<&Path>) -> Option<Arc<Mate
 #[cfg(target_arch = "wasm32")]
 fn load_map_image(_map: &MaterialMap, _base_dir: Option<&Path>) -> Option<Arc<MaterialImage>> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acadrust::entities::Line;
+    use acadrust::objects::MaterialTexture;
+    use acadrust::types::Vector3;
+    use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+
+    #[test]
+    fn procedural_checker_is_one_repeatable_two_by_two_tile() {
+        let mut map = MaterialMap::default();
+        map.texture = Some(MaterialTexture {
+            color1: MaterialColor {
+                flag: 1,
+                factor: 1.0,
+                rgb: Some(0xFF0000),
+            },
+            color2: MaterialColor {
+                flag: 1,
+                factor: 1.0,
+                rgb: Some(0x00FF00),
+            },
+            ..MaterialTexture::default()
+        });
+
+        let image = procedural_map_image(&map).expect("procedural image");
+        let pixel = |x: usize, y: usize| &image.rgba[(y * 64 + x) * 4..][..4];
+        assert_eq!(pixel(0, 0), [255, 0, 0, 255]);
+        assert_eq!(pixel(32, 0), [0, 255, 0, 255]);
+        assert_eq!(pixel(0, 32), [0, 255, 0, 255]);
+        assert_eq!(pixel(32, 32), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn entity_material_mapper_preserves_its_coordinate_frame() {
+        let mut line = Line::new();
+        let mut record = ExtendedDataRecord::new("ACAD_MATERIAL_MAPPER");
+        record.values = vec![
+            XDataValue::Integer16(2),
+            XDataValue::Integer16(0),
+            XDataValue::Integer16(0),
+            XDataValue::Position3D(Vector3::new(10.0, 20.0, 30.0)),
+            XDataValue::Position3D(Vector3::new(10.0, 22.0, 30.0)),
+            XDataValue::Position3D(Vector3::new(7.0, 20.0, 30.0)),
+            XDataValue::Position3D(Vector3::new(10.0, 20.0, 34.0)),
+        ];
+        line.common.extended_data.add_record(record);
+        let mapper = entity_material_mapper(&EntityType::Line(line)).expect("valid mapper");
+
+        assert_eq!(mapper.map_position([4.0, 22.0, 42.0], [0.0; 3]), [1.0, 2.0, 3.0]);
+    }
 }
