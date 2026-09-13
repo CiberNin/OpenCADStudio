@@ -1,25 +1,6 @@
-//! Ribbon tools and typed-value commands for persistent constraints.
-//!
-//! Every one adds a [`crate::scene::sketch_constraints::SketchConstraint`]
-//! to the current scope and lets `Scene::bump_entities` solve it, the same
-//! path any later edit to the constrained entities re-solves through
-//! (`src/scene/sketch_solve.rs`). By how they gather input:
-//! - **Plain selection, no picking** — Horizontal, Vertical, Fixed (select
-//!   one entity); Parallel, Perpendicular, Equal, Tangent, Colinear,
-//!   Concentric, Normal (select two); Symmetric (select three: the
-//!   mirrored pair, then the mirror line) — dispatch straight to
-//!   `CmdResult::AddSketchConstraint` from `src/app/commands/draw.rs`.
-//! - **A typed value** — Distance, Angle (`value.rs`): the target value
-//!   comes from the command line after the tool is clicked.
-//! - **A picked point, entity pre-selected** — CenterPoint, Midpoint,
-//!   PointOnCurve (`point_on_entity.rs`): the entity side has no ambiguity
-//!   (select it first, like Distance/Angle's target), but the point side
-//!   does (which of a line's two endpoints?), so it's picked interactively
-//!   and resolved by the host.
-//! - **Picked points only, nothing pre-selected** — Coincident
-//!   (`coincident.rs`, two points), EqualDistance (`equal_distance.rs`,
-//!   four points): every side is a point, so plain selection can't express
-//!   it at all.
+//! Ribbon tools for persistent geometric and dimensional constraints.
+//! Commands collect their input here; the scene stores and re-solves the
+//! resulting constraints through the geometry kernel.
 
 mod coincident;
 mod equal_distance;
@@ -37,7 +18,7 @@ pub use tools::{
 };
 pub use value::{angle_tool, distance_tool, AngleConstraintCommand, DistanceConstraintCommand};
 
-use crate::modules::{CadModule, RibbonGroup};
+use crate::modules::{CadModule, IconKind, ModuleEvent, RibbonGroup, RibbonItem, ToolDef};
 
 pub struct ParametricModule;
 
@@ -53,29 +34,115 @@ impl CadModule for ParametricModule {
     fn ribbon_groups(&self) -> &[RibbonGroup] {
         static GROUPS: std::sync::OnceLock<Vec<RibbonGroup>> = std::sync::OnceLock::new();
         GROUPS.get_or_init(|| {
-            vec![RibbonGroup {
-                title: "Constraints",
-                tools: vec![
-                    horizontal::tool().into(),
-                    vertical::tool().into(),
-                    parallel::tool().into(),
-                    perpendicular::tool().into(),
-                    equal::tool().into(),
-                    tangent::tool().into(),
-                    normal::tool().into(),
-                    coincident_tool::tool().into(),
-                    distance_tool::tool().into(),
-                    angle_tool::tool().into(),
-                    concentric::tool().into(),
-                    colinear::tool().into(),
-                    fixed::tool().into(),
-                    symmetric::tool().into(),
-                    center_point_tool::tool().into(),
-                    midpoint_tool::tool().into(),
-                    point_on_curve_tool::tool().into(),
-                    equal_distance_tool::tool().into(),
-                ],
-            }]
+            let extra_constraints = [
+                normal::tool(),
+                center_point_tool::tool(),
+                midpoint_tool::tool(),
+                point_on_curve_tool::tool(),
+                equal_distance_tool::tool(),
+            ];
+            vec![
+                RibbonGroup {
+                    title: "Geometry",
+                    tools: vec![
+                        coincident_tool::tool().into(),
+                        parallel::tool().into(),
+                        tangent::tool().into(),
+                        colinear::tool().into(),
+                        perpendicular::tool().into(),
+                        RibbonItem::Dropdown {
+                            id: "PARAMETRIC_MORE",
+                            icon: extra_constraints[0].icon,
+                            items: extra_constraints
+                                .iter()
+                                .map(|tool| (tool.id, tool.label, tool.icon))
+                                .collect(),
+                            default: "NRCONSTRAINT",
+                        },
+                        concentric::tool().into(),
+                        horizontal::tool().into(),
+                        symmetric::tool().into(),
+                        fixed::tool().into(),
+                        vertical::tool().into(),
+                        equal::tool().into(),
+                    ],
+                },
+                RibbonGroup {
+                    title: "Dimension",
+                    tools: vec![
+                        RibbonItem::LargeTool(distance_tool::tool()),
+                        RibbonItem::LargeTool(angle_tool::tool()),
+                    ],
+                },
+                RibbonGroup {
+                    title: "Manage",
+                    tools: vec![RibbonItem::LargeTool(ToolDef {
+                        id: "PARAMETERS",
+                        label: "Parameters",
+                        icon: IconKind::Glyph("ƒ"),
+                        event: ModuleEvent::Command("PARAMETERS".to_string()),
+                    })],
+                },
+            ]
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item_id(item: &RibbonItem) -> &'static str {
+        match item {
+            RibbonItem::Tool(tool) | RibbonItem::LargeTool(tool) => tool.id,
+            RibbonItem::Dropdown { id, .. } | RibbonItem::LargeDropdown { id, .. } => id,
+            _ => panic!("unexpected composite ribbon item"),
+        }
+    }
+
+    #[test]
+    fn ribbon_uses_geometry_dimension_and_manage_panels() {
+        let groups = ParametricModule.ribbon_groups();
+
+        assert_eq!(
+            groups.iter().map(|group| group.title).collect::<Vec<_>>(),
+            ["Geometry", "Dimension", "Manage"]
+        );
+        assert_eq!(
+            groups[0].tools.iter().map(item_id).collect::<Vec<_>>(),
+            [
+                "CCONSTRAINT",
+                "PCONSTRAINT",
+                "TCONSTRAINT",
+                "LCONSTRAINT",
+                "QCONSTRAINT",
+                "PARAMETRIC_MORE",
+                "NCONSTRAINT",
+                "HCONSTRAINT",
+                "SYCONSTRAINT",
+                "FXCONSTRAINT",
+                "VCONSTRAINT",
+                "ECONSTRAINT",
+            ]
+        );
+        assert_eq!(
+            groups[1].tools.iter().map(item_id).collect::<Vec<_>>(),
+            ["DCONSTRAINT", "ACONSTRAINT"]
+        );
+        assert_eq!(item_id(&groups[2].tools[0]), "PARAMETERS");
+
+        let RibbonItem::Dropdown { items, .. } = &groups[0].tools[5] else {
+            panic!("additional geometric constraints must stay in a dropdown");
+        };
+        assert_eq!(
+            items.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+            [
+                "NRCONSTRAINT",
+                "CPCONSTRAINT",
+                "MPCONSTRAINT",
+                "OCCONSTRAINT",
+                "EDCONSTRAINT",
+            ]
+        );
     }
 }
