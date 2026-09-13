@@ -13,6 +13,11 @@ on:
         required: true
         type: string
   workflow_dispatch:
+    inputs:
+      build_main:
+        description: Build a web hotfix from main without changing the release tag
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
           RELEASE_COMMIT: ${{ inputs.commit }}
+          BUILD_MAIN: ${{ github.event_name == 'workflow_dispatch' && inputs.build_main }}
         run: |
           if [ -z "$RELEASE_TAG" ]; then
             RELEASE_TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
@@ -46,6 +52,13 @@ jobs:
           if [ -n "$RELEASE_COMMIT" ] && [ "$RELEASE_COMMIT" != "$COMMIT" ]; then
             echo "::error::Release tag and commit do not match"
             exit 1
+          fi
+          if [ "$BUILD_MAIN" = "true" ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::Web hotfixes must run on main"
+              exit 1
+            fi
+            COMMIT="$GITHUB_SHA"
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
@@ -61,6 +74,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.source.outputs.tag }}
         run: |
+          git merge-base --is-ancestor "$RELEASE_TAG" HEAD
           if [ -f scripts/release.py ]; then
             python3 scripts/release.py versions --tag "$RELEASE_TAG"
           else

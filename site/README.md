@@ -18,3 +18,4 @@ The drawing screenshot also supplies the social preview; website image URLs chan
 GitHub Pages runs on release publication, a call from the weekly release workflow,
 or a manual run. Commits and pushes do not start workflows. Deployments use website
 files from `main` and build the app from the release, recording both sources separately.
+Manual runs can select **build_main** to publish a web hotfix; see `docs/releases.md`.

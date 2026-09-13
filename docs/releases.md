@@ -31,4 +31,7 @@ To preview release notes, manually run **Weekly release** on `main` with
 **publish** unchecked. Check **publish** to release immediately. Rerunning
 within the same week reuses the original tag and commit. To rebuild just a
 failed target, use GitHub's **Re-run failed jobs**. Manual web deployment
-always uses the latest published release rather than unreleased `main`.
+defaults to the latest published release. For a web hotfix, run **Deploy web**
+on `main` with **build_main** checked. The commit must descend from that release
+and keep its package version; `/app/release.json` records the actual build commit
+without moving the release tag.

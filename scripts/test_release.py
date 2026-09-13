@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,36 @@ import release
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_web_source_selection(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pages.yml").read_text()
+        source = workflow.split("      - name: Resolve release source\n", 1)[1]
+        script = textwrap.dedent(source.split("        run: |\n", 1)[1].split("\n      - uses:", 1)[0])
+        mock_gh = 'gh() { if [ "$1" = release ]; then echo v2026.37; else echo release-sha; fi; }\n'
+        cases = (
+            ({}, "release-sha", None),
+            ({"RELEASE_TAG": "v2026.37", "RELEASE_COMMIT": "release-sha"}, "release-sha", None),
+            ({"RELEASE_COMMIT": "wrong-sha"}, None, "Release tag and commit do not match"),
+            ({"BUILD_MAIN": "true"}, "main-sha", None),
+            ({"BUILD_MAIN": "true", "GITHUB_REF": "refs/heads/other"}, None, "Web hotfixes must run on main"),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            for overrides, commit, error in cases:
+                with self.subTest(overrides=overrides):
+                    output.write_text("")
+                    result = subprocess.run(["bash", "-e", "-c", mock_gh + script], text=True, capture_output=True, env={
+                        **os.environ, "GITHUB_REPOSITORY": "owner/repo", "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_SHA": "main-sha", "GITHUB_OUTPUT": str(output),
+                        "RELEASE_TAG": "", "RELEASE_COMMIT": "", "BUILD_MAIN": "false", **overrides,
+                    })
+                    if error:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(error, result.stdout)
+                        self.assertEqual(output.read_text(), "")
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(output.read_text(), f"tag=v2026.37\ncommit={commit}\n")
+
     def test_build_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             binary = str(Path(temp) / "build-script")
