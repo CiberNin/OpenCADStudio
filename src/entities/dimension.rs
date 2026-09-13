@@ -3768,15 +3768,23 @@ fn tessellate_dimension_inner(
     // DIMTMOVE=1 connects the dimension line to rendered text.
     if let Some(s) = style {
         if s.dimtmove == 1 {
-            if let Some((anchor, txt)) = dimtmove_leader_endpoints(dim, text_layout.position) {
+            if let Some((anchor, txt, under_text)) = dimtmove_leader_endpoints(
+                dim,
+                text_layout.position,
+                text_layout.width * 0.5,
+            ) {
                 let gap = dim_txt as f32 * 0.5;
                 if (txt - anchor).length() > gap * 2.0 {
-                    add_segment_with_text_break(
-                        &mut geom.dim_lines,
-                        anchor,
-                        txt,
-                        text_layout.break_box,
-                    );
+                    if under_text {
+                        add_segment(&mut geom.dim_lines, anchor, txt);
+                    } else {
+                        add_segment_with_text_break(
+                            &mut geom.dim_lines,
+                            anchor,
+                            txt,
+                            text_layout.break_box,
+                        );
+                    }
                 }
             }
         }
@@ -4296,29 +4304,80 @@ fn split_ext_lines(points: &[[f32; 3]]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
     (first, rest)
 }
 
+/// DIMTMOVE=1 leader for linear / aligned dimensions:
+/// - Text outside the dimension-line extent along the axis → (near end, text far edge, true):
+///   a segment along the dimension line itself passing underneath the text. Flagged true
+///   so the text-break cut-out does not eat it.
+/// - Text still inside → (point on the dim line facing the text, text position, false).
+fn linear_leader(
+    first: Vec3,
+    second: Vec3,
+    def: Vec3,
+    axis: Vec3,
+    txt: Vec3,
+    text_half_width: f32,
+) -> Option<(Vec3, Vec3, bool)> {
+    let perp = Vec3::new(-axis.y, axis.x, 0.0);
+    let dim_line_pos = def.dot(perp);
+    let a1 = first + perp * (dim_line_pos - first.dot(perp));
+    let a2 = second + perp * (dim_line_pos - second.dot(perp));
+    let t1 = a1.dot(axis);
+    let t2 = a2.dot(axis);
+    let tt = txt.dot(axis);
+    // Point on the dimension line at axis parameter t.
+    let at = |t: f32| a1 + axis * (t - t1);
+    let half = text_half_width.max(0.0);
+    if tt > t1.max(t2) {
+        // Text past the positive end: extend from that end to the text's far edge.
+        let (near, far) = if t2 >= t1 { (a2, t1) } else { (a1, t2) };
+        let _ = far;
+        Some((near, at(tt + half), true))
+    } else if tt < t1.min(t2) {
+        let (near, _) = if t1 <= t2 { (a1, t1) } else { (a2, t2) };
+        Some((near, at(tt - half), true))
+    } else {
+        Some((at(tt), txt, false))
+    }
+}
+
 /// Endpoints for the DIMTMOVE=1 leader.
-fn dimtmove_leader_endpoints(dim: &Dimension, txt: Vec3) -> Option<(Vec3, Vec3)> {
+fn dimtmove_leader_endpoints(
+    dim: &Dimension,
+    txt: Vec3,
+    text_half_width: f32,
+) -> Option<(Vec3, Vec3, bool)> {
     let lv = |v| vec3_local(v);
-    let anchor = match dim {
+    // Linear / aligned: when the text runs outside the dimension line along the axis,
+    // the line extends underneath the text (GB/T 4458.4 / AutoCAD DIMTMOVE=1);
+    // otherwise a leader connects the dim line to the text (which may sit above/below).
+    match dim {
         Dimension::Linear(d) => {
-            let perp = Vec3::new(-(d.rotation.sin() as f32), d.rotation.cos() as f32, 0.0);
-            let first = lv(d.first_point);
-            let second = lv(d.second_point);
-            let def = lv(d.definition_point);
-            let off1 = def.dot(perp) - first.dot(perp);
-            let off2 = def.dot(perp) - second.dot(perp);
-            (first + perp * off1 + second + perp * off2) * 0.5
+            let axis = Vec3::new(d.rotation.cos() as f32, d.rotation.sin() as f32, 0.0);
+            return linear_leader(
+                lv(d.first_point),
+                lv(d.second_point),
+                lv(d.definition_point),
+                normalized_or(axis, Vec3::X),
+                txt,
+                text_half_width,
+            );
         }
         Dimension::Aligned(d) => {
             let first = lv(d.first_point);
             let second = lv(d.second_point);
             let axis = normalized_or(second - first, Vec3::X);
-            let perp = Vec3::new(-axis.y, axis.x, 0.0);
-            let def = lv(d.definition_point);
-            let off1 = def.dot(perp) - first.dot(perp);
-            let off2 = def.dot(perp) - second.dot(perp);
-            (first + perp * off1 + second + perp * off2) * 0.5
+            return linear_leader(
+                first,
+                second,
+                lv(d.definition_point),
+                axis,
+                txt,
+                text_half_width,
+            );
         }
+        _ => {}
+    }
+    let anchor = match dim {
         Dimension::Radius(_) => return None,
         Dimension::Diameter(d) => {
             let chord = lv(d.angle_vertex);
@@ -4353,7 +4412,7 @@ fn dimtmove_leader_endpoints(dim: &Dimension, txt: Vec3) -> Option<(Vec3, Vec3)>
         }
         _ => return None,
     };
-    Some((anchor, txt))
+    Some((anchor, txt, false))
 }
 
 /// Build a rectangle of filled triangles sitting under the dim text, used
@@ -7188,14 +7247,20 @@ pub(crate) fn baked_large_radial_geometry(
         }
     }
     if style.is_some_and(|style| style.dimtmove == 1) {
-        if let Some((anchor, endpoint)) = dimtmove_leader_endpoints(dimension, text.position) {
+        if let Some((anchor, endpoint, under_text)) =
+            dimtmove_leader_endpoints(dimension, text.position, text.width * 0.5)
+        {
             if anchor.distance(endpoint) > text_height as f32 {
-                add_segment_with_text_break(
-                    &mut geometry.dim_lines,
-                    anchor,
-                    endpoint,
-                    text.break_box,
-                );
+                if under_text {
+                    add_segment(&mut geometry.dim_lines, anchor, endpoint);
+                } else {
+                    add_segment_with_text_break(
+                        &mut geometry.dim_lines,
+                        anchor,
+                        endpoint,
+                        text.break_box,
+                    );
+                }
             }
         }
     }
@@ -7525,5 +7590,63 @@ mod arch_format_tests {
     #[test]
     fn engineering_negative_zero_has_no_sign() {
         assert_eq!(format_engineering(-0.001, 2), "0'-0.00\"");
+    }
+}
+
+#[cfg(test)]
+mod dimtmove_leader_tests {
+    use super::{dimtmove_leader_endpoints, vec3_local, Dimension};
+    use acadrust::entities::DimensionLinear;
+    use acadrust::types::Vector3;
+
+    fn v(x: f64, y: f64) -> Vector3 {
+        Vector3::new(x, y, 0.0)
+    }
+
+    /// Text outside along the axis → the dim line extends underneath the text.
+    #[test]
+    fn text_outside_extends_dim_line_under_text() {
+        let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(20.0, 0.0));
+        d.definition_point = v(0.0, -5.0); // dimension line at y=-5
+        let dim = Dimension::Linear(d);
+        // text anchor outside on the right: centre x=30, half width 3 → far edge 33
+        let txt = vec3_local(v(30.0, -3.0));
+        let (anchor, end, under) = dimtmove_leader_endpoints(&dim, txt, 3.0).expect("leader");
+        assert!(under, "outside text → leader runs underneath it (no text break)");
+        assert!((anchor.x - 20.0).abs() < 1e-4 && (anchor.y + 5.0).abs() < 1e-4, "near end should be the dim line's right end (20,-5), got {anchor:?}");
+        assert!((end.x - 33.0).abs() < 1e-4 && (end.y + 5.0).abs() < 1e-4, "far end should be the text's far edge (33,-5), got {end:?}");
+    }
+
+    /// Text outside on the left → extends leftwards.
+    #[test]
+    fn text_outside_left_extends_leftwards() {
+        let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(20.0, 0.0));
+        d.definition_point = v(0.0, -5.0);
+        let dim = Dimension::Linear(d);
+        let txt = vec3_local(v(-12.0, -3.0));
+        let (anchor, end, under) = dimtmove_leader_endpoints(&dim, txt, 2.0).expect("leader");
+        assert!(under);
+        assert!((anchor.x - 0.0).abs() < 1e-4, "near end should be the dim line's left end, got {anchor:?}");
+        assert!((end.x + 14.0).abs() < 1e-4, "far end should be the text's far edge at -14, got {end:?}");
+    }
+
+    /// Text still inside (only moved up/down) → leader from the dim line to the text.
+    #[test]
+    fn text_inside_connects_to_text() {
+        let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(20.0, 0.0));
+        d.definition_point = v(0.0, -5.0);
+        let dim = Dimension::Linear(d);
+        let txt = vec3_local(v(10.0, 2.0));
+        let (anchor, end, under) = dimtmove_leader_endpoints(&dim, txt, 3.0).expect("leader");
+        assert!(!under, "inside → keep the connect-to-text leader (text break allowed)");
+        assert!((anchor.x - 10.0).abs() < 1e-4 && (anchor.y + 5.0).abs() < 1e-4, "anchor should be the dim line point facing the text, got {anchor:?}");
+        assert!((end.y - 2.0).abs() < 1e-4, "end should be the text position, got {end:?}");
+    }
+
+    /// Radius dimensions draw no leader (unchanged).
+    #[test]
+    fn radius_has_no_leader() {
+        let r = acadrust::entities::DimensionRadius::new(v(0.0, 0.0), v(0.0, 5.0));
+        assert!(dimtmove_leader_endpoints(&Dimension::Radius(r), vec3_local(v(0.0, 8.0)), 2.0).is_none());
     }
 }
