@@ -59,7 +59,7 @@ impl PanelId {
         match self {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
-            PanelId::ExternalReferences => 360.0,
+            PanelId::ExternalReferences => 460.0,
         }
     }
 
@@ -239,9 +239,9 @@ mod tests {
     fn external_references_allows_double_max_width() {
         let mut state = DockState::default();
         state.ensure_settings();
-        // Slightly wider default than the 300-era panels, double the maximum.
+        // Wider default for the column-rich references table, double the maximum.
         // (The 45%-of-window rule still dominates on narrow windows.)
-        assert_eq!(state.width(PanelId::ExternalReferences, 3000.0), 360.0);
+        assert_eq!(state.width(PanelId::ExternalReferences, 3000.0), 460.0);
         state.set_width(PanelId::ExternalReferences, 5000.0);
         assert_eq!(state.width(PanelId::ExternalReferences, 3000.0), DOCK_MAX_W * 2.0);
         // Other panels keep the shared maximum.

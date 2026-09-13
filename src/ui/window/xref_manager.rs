@@ -135,7 +135,7 @@ pub struct XrefManagerPanel {
 
 /// Default reference-table column widths: Reference, Status, Size, Type,
 /// Date, Saved Path.
-pub const DEFAULT_COL_WIDTHS: [f32; 6] = [150.0, 88.0, 76.0, 76.0, 96.0, 200.0];
+pub const DEFAULT_COL_WIDTHS: [f32; 6] = [150.0, 104.0, 76.0, 76.0, 96.0, 200.0];
 /// Narrowest any reference-table column drags to.
 pub const COL_MIN_W: f32 = 48.0;
 /// Widest any reference-table column drags to.
@@ -591,21 +591,21 @@ impl XrefManagerPanel {
         // (DWF/DGN/point clouds/coordination models) are omitted, not dead.
         let web_tip = crate::t!("File attach is not available on web — the reference list below is read-only.").into_owned();
         let attach = if IS_WASM {
-            toolbar_tip(crate::t!("Attach").into_owned(), web_tip.clone())
+            toolbar_tip(crate::t!("Attach DWG").into_owned(), web_tip.clone(), false)
         } else {
             split_button(
-                crate::t!("Attach").into_owned(),
+                crate::t!("Attach DWG").into_owned(),
                 Some(Message::XAttachPick),
                 self.attach_open,
                 Message::XrefManagerAttachMenu,
                 vec![
                     menu_item(
-                        crate::t!("Image").into_owned(),
+                        crate::t!("Attach Image").into_owned(),
                         Some(Message::ImagePick),
                         None,
                     ),
                     menu_item(
-                        crate::t!("PDF").into_owned(),
+                        crate::t!("Attach PDF").into_owned(),
                         Some(Message::PdfAttachPick),
                         None,
                     ),
@@ -613,7 +613,7 @@ impl XrefManagerPanel {
             )
         };
         let refresh = if IS_WASM {
-            toolbar_tip(crate::t!("Refresh").into_owned(), web_tip.clone())
+            toolbar_tip(crate::t!("Refresh").into_owned(), web_tip.clone(), false)
         } else {
             split_button(
                 crate::t!("Refresh").into_owned(),
@@ -708,7 +708,7 @@ impl XrefManagerPanel {
             }
         });
         let change_path = match path_group_gate {
-            Some(reason) => toolbar_tip(crate::t!("Change Path").into_owned(), reason),
+            Some(reason) => toolbar_tip(crate::t!("Change Path").into_owned(), reason, false),
             None => {
                 let relative_gate = if host_saved {
                     None
@@ -767,6 +767,7 @@ impl XrefManagerPanel {
         let help = toolbar_tip(
             crate::t!("Help").into_owned(),
             crate::t!("Reference Manager — select rows, then Detach, Unload, Reload, Bind, Overlay, or a Change Path mode.").into_owned(),
+            false,
         );
         let toolbar = container(
             row![
@@ -987,6 +988,7 @@ impl XrefManagerPanel {
             } else {
                 None
             },
+            false,
         );
         let preview_tab = toolbar_btn(
             crate::t!("Preview").into_owned(),
@@ -995,6 +997,7 @@ impl XrefManagerPanel {
             } else {
                 Some(Message::XrefManagerTogglePreview)
             },
+            false,
         );
         let pane_tabs = row![details_tab, preview_tab]
             .spacing(4)
@@ -1154,6 +1157,45 @@ fn status_text(status: RefStatus) -> std::borrow::Cow<'static, str> {
     }
 }
 
+/// Status icon for the list view: one distinct glyph + theme color per
+/// lifecycle state, drawn from the shared monochrome chrome set so the
+/// artwork stays font-independent on the web build.
+fn status_icon(status: RefStatus) -> Element<'static, Message> {
+    use crate::ui::icons;
+    let (bytes, tone) = status_icon_key(status);
+    match tone {
+        StatusTone::Success => icons::themed_success(bytes, 12.0),
+        StatusTone::Secondary => icons::themed_secondary(bytes, 12.0),
+        StatusTone::Warning => icons::themed_warning(bytes, 12.0),
+        StatusTone::Danger => icons::themed_danger(bytes, 12.0),
+    }
+}
+
+/// Icon tone: which theme color a status glyph renders in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum StatusTone {
+    Success,
+    Secondary,
+    Warning,
+    Danger,
+}
+
+/// Pure status → (glyph bytes, tone) mapping behind [`status_icon`].
+/// Every lifecycle state resolves to a distinct pair.
+fn status_icon_key(status: RefStatus) -> (&'static [u8], StatusTone) {
+    use crate::ui::icons;
+    use StatusTone as T;
+    match status {
+        RefStatus::Loaded => (icons::CHECK, T::Success),
+        RefStatus::Unloaded => (icons::MINUS, T::Secondary),
+        RefStatus::Stale => (icons::DIRTY_DOT, T::Warning),
+        RefStatus::NotFound => (icons::CLOSE, T::Danger),
+        RefStatus::Failed => (icons::DOT, T::Danger),
+        RefStatus::Orphaned => (icons::DOT, T::Warning),
+        RefStatus::Unreferenced => (icons::DOC, T::Secondary),
+    }
+}
+
 fn type_text(entry: &ReferenceEntry) -> std::borrow::Cow<'static, str> {
     match entry.kind {
         RefKind::DwgXref => match entry.ref_type {
@@ -1244,7 +1286,7 @@ fn row_button_style(selected: bool, index: usize) -> impl Fn(&Theme, button::Sta
     }
 }
 
-fn toolbar_btn(label: String, msg: Option<Message>) -> Element<'static, Message> {
+fn toolbar_btn(label: String, msg: Option<Message>, fill: bool) -> Element<'static, Message> {
     let mut b = button(text(label).size(11))
         .style(|theme: &Theme, status| {
             let palette = theme.palette();
@@ -1266,6 +1308,9 @@ fn toolbar_btn(label: String, msg: Option<Message>) -> Element<'static, Message>
             }
         })
         .padding([4, 10]);
+    if fill {
+        b = b.width(Fill);
+    }
     if let Some(m) = msg {
         b = b.on_press(m);
     }
@@ -1274,7 +1319,7 @@ fn toolbar_btn(label: String, msg: Option<Message>) -> Element<'static, Message>
 
 /// Disabled toolbar affordance with an explanatory tooltip (gated
 /// operations, nested-selection blocks, or web-gated mutations).
-fn toolbar_tip(label: String, tip: String) -> Element<'static, Message> {
+fn toolbar_tip(label: String, tip: String, fill: bool) -> Element<'static, Message> {
     let b = button(text(label).size(11).style(|theme: &Theme| {
         iced::widget::text::Style {
             color: Some(
@@ -1301,6 +1346,7 @@ fn toolbar_tip(label: String, tip: String) -> Element<'static, Message> {
         }
     })
     .padding([4, 10]);
+    let b = if fill { b.width(Fill) } else { b };
     tooltip(b, text(tip).size(11), tooltip::Position::Bottom).into()
 }
 
@@ -1410,8 +1456,8 @@ fn split_button(
 /// otherwise greyed text carrying the reason.
 fn menu_item(label: String, msg: Option<Message>, gate: Option<String>) -> Element<'static, Message> {
     match (msg, gate) {
-        (Some(m), None) => toolbar_btn(label, Some(m)),
-        (_, reason) => toolbar_tip(label, reason.unwrap_or_default()),
+        (Some(m), None) => toolbar_btn(label, Some(m), true),
+        (_, reason) => toolbar_tip(label, reason.unwrap_or_default(), true),
     }
 }
 
@@ -1440,7 +1486,7 @@ fn row_menu_for(index: usize) -> Element<'static, Message> {
             item(&crate::t!("Reload").into_owned(), XrefPaletteOp::Reload),
             item(&crate::t!("Bind").into_owned(), XrefPaletteOp::Bind),
             item(&crate::t!("Overlay").into_owned(), XrefPaletteOp::Overlay),
-            item(&crate::t!("Attach").into_owned(), XrefPaletteOp::Attach),
+            item(&crate::t!("Attach DWG").into_owned(), XrefPaletteOp::Attach),
         ]
         .spacing(2)
         .padding(4),
@@ -1497,10 +1543,18 @@ fn xref_row<'a>(
     let name_text: Element<'_, Message> = text(name).size(FONT_SZ).into();
     name_cell = name_cell.push(name_text);
     let gutter = || iced::widget::Space::new().width(Length::Fixed(COL_GUTTER));
+    let status_cell: Element<'_, Message> = row![
+        container(status_icon(entry.status)).align_y(iced::Center),
+        text(status_text(entry.status)).size(FONT_SZ).width(Fill),
+    ]
+    .spacing(4)
+    .align_y(iced::Center)
+    .width(Length::Fixed(cw[1]))
+    .into();
     let content = row![
         name_cell.width(Length::Fixed(cw[0])),
         gutter(),
-        text(status_text(entry.status)).size(FONT_SZ).width(Length::Fixed(cw[1])),
+        status_cell,
         gutter(),
         text(format_size(entry.size_bytes)).size(FONT_SZ).width(Length::Fixed(cw[2])),
         gutter(),
@@ -1975,6 +2029,29 @@ mod tests {
         assert_eq!(panel.table_h, super::TABLE_H + 60.0);
         panel.drag_table_by(-10000.0);
         assert_eq!(panel.table_h, super::TABLE_MIN_H);
+    }
+
+    #[test]
+    fn status_icons_are_unique_per_status() {
+        use super::{status_icon_key, RefStatus};
+        let all = [
+            RefStatus::Loaded,
+            RefStatus::Unloaded,
+            RefStatus::NotFound,
+            RefStatus::Failed,
+            RefStatus::Stale,
+            RefStatus::Orphaned,
+            RefStatus::Unreferenced,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for status in all {
+            let (bytes, tone) = status_icon_key(status);
+            assert!(
+                seen.insert((bytes.as_ptr(), tone)),
+                "status {status:?} shares its icon with another state"
+            );
+        }
+        assert_eq!(seen.len(), all.len());
     }
 
     #[test]

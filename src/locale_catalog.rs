@@ -3158,6 +3158,8 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "XREF: cannot bind nested reference '{}'. Bind it in its host drawing." => Some(("insert", "xref-cannot-bind-nested-reference")),
         "Unreferenced" => Some(("insert", "unreferenced")),
         "File References" => Some(("insert", "xref-file-references")),
+        "Attach DWG" => Some(("insert", "xref-attach-dwg")),
+        "Attach Image" => Some(("insert", "xref-attach-image")),
         "Change Path" => Some(("insert", "xref-change-path")),
         "Make Absolute" => Some(("insert", "xref-make-absolute")),
         "Make Relative" => Some(("insert", "xref-make-relative")),
