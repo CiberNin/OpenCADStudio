@@ -875,7 +875,12 @@ fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
         )),
         EntityTransform::Rotate { center, axis, angle_rad } => {
             if axis.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
-                transform_dimension_points(dim, |pt| rotate_point(pt, *center, *angle_rad))
+                transform_dimension_points(dim, |pt| rotate_point(pt, *center, *angle_rad));
+                // A linear dimension measures along its stored rotation, so the
+                // axis must turn with the points or the value collapses.
+                if let Dimension::Linear(d) = dim {
+                    d.rotation += *angle_rad;
+                }
             } else {
                 crate::scene::view::transform::apply_standard_transform(
                     dim,
@@ -890,7 +895,13 @@ fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
         }
         EntityTransform::Mirror { p1, p2, working_normal } => {
             if working_normal.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
-                transform_dimension_points(dim, |pt| mirror_point(pt, *p1, *p2))
+                transform_dimension_points(dim, |pt| mirror_point(pt, *p1, *p2));
+                let axis = *p2 - *p1;
+                if let Dimension::Linear(d) = dim {
+                    if axis.x * axis.x + axis.y * axis.y >= 1e-12 {
+                        d.rotation = 2.0 * axis.y.atan2(axis.x) - d.rotation;
+                    }
+                }
             } else {
                 acadrust::Entity::apply_transform(
                     dim,
@@ -7636,5 +7647,100 @@ mod dimtmove_leader_tests {
         add_segment_with_text_break(&mut points, start, end, text.break_box);
         let finite: Vec<_> = points.into_iter().filter(|point| point[0].is_finite()).collect();
         assert_eq!(finite, vec![[20.0, -5.0, 0.0], [27.0, -5.0, 0.0]]);
+    }
+}
+
+#[cfg(test)]
+mod linear_transform_tests {
+    use super::*;
+    use acadrust::entities::DimensionLinear;
+    use std::f64::consts::FRAC_PI_2;
+
+    /// A horizontal linear dimension measuring 10 units along X.
+    fn horizontal() -> Dimension {
+        let mut d =
+            DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        Dimension::Linear(d)
+    }
+
+    fn rotation(dim: &Dimension) -> f64 {
+        match dim {
+            Dimension::Linear(d) => d.rotation,
+            _ => unreachable!("linear dimension expected"),
+        }
+    }
+
+    /// The stored and the live value both still read 10.
+    fn assert_measures_ten(dim: &Dimension) {
+        let stored = dim.base().actual_measurement;
+        assert!(
+            (stored - 10.0).abs() < 1e-9,
+            "stored measurement must stay 10, got {stored}"
+        );
+        let live = dim.measurement();
+        assert!(
+            (live - 10.0).abs() < 1e-9,
+            "measurement must stay 10, got {live}"
+        );
+    }
+
+    /// ROTATE in the drawing plane turns the measured axis with the points.
+    /// Left at 0, a horizontal dimension turned 90° measured its now-vertical
+    /// points along X and dropped to 0.
+    #[test]
+    fn rotate_turns_the_measured_axis() {
+        let mut dim = horizontal();
+        apply_transform(
+            &mut dim,
+            &EntityTransform::Rotate {
+                center: DVec3::ZERO,
+                axis: DVec3::Z,
+                angle_rad: FRAC_PI_2,
+            },
+        );
+        assert_measures_ten(&dim);
+        let turned = rotation(&dim);
+        assert!(
+            (turned - FRAC_PI_2).abs() < 1e-9,
+            "rotation must follow the rotate, got {turned}"
+        );
+    }
+
+    /// MIRROR in the drawing plane reflects the measured axis. Mirrored about
+    /// y = x, the horizontal dimension becomes a vertical one of the same value.
+    #[test]
+    fn mirror_reflects_the_measured_axis() {
+        let mut dim = horizontal();
+        apply_transform(
+            &mut dim,
+            &EntityTransform::Mirror {
+                p1: DVec3::ZERO,
+                p2: DVec3::new(1.0, 1.0, 0.0),
+                working_normal: DVec3::Z,
+            },
+        );
+        assert_measures_ten(&dim);
+        let reflected = rotation(&dim);
+        assert!(
+            (reflected - FRAC_PI_2).abs() < 1e-9,
+            "rotation must be reflected, got {reflected}"
+        );
+    }
+
+    /// A zero-length mirror line leaves the points alone, so the axis too.
+    #[test]
+    fn degenerate_mirror_keeps_the_measured_axis() {
+        let mut dim = horizontal();
+        apply_transform(
+            &mut dim,
+            &EntityTransform::Mirror {
+                p1: DVec3::new(3.0, 3.0, 0.0),
+                p2: DVec3::new(3.0, 3.0, 0.0),
+                working_normal: DVec3::Z,
+            },
+        );
+        assert_eq!(rotation(&dim), 0.0);
+        assert_measures_ten(&dim);
     }
 }
