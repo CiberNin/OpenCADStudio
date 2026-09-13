@@ -4169,6 +4169,81 @@ impl OpenCADStudio {
                     self.command_line.push_output(
                         crate::t!("STRETCH: nothing crosses the window.").as_ref(),
                     );
+                } else {
+                    // Visual feedback must only highlight entities that actually have a
+                    // stretchable point inside one of the crossing windows. `handles` can
+                    // contain the whole candidate/preselection set, while `windows` decides
+                    // which vertices will really move.
+                    let point_inside = |point: glam::DVec3| {
+                        const EPS: f64 = 1.0e-9;
+
+                        windows.iter().any(|(win_min, win_max)| {
+                            point.x >= win_min.x - EPS
+                                && point.x <= win_max.x + EPS
+                                && point.y >= win_min.y - EPS
+                                && point.y <= win_max.y + EPS
+                                && point.z >= win_min.z - EPS
+                                && point.z <= win_max.z + EPS
+                        })
+                    };
+
+                    let mut visual_handles = Vec::new();
+
+                    for &handle in &handles {
+                        let wires = self.tabs[i].scene.wire_models_for(&[handle]);
+
+                        let affected = wires.iter().any(|wire| {
+                            // LINE / LWPOLYLINE / other vertex-based entities.
+                            let vertex_hit = wire
+                                .key_vertices
+                                .iter()
+                                .any(|point| point_inside(glam::DVec3::from_array(*point)));
+
+                            if vertex_hit {
+                                return true;
+                            }
+
+                            // Whole-object STRETCH cases such as circles/arcs/inserts/points:
+                            // use only their meaningful anchor snap, not quadrants or
+                            // tessellated display points.
+                            wire.snap_pts.iter().any(|(point, hint)| {
+                                matches!(
+                                    hint,
+                                    crate::scene::model::wire_model::SnapHint::Center
+                                        | crate::scene::model::wire_model::SnapHint::Insertion
+                                        | crate::scene::model::wire_model::SnapHint::Node
+                                ) && point_inside(*point)
+                            })
+                        });
+
+                        if affected {
+                            visual_handles.push(handle);
+                        }
+                    }
+
+                    self.tabs[i].scene.deselect_all();
+                    self.tabs[i].scene.select_entities(&visual_handles);
+                    self.refresh_selected_grips();
+                    // STRETCH temporary grips: keep only the actual vertices/endpoints
+                    // that lie inside one of the accumulated crossing windows.
+                    //
+                    // Mid-segment grips are deliberately excluded: STRETCH moves vertices,
+                    // not the midpoint affordances used by normal grip editing.
+                    let mut stretch_grips = Vec::new();
+                    let mut stretch_grip_handles = Vec::new();
+
+                    for (handle, grip) in std::mem::take(&mut self.tabs[i].selected_grip_handles)
+                        .into_iter()
+                        .zip(std::mem::take(&mut self.tabs[i].selected_grips))
+                    {
+                        if !grip.is_midpoint && point_inside(grip.world) {
+                            stretch_grip_handles.push(handle);
+                            stretch_grips.push(grip);
+                        }
+                    }
+
+                    self.tabs[i].selected_grip_handles = stretch_grip_handles;
+                    self.tabs[i].selected_grips = stretch_grips;
                 }
 
                 use crate::command::CadCommand;

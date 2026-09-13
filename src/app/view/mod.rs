@@ -489,8 +489,14 @@ bg={bg_ms:.1}ms n={view_count}"
             let snap_ext_base = tab.snap_result.and_then(|s| s.extension_base);
             let snap_ext_base2 = tab.snap_result.and_then(|s| s.extension_base2);
 
+            let show_grips = tab.active_cmd.is_none()
+                || tab
+                    .active_cmd
+                    .as_ref()
+                    .is_some_and(|cmd| cmd.name() == "STRETCH");
+
             let grips: Vec<crate::ui::overlay::GripMarker> =
-                if tab.active_cmd.is_none() && !tab.selected_grips.is_empty() {
+                if show_grips && !tab.selected_grips.is_empty() {
                     let (vw, vh) = sel_ref.vp_size;
                     // Overlays project through the active tile's camera, so
                     // they must use the active tile's screen rectangle (with
