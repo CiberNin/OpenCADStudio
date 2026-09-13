@@ -70,33 +70,38 @@ pub fn parse_obj(src: &str, color: [f32; 4]) -> Option<MeshModel> {
     let mut verts: Vec<[f32; 3]> = Vec::with_capacity(face_verts.len());
     let mut norms: Vec<[f32; 3]> = Vec::with_capacity(face_verts.len());
     let mut indices: Vec<u32> = Vec::with_capacity(face_verts.len());
+    let mut has_normal: Vec<bool> = Vec::with_capacity(face_verts.len());
 
     for (vi, (pos_i, norm_i)) in face_verts.iter().enumerate() {
         let pos = *positions.get(*pos_i).unwrap_or(&[0.0; 3]);
         verts.push(pos);
-        let norm = norm_i
-            .and_then(|ni| normals_raw.get(ni).copied())
-            .unwrap_or([0.0, 0.0, 0.0]);
-        norms.push(norm);
+        let norm = norm_i.and_then(|ni| normals_raw.get(ni).copied());
+        has_normal.push(norm.is_some());
+        norms.push(norm.unwrap_or([0.0, 0.0, 0.0]));
         indices.push(vi as u32);
     }
 
-    // If no normals were provided in the OBJ file, compute face normals.
-    if normals_raw.is_empty() {
-        for tri in indices.chunks_exact(3) {
-            let a = verts[tri[0] as usize];
-            let b = verts[tri[1] as usize];
-            let c = verts[tri[2] as usize];
-            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-            let nx = ab[1] * ac[2] - ab[2] * ac[1];
-            let ny = ab[2] * ac[0] - ab[0] * ac[2];
-            let nz = ab[0] * ac[1] - ab[1] * ac[0];
-            let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-12);
-            let n = [nx / len, ny / len, nz / len];
-            norms[tri[0] as usize] = n;
-            norms[tri[1] as usize] = n;
-            norms[tri[2] as usize] = n;
+    // A vertex the file gives no usable normal (the file lists none, the face
+    // omits its normal indices, or an index is out of range) takes its face
+    // normal instead of staying zero.
+    for tri in indices.chunks_exact(3) {
+        if tri.iter().all(|&v| has_normal[v as usize]) {
+            continue;
+        }
+        let a = verts[tri[0] as usize];
+        let b = verts[tri[1] as usize];
+        let c = verts[tri[2] as usize];
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let nx = ab[1] * ac[2] - ab[2] * ac[1];
+        let ny = ab[2] * ac[0] - ab[0] * ac[2];
+        let nz = ab[0] * ac[1] - ab[1] * ac[0];
+        let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-12);
+        let n = [nx / len, ny / len, nz / len];
+        for &v in tri {
+            if !has_normal[v as usize] {
+                norms[v as usize] = n;
+            }
         }
     }
 
@@ -111,4 +116,67 @@ pub fn parse_obj(src: &str, color: [f32; 4]) -> Option<MeshModel> {
         color,
         selected: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_obj;
+
+    const COLOR: [f32; 4] = [0.7, 0.7, 0.85, 1.0];
+
+    /// A unit square in the OBJ ground plane (Y-up), so it lands in world XY
+    /// with its counter-clockwise faces pointing up +Z.
+    const SQUARE: &str = "v 0 0 0\nv 1 0 0\nv 1 0 -1\nv 0 0 -1\n";
+
+    fn assert_normals(normals: &[[f32; 3]], expected: [f32; 3]) {
+        for (i, n) in normals.iter().enumerate() {
+            let close = n.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-6);
+            assert!(close, "vertex {i}: expected normal {expected:?}, got {n:?}");
+        }
+    }
+
+    /// OBJ lets a face omit normal indices even when the file lists normals.
+    /// That face used to get a zero normal instead of its face normal.
+    #[test]
+    fn a_face_without_normal_indices_gets_its_face_normal() {
+        let src = format!("{SQUARE}vn 0 1 0\nf 1//1 2//1 3//1\nf 1 3 4\n");
+        let mesh = parse_obj(&src, COLOR).expect("mesh");
+        assert_eq!(mesh.normals.len(), 6);
+        assert_normals(&mesh.normals[3..], [0.0, 0.0, 1.0]);
+    }
+
+    /// A normal index past the end of the list is treated like a missing one.
+    #[test]
+    fn an_out_of_range_normal_index_gets_the_face_normal() {
+        let src = format!("{SQUARE}vn 0 1 0\nf 1//7 2//7 3//7\n");
+        let mesh = parse_obj(&src, COLOR).expect("mesh");
+        assert_normals(&mesh.normals, [0.0, 0.0, 1.0]);
+    }
+
+    /// Only the vertex with a bad index is filled; its neighbours keep theirs.
+    #[test]
+    fn only_the_vertex_without_a_normal_is_filled() {
+        let src = format!("{SQUARE}vn 1 0 0\nf 1//1 2//9 3//1\n");
+        let mesh = parse_obj(&src, COLOR).expect("mesh");
+        assert_normals(&mesh.normals[0..1], [1.0, 0.0, 0.0]);
+        assert_normals(&mesh.normals[1..2], [0.0, 0.0, 1.0]);
+        assert_normals(&mesh.normals[2..3], [1.0, 0.0, 0.0]);
+    }
+
+    /// Normals the file supplies are kept as written (converted to Z-up).
+    #[test]
+    fn supplied_normals_are_kept() {
+        let src = format!("{SQUARE}vn 1 0 0\nf 1//1 2//1 3//1\nf 1//1 3//1 4//1\n");
+        let mesh = parse_obj(&src, COLOR).expect("mesh");
+        assert_normals(&mesh.normals, [1.0, 0.0, 0.0]);
+    }
+
+    /// A file without any normals still gets face normals.
+    #[test]
+    fn a_file_without_normals_gets_face_normals() {
+        let src = format!("{SQUARE}f 1 2 3 4\n");
+        let mesh = parse_obj(&src, COLOR).expect("mesh");
+        assert_eq!(mesh.normals.len(), 6);
+        assert_normals(&mesh.normals, [0.0, 0.0, 1.0]);
+    }
 }
