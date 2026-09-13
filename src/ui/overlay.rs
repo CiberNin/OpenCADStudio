@@ -1,6 +1,7 @@
 //! Viewport overlay widgets.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use glam::{Mat4, Vec3};
 use iced::mouse;
@@ -25,21 +26,72 @@ const CONSTRAINT_GLYPH_SIZE: f32 = 14.0;
 const CONSTRAINT_GLYPH_PAD_X: f32 = 7.0;
 const CONSTRAINT_GLYPH_PAD_Y: f32 = 4.0;
 const CONSTRAINT_GLYPH_GAP: f32 = 6.0;
+const CONSTRAINT_GLYPH_ROW_GAP: f32 = 4.0;
 
-fn constraint_glyph_box(anchor: Point, outward: [f32; 2], label: &str) -> (Point, Size) {
+fn constraint_glyph_size(label: &str) -> Size {
     let w = label.chars().count() as f32 * CONSTRAINT_GLYPH_SIZE * 0.62
         + CONSTRAINT_GLYPH_PAD_X * 2.0;
     let h = CONSTRAINT_GLYPH_SIZE + CONSTRAINT_GLYPH_PAD_Y * 2.0;
-    let distance = outward[0].abs() * w * 0.5
-        + outward[1].abs() * h * 0.5
+    Size::new(w, h)
+}
+
+fn constraint_glyph_box(
+    anchor: Point,
+    outward: [f32; 2],
+    label: &str,
+    tangent_offset: f32,
+) -> (Point, Size) {
+    let size = constraint_glyph_size(label);
+    let distance = outward[0].abs() * size.width * 0.5
+        + outward[1].abs() * size.height * 0.5
         + CONSTRAINT_GLYPH_GAP;
+    let tangent = [-outward[1], outward[0]];
     (
         Point::new(
-            anchor.x + outward[0] * distance - w * 0.5,
-            anchor.y + outward[1] * distance - h * 0.5,
+            anchor.x + outward[0] * distance + tangent[0] * tangent_offset
+                - size.width * 0.5,
+            anchor.y + outward[1] * distance + tangent[1] * tangent_offset
+                - size.height * 0.5,
         ),
-        Size::new(w, h),
+        size,
     )
+}
+
+fn constraint_glyph_offsets(glyphs: &[(Point, [f32; 2], String, bool)]) -> Vec<f32> {
+    let mut groups: HashMap<[u32; 4], Vec<usize>> = HashMap::new();
+    for (index, (anchor, outward, _, _)) in glyphs.iter().enumerate() {
+        groups
+            .entry([
+                anchor.x.to_bits(),
+                anchor.y.to_bits(),
+                outward[0].to_bits(),
+                outward[1].to_bits(),
+            ])
+            .or_default()
+            .push(index);
+    }
+
+    let mut offsets = vec![0.0; glyphs.len()];
+    for indices in groups.values().filter(|indices| indices.len() > 1) {
+        let half_extents: Vec<f32> = indices
+            .iter()
+            .map(|index| {
+                let (_, outward, label, _) = &glyphs[*index];
+                let size = constraint_glyph_size(label);
+                let tangent = [-outward[1], outward[0]];
+                tangent[0].abs() * size.width * 0.5
+                    + tangent[1].abs() * size.height * 0.5
+            })
+            .collect();
+        let total = half_extents.iter().sum::<f32>() * 2.0
+            + CONSTRAINT_GLYPH_ROW_GAP * (indices.len() - 1) as f32;
+        let mut cursor = -total * 0.5;
+        for (index, half_extent) in indices.iter().zip(half_extents) {
+            offsets[*index] = cursor + half_extent;
+            cursor += half_extent * 2.0 + CONSTRAINT_GLYPH_ROW_GAP;
+        }
+    }
+    offsets
 }
 
 /// Convert CURSORSIZE to a screen-space arm length while keeping the original
@@ -1653,6 +1705,7 @@ impl canvas::Program<Message> for SelectionCanvas {
         }
         // Constraint glyphs are visual-only and have no hit testing.
         if !self.constraint_glyphs.is_empty() {
+            let offsets = constraint_glyph_offsets(&self.constraint_glyphs);
             let normal_bg = theme.palette().primary.base.color;
             let normal_fg = theme.palette().primary.base.text;
             // A redundant or conflicting constraint gets the danger palette
@@ -1661,12 +1714,15 @@ impl canvas::Program<Message> for SelectionCanvas {
             // would show, surfaced right on the geometry.
             let conflict_bg = theme.palette().danger.base.color;
             let conflict_fg = theme.palette().danger.base.text;
-            for (anchor, outward, label, is_conflicting) in &self.constraint_glyphs {
+            for ((anchor, outward, label, is_conflicting), tangent_offset) in
+                self.constraint_glyphs.iter().zip(offsets)
+            {
                 if !anchor.x.is_finite() || !anchor.y.is_finite() {
                     continue;
                 }
                 let (bg, fg) = if *is_conflicting { (conflict_bg, conflict_fg) } else { (normal_bg, normal_fg) };
-                let (top_left, size) = constraint_glyph_box(*anchor, *outward, label);
+                let (top_left, size) =
+                    constraint_glyph_box(*anchor, *outward, label, tangent_offset);
                 let pill = canvas::Path::rounded_rectangle(
                     top_left,
                     size,
@@ -3340,12 +3396,34 @@ mod constraint_glyph_tests {
     #[test]
     fn enlarged_glyph_box_stays_clear_of_its_geometry_anchor() {
         let anchor = Point::new(100.0, 80.0);
-        let (right, size) = constraint_glyph_box(anchor, [1.0, 0.0], "⊥");
+        let (right, size) = constraint_glyph_box(anchor, [1.0, 0.0], "⊥", 0.0);
         assert_eq!(size.height, 22.0);
         assert!((right.x - anchor.x - CONSTRAINT_GLYPH_GAP).abs() < 1e-6);
 
-        let (above, size) = constraint_glyph_box(anchor, [0.0, -1.0], "↔ 25.00");
+        let (above, size) = constraint_glyph_box(anchor, [0.0, -1.0], "↔ 25.00", 0.0);
         assert!((anchor.y - (above.y + size.height) - CONSTRAINT_GLYPH_GAP).abs() < 1e-6);
+    }
+
+    #[test]
+    fn coincident_glyphs_are_arranged_side_by_side() {
+        let anchor = Point::new(100.0, 80.0);
+        let glyphs = vec![
+            (anchor, [0.0, -1.0], "—".to_string(), false),
+            (anchor, [0.0, -1.0], "∥".to_string(), false),
+        ];
+        let offsets = constraint_glyph_offsets(&glyphs);
+        let (left, left_size) =
+            constraint_glyph_box(anchor, glyphs[0].1, &glyphs[0].2, offsets[0]);
+        let (right, right_size) =
+            constraint_glyph_box(anchor, glyphs[1].1, &glyphs[1].2, offsets[1]);
+
+        assert!((left.y - right.y).abs() < 1e-6);
+        assert!(
+            (right.x - (left.x + left_size.width) - CONSTRAINT_GLYPH_ROW_GAP).abs() < 1e-4
+        );
+        assert!(
+            (anchor.y - (left.y + right_size.height) - CONSTRAINT_GLYPH_GAP).abs() < 1e-6
+        );
     }
 }
 
