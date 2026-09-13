@@ -1,5 +1,17 @@
 use super::*;
 
+/// The first PE_URL string is the URL; later strings describe the link.
+pub(crate) fn pe_url_of(entity: &EntityType) -> Option<&str> {
+    entity.common().extended_data.get_record("PE_URL")
+        .and_then(|record| {
+            record.values.iter().find_map(|value| match value {
+                acadrust::xdata::XDataValue::String(text) => Some(text.trim()),
+                _ => None,
+            })
+        })
+        .filter(|text| !text.is_empty())
+}
+
 impl Scene {
     // ── Selection ─────────────────────────────────────────────────────────
     /// Treat a classic LEADER and its attached annotation as one logical object.
@@ -824,21 +836,7 @@ impl Scene {
                     ((alpha as f64 / 255.0 * 100.0).round() as u32).to_string()
                 }
             }),
-            "hyperlink" => Some(
-                entity
-                    .common()
-                    .extended_data
-                    .get_record("PE_URL")
-                    .and_then(|record| {
-                        record.values.iter().find_map(|value| match value {
-                            acadrust::xdata::XDataValue::String(text) if !text.is_empty() => {
-                                Some(text.clone())
-                            }
-                            _ => None,
-                        })
-                    })
-                    .unwrap_or_default(),
-            ),
+            "hyperlink" => Some(pe_url_of(entity).unwrap_or_default().to_owned()),
             "material" => Some(
                 match entity.common().material_flags {
                     0 => "ByLayer",
@@ -1116,6 +1114,44 @@ impl Scene {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pe_url_of_reads_standard_hyperlink_xdata() {
+        use acadrust::entities::Point;
+        use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+
+        let mut doc = CadDocument::new();
+
+        // An entity carrying a PE_URL hyperlink resolves to that link.
+        let mut linked = Point::new();
+        let mut rec = ExtendedDataRecord::new("PE_URL");
+        rec.add_value(XDataValue::String("https://example.com/gui".to_string()));
+        linked.common.extended_data.add_record(rec);
+        let linked_handle = doc
+            .add_entity(EntityType::Point(linked))
+            .expect("linked entity added");
+        assert_eq!(
+            pe_url_of(doc.get_entity(linked_handle).unwrap()),
+            Some("https://example.com/gui")
+        );
+
+        // No PE_URL record -> None.
+        let plain_handle = doc
+            .add_entity(EntityType::Point(Point::new()))
+            .expect("plain entity added");
+        assert_eq!(pe_url_of(doc.get_entity(plain_handle).unwrap()), None);
+
+        // Empty string in the record -> None.
+        let mut empty = Point::new();
+        let mut empty_rec = ExtendedDataRecord::new("PE_URL");
+        empty_rec.add_value(XDataValue::String(String::new()));
+        empty_rec.add_value(XDataValue::String("https://description.invalid/".into()));
+        empty.common.extended_data.add_record(empty_rec);
+        let empty_handle = doc
+            .add_entity(EntityType::Point(empty))
+            .expect("empty-link entity added");
+        assert_eq!(pe_url_of(doc.get_entity(empty_handle).unwrap()), None);
+    }
+
     use super::*;
 
     #[test]

@@ -54,6 +54,7 @@ dependencies = [
  "ttf-parser",
  "unicode-bidi",
  "ureq",
+ "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

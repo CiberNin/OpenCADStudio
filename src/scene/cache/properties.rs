@@ -30,17 +30,7 @@ pub fn general_section(entity: &EntityType) -> PropSection {
         },
     );
 
-    // Hyperlink is stored in XDATA under the "PE_URL" application.
-    let hyperlink = common
-        .extended_data
-        .get_record("PE_URL")
-        .and_then(|r| {
-            r.values.iter().find_map(|v| match v {
-                acadrust::xdata::XDataValue::String(s) if !s.is_empty() => Some(s.clone()),
-                _ => None,
-            })
-        })
-        .unwrap_or_default();
+    let hyperlink = crate::scene::pe_url_of(entity).unwrap_or_default().to_owned();
 
     let mut section = PropSection {
         title: t!("General").into_owned(),

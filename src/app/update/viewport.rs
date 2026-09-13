@@ -3250,6 +3250,36 @@ impl OpenCADStudio {
             }
         }
 
+        // Navigation, overlays and grips retain priority over document hyperlinks.
+        if self.ctrl_down
+            && self.tabs[i].active_cmd.is_none()
+            && self.tabs[i].scene.current_layout == "Model"
+        {
+            let (view_rot, eye) = {
+                let cam = self.tabs[i].scene.camera.borrow();
+                (cam.view_proj_rte(bounds), cam.eye())
+            };
+            let wires = self.tabs[i].scene.hit_test_wires();
+            let url = scene::pick::hit_test::click_hit(
+                p,
+                &*wires,
+                view_rot,
+                eye,
+                bounds,
+                self.tabs[i].scene.document.header.lineweight_display,
+                crate::ui::overlay::pick_box_aperture_px(self.pick_box),
+            )
+            .and_then(Scene::handle_from_wire_name)
+            .and_then(|handle| self.tabs[i].scene.document.get_entity(handle))
+            .and_then(scene::pe_url_of)
+            .and_then(crate::sys::web_hyperlink);
+            if let Some(url) = url {
+                self.tabs[i].scene.selection.borrow_mut().clear_left_selection_gesture();
+                self.command_line.push_info(&format!("{}: {url}", crate::t!("Hyperlink")));
+                return crate::sys::open_url(&url, self.main_window);
+            }
+        }
+
         let mut sel = self.tabs[i].scene.selection.borrow_mut();
         sel.left_down = true;
         // Stored in full-canvas space (like ViewportMove's cursor and
@@ -5933,6 +5963,55 @@ properties={:.1}ms picked={}",
 mod selection_preview_tests {
     use super::*;
     use crate::app::{HoverDwell, OpenCADStudio, HOVER_DWELL_MS};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hyperlink_click_respects_existing_pointer_owners() {
+        use acadrust::EntityType;
+        use acadrust::entities::Line;
+        use acadrust::types::Vector3;
+        use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+        use glam::DVec3;
+
+        for mode in ["link", "plain", "pan", "orbit", "zoom", "grip", "command"] {
+            let mut app = OpenCADStudio::new_for_test();
+            app.automation_op(r#"{"op":"new"}"#);
+            let i = app.active_tab;
+            app.show_ucs_icon = false;
+            // Keep the browser-opening window task deferred during this test.
+            app.main_window = Some(iced::window::Id::unique());
+            let mut line = Line::from_points(
+                Vector3::new(-10.0, 0.0, 0.0),
+                Vector3::new(10.0, 0.0, 0.0),
+            );
+            let mut record = ExtendedDataRecord::new("PE_URL");
+            record.add_value(XDataValue::String("https://example.com/linked".into()));
+            line.common.extended_data.add_record(record);
+            let handle = app.tabs[i].scene.add_entity(EntityType::Line(line));
+            app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+            let _ = app.run_command_line("ZOOM EXTENTS");
+            app.tabs[i].scene.selection.borrow_mut().last_move_pos = Some(Point::new(400.0, 300.0));
+            app.ctrl_down = mode != "plain";
+            match mode {
+                "pan" => app.tabs[i].pan_mode = true,
+                "orbit" => app.tabs[i].orbit_mode = true,
+                "zoom" => app.tabs[i].zoom_dynamic_mode = true,
+                "grip" => app.tabs[i].active_grip = Some(GripEdit::single(handle, 0, false, DVec3::ZERO)),
+                "command" => { let _ = app.run_command_line("LINE"); }
+                _ => {}
+            }
+            let task = app.on_viewport_left_press();
+            let opened = app.command_line.history.iter().any(|entry| entry.text.contains("https://example.com/linked"));
+            assert_eq!(opened, mode == "link", "{mode}");
+            if mode == "link" {
+                assert!(task.units() > 0);
+                let selection = app.tabs[i].scene.selection.borrow();
+                assert!(!selection.left_down && selection.box_anchor.is_none());
+            } else if matches!(mode, "pan" | "orbit" | "zoom") {
+                assert!(app.tabs[i].scene.selection.borrow().middle_down, "{mode}");
+            }
+        }
+    }
 
     /// Drive one settled rollover pick over a line and report what the scene
     /// ended up highlighting.

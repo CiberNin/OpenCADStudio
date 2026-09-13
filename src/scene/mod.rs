@@ -46,6 +46,7 @@ mod preview;
 mod project;
 mod scene_markers;
 mod selection;
+pub(crate) use selection::pe_url_of;
 pub mod sketch_constraints;
 mod sketch_persist;
 mod sketch_solve;
@@ -12614,4 +12615,3 @@ mod layout_cache_tests {
         );
     }
 }
-

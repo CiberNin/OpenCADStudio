@@ -1,6 +1,30 @@
 // Small platform shims for things the desktop build does natively but the web
 // (wasm) build must handle differently or skip.
 
+/// Drawing hyperlinks may open web pages, never local files or custom handlers.
+pub(crate) fn web_hyperlink(value: &str) -> Option<String> {
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    let url = url::Url::parse(value.trim()).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+        .then(|| url.into())
+}
+
+#[test]
+fn drawing_hyperlinks_only_open_web_pages() {
+    for value in ["https://example.com/path", " HTTP://example.com "] {
+        assert!(web_hyperlink(value).is_some(), "{value}");
+    }
+    for value in [
+        "", "https://", "javascript:alert(1)", "data:text/html,example",
+        "file:///tmp/program.desktop", "/tmp/program.desktop", "custom:run",
+        "mailto:user@example.com", "https://example.com/\npath",
+    ] {
+        assert!(web_hyperlink(value).is_none(), "{value}");
+    }
+}
+
 /// Open a URL in the user's browser.
 ///
 /// Wayland requires an xdg-activation token from the source window before it
@@ -93,7 +117,7 @@ pub fn open_url<Message>(
     _parent: Option<iced::window::Id>,
 ) -> iced::Task<Message> {
     if let Some(window) = web_sys::window() {
-        let _ = window.open_with_url_and_target(url, "_blank");
+        let _ = window.open_with_url_and_target_and_features(url, "_blank", "noopener,noreferrer");
     }
     iced::Task::none()
 }
