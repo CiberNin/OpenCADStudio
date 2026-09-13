@@ -3098,15 +3098,32 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let previous = self.plot_dialog.clone();
         let previous_style = self.active_plot_style.clone();
         let previous_window = self.plot_window;
-        let previous_setup = self.plot_setup_template.clone();
+
+        // Once Print All has an explicit override, reopening Options must keep
+        // those settings instead of replacing them with the active layout's
+        // page setup.
+        let keep_print_all_override = self.print_all_settings_override;
+
+        // Refresh runtime data such as printers, paper sizes, plot styles and
+        // named page setups.
         let task = self.on_plot_dialog_open();
+
+        if keep_print_all_override {
+            // Restore only the user-editable plot settings. Runtime lists populated
+            // above remain intact.
+            self.plot_dialog.copy_settings_from(&previous);
+            self.active_plot_style = previous_style.clone();
+            self.plot_window = previous_window;
+        }
+
         self.print_all_options_prev = Some(previous);
         self.print_all_plot_style_prev = Some(previous_style);
         self.print_all_plot_window_prev = Some(previous_window);
-        self.print_all_plot_setup_prev = Some(previous_setup);
+
         self.print_all_options = true;
         self.plot_dialog.paper_space = true;
         self.plot_dialog.area = "Layout".into();
+
         task
     }
 

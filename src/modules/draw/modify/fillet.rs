@@ -1296,7 +1296,14 @@ fn compute_chamfer(
 enum FilletStep {
     First,
     Polyline,
+
+    // Radius may be typed directly or measured by picking two points.
     WaitingForRadius,
+
+    RadiusSecondPoint {
+        first: DVec3,
+    },
+
     Second {
         h1: Handle,
         e1: FilletEntity,
@@ -1370,6 +1377,21 @@ impl FilletCommand {
 }
 
 impl CadCommand for FilletCommand {
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
+        let FilletStep::RadiusSecondPoint { first } = self.step else {
+            return None;
+        };
+
+        Some(WireModel::solid_f64(
+            "fillet_radius_preview".into(),
+            vec![
+                [first.x, first.y, first.z],
+                [pt.x, pt.y, pt.z],
+            ],
+            WireModel::CYAN,
+            false,
+        ))
+    }
     fn name(&self) -> &'static str {
         "FILLET"
     }
@@ -1387,7 +1409,15 @@ impl CadCommand for FilletCommand {
             )
             .into_owned(),
             FilletStep::WaitingForRadius => {
-                crate::tf!("FILLET  Enter fillet radius <{:.4}>:", self.radius).into_owned()
+                crate::tf!(
+                    "FILLET  Specify fillet radius or first point <{:.4}>:",
+                    self.radius
+                )
+                .into_owned()
+            }
+
+            FilletStep::RadiusSecondPoint { .. } => {
+                crate::t!("FILLET  Specify second point for radius:").into_owned()
             }
             FilletStep::Second { .. } => {
                 crate::tf!(
@@ -1410,7 +1440,9 @@ impl CadCommand for FilletCommand {
             FilletStep::Second { .. } => {
                 vec![CmdOption::new("Radius", "R")]
             }
-            FilletStep::Polyline | FilletStep::WaitingForRadius => vec![],
+            FilletStep::Polyline
+            | FilletStep::WaitingForRadius
+            | FilletStep::RadiusSecondPoint { .. } => vec![],
         }
     }
 
@@ -1475,12 +1507,17 @@ impl CadCommand for FilletCommand {
                 }
                 None
             }
-            FilletStep::Polyline => None,
+            FilletStep::Polyline
+            | FilletStep::RadiusSecondPoint { .. } => None,
         }
     }
 
     fn needs_entity_pick(&self) -> bool {
-        !matches!(self.step, FilletStep::WaitingForRadius)
+        !matches!(
+            self.step,
+            FilletStep::WaitingForRadius
+                | FilletStep::RadiusSecondPoint { .. }
+        )
     }
 
     fn on_entity_pick(&mut self, handle: Handle, pt: DVec3) -> CmdResult {
@@ -1490,7 +1527,11 @@ impl CadCommand for FilletCommand {
         let click = [pt.x as f64, pt.y as f64]; // drawing plane is world XY
 
         match &self.step {
-            FilletStep::WaitingForRadius => return CmdResult::NeedPoint,
+            FilletStep::WaitingForRadius
+            | FilletStep::RadiusSecondPoint { .. } => {
+                return CmdResult::NeedPoint;
+            }
+
             FilletStep::Polyline => {
                 let poly = self
                     .entity_index
@@ -1586,7 +1627,8 @@ impl CadCommand for FilletCommand {
         let click = [pt.x as f64, pt.y as f64];
 
         match &self.step {
-            FilletStep::WaitingForRadius => vec![],
+            FilletStep::WaitingForRadius
+            | FilletStep::RadiusSecondPoint { .. } => vec![],
             FilletStep::Polyline => {
                 let preview = self
                     .entity_index
@@ -1677,8 +1719,29 @@ impl CadCommand for FilletCommand {
         }
     }
 
-    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
-        CmdResult::NeedPoint
+    fn on_point(&mut self, pt: DVec3) -> CmdResult {
+        match self.step {
+            FilletStep::WaitingForRadius => {
+                // First point of the temporary radius measurement.
+                self.step = FilletStep::RadiusSecondPoint { first: pt };
+                CmdResult::NeedPoint
+            }
+
+            FilletStep::RadiusSecondPoint { first } => {
+                let radius = first.distance(pt);
+
+                // Ignore an accidental zero-length measurement.
+                if radius > 1.0e-9 {
+                    self.radius = radius;
+                    defaults::set_fillet_radius(radius);
+                    self.resume_after_radius();
+                }
+
+                CmdResult::NeedPoint
+            }
+
+            _ => CmdResult::NeedPoint,
+        }
     }
     fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[Handle]) {
         let mut handles = new_handles.iter().copied();
