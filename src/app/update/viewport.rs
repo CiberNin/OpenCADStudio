@@ -1254,13 +1254,11 @@ impl OpenCADStudio {
                 .filter(|handle| seen_handles.insert(*handle))
                 .collect();
 
+            // Initialize once: constraint solves may add neighbors to this gesture.
             // Wire entities use the overlay; solid meshes stay visible and move live.
-            if self.grip_preview_handles != edited_handles {
+            if self.grip_preview_handles.is_empty() {
                 if self.grip_dirty_before.is_none() {
                     self.grip_dirty_before = Some(self.tabs[i].dirty);
-                }
-                for handle in std::mem::take(&mut self.grip_preview_handles) {
-                    self.tabs[i].scene.preview_hidden.remove(&handle);
                 }
                 // Interactive Add Vertex seeds this with the entity from
                 // before insertion so append + placement is one undo step.
@@ -5963,6 +5961,61 @@ properties={:.1}ms picked={}",
 mod selection_preview_tests {
     use super::*;
     use crate::app::{HoverDwell, OpenCADStudio, HOVER_DWELL_MS};
+
+    #[test]
+    fn grip_moves_keep_perpendicular_constraints_live_and_undoable() {
+        use acadrust::{entities::Line, types::Vector3, EntityType};
+        use crate::scene::sketch_constraints::{ConstraintKind, SketchRef};
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.snapper.snap_enabled = false;
+        app.snapper.grid_snap_on = false;
+        app.snapper.otrack_enabled = false;
+        app.ortho_mode = false;
+        app.polar_mode = false;
+        app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        let a = app.tabs[i].scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(-10.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0),
+        )));
+        let b = app.tabs[i].scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(15.0, -10.0, 0.0), Vector3::new(15.0, 10.0, 0.0),
+        )));
+        let _ = app.apply_cmd_result(crate::command::CmdResult::AddSketchConstraint {
+            kind: ConstraintKind::Perpendicular,
+            refs: vec![SketchRef::whole(a), SketchRef::whole(b)],
+            driving_param: None,
+            label: "Perpendicular constraint",
+        });
+        let geometry = |app: &OpenCADStudio| [a, b].map(|handle| {
+            match app.tabs[i].scene.document.get_entity(handle).unwrap() {
+                EntityType::Line(line) => [line.start, line.end],
+                _ => panic!("expected line"),
+            }
+        });
+        let before = geometry(&app);
+        app.tabs[i].active_grip = Some(GripEdit::single(a, 1, false, glam::DVec3::new(10.0, 0.0, 0.0)));
+        for cursor in [Point::new(520.0, 220.0), Point::new(490.0, 180.0)] {
+            let _ = app.on_viewport_move(cursor);
+            let current = geometry(&app);
+            for point in current.iter().flatten() {
+                assert_eq!(point.z, 0.0, "grip left the drawing plane: {point:?}");
+            }
+            let direction = |ends: [Vector3; 2]| glam::DVec3::new(
+                ends[1].x - ends[0].x, ends[1].y - ends[0].y, ends[1].z - ends[0].z,
+            ).normalize();
+            assert!(direction(current[0]).dot(direction(current[1])).abs() < 1e-8);
+            assert_ne!(current[1], before[1], "constrained neighbor must follow each grip frame");
+        }
+        let _ = app.on_viewport_left_release();
+        assert!(app.tabs[i].active_grip.is_none());
+        let after = geometry(&app);
+        app.undo_steps(1);
+        assert_eq!(geometry(&app), before);
+        app.redo_steps(1);
+        assert_eq!(geometry(&app), after);
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

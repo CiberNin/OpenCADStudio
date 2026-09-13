@@ -317,10 +317,8 @@ impl Camera {
         ))
     }
 
-    /// Unproject a screen point onto an arbitrary world plane in f64. The ray
-    /// is built in eye-relative space (precise), intersected with the plane
-    /// expressed relative to the eye, then shifted back by the f64 eye — so the
-    /// returned world point keeps full precision at large absolute coordinates.
+    /// Unproject in f64, with the kernel intersection relative to the plane
+    /// origin so rendering precision never becomes a geometry elevation.
     pub fn unproject_on_plane(
         &self,
         screen: Point,
@@ -329,32 +327,31 @@ impl Camera {
         plane_point: glam::DVec3,
     ) -> glam::DVec3 {
         let eye = self.eye();
-        let ndc_x = (screen.x / bounds.width) * 2.0 - 1.0;
-        let ndc_y = 1.0 - (screen.y / bounds.height) * 2.0;
-        let inv = self.view_proj_rte(bounds).inverse();
+        let ndc_x = (screen.x as f64 / bounds.width as f64) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen.y as f64 / bounds.height as f64) * 2.0;
+        let inv = self.view_proj_rte(bounds).as_dmat4().inverse();
         // Ray origin / direction in eye-relative space.
         let (ray_origin, ray_dir) = match self.projection {
             Projection::Perspective => {
-                let near_pt = inv.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));
-                let far_pt = inv.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
+                let near_pt = inv.project_point3(DVec3::new(ndc_x, ndc_y, 0.0));
+                let far_pt = inv.project_point3(DVec3::new(ndc_x, ndc_y, 1.0));
                 (near_pt, (far_pt - near_pt).normalize())
             }
             Projection::Orthographic => {
-                let origin = inv.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));
-                let forward = self.rotation * Vec3::NEG_Z;
+                let origin = inv.project_point3(DVec3::new(ndc_x, ndc_y, 0.0));
+                let forward = (self.rotation * Vec3::NEG_Z).as_dvec3();
                 (origin, forward)
             }
         };
-        // Plane point relative to the eye (small) for a precise intersection.
-        let plane_rel = (plane_point - eye).as_vec3();
-        let denom = ray_dir.dot(plane_normal);
-        let rel_hit = if denom.abs() < 1e-6 {
-            plane_rel
-        } else {
-            let t = (plane_rel - ray_origin).dot(plane_normal) / denom;
-            ray_origin + ray_dir * t
-        };
-        eye + rel_hit.as_dvec3()
+        cadkernel::space::plane::intersect_line_plane(
+            (ray_origin - (plane_point - eye)).to_array(),
+            ray_dir.to_array(),
+            [0.0; 3],
+            plane_normal.as_dvec3().to_array(),
+            1e-6,
+        )
+        .map(|point| plane_point + DVec3::from_array(point))
+        .unwrap_or(plane_point)
     }
 
     /// Eye position split into two f32 (high + low) emulating f64, for the
@@ -389,7 +386,7 @@ impl Camera {
 
     /// Project a screen point onto the plane through the orbit target.
     pub fn pick_on_target_plane(&self, screen: Point, bounds: Rectangle) -> glam::DVec3 {
-        let forward = (self.target.as_vec3() - self.eye().as_vec3()).normalize_or(Vec3::NEG_Z);
+        let forward = self.rotation * Vec3::NEG_Z;
         self.unproject_on_plane(screen, bounds, forward, self.target)
     }
 
@@ -903,6 +900,50 @@ mod tests {
 mod rte_tests {
     use super::*;
     use iced::Rectangle;
+
+    #[test]
+    fn cursor_picking_preserves_the_requested_plane() {
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            for distance in [0.01, 60.36, 71.08106, 100_000.0] {
+                for origin in [DVec3::ZERO, DVec3::new(639_792.184_2, 4_517_057.531_7, 12.5)] {
+                    let camera = Camera {
+                        target: origin,
+                        distance,
+                        projection,
+                        ..Camera::default()
+                    };
+                    for cursor in [Point::new(400.0, 300.0), Point::new(530.0, 215.0)] {
+                        let point = camera.pick_on_target_plane(cursor, bounds);
+                        assert_eq!(point.z, origin.z, "{projection:?}, distance={distance}, {point:?}");
+                        let normal = Vec3::new(0.2, -0.3, 1.0).normalize();
+                        let point = camera.pick_on_plane(cursor, bounds, normal, origin);
+                        let residual = (point - origin).dot(normal.as_dvec3());
+                        assert!(residual.abs() < 1e-9, "plane residual={residual}, {projection:?}, distance={distance}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn target_plane_picking_is_translation_invariant() {
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let cursor = Point::new(530.0, 215.0);
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            let camera = Camera {
+                rotation: Quat::from_rotation_z(0.7) * Quat::from_rotation_x(0.4),
+                projection,
+                distance: 0.01,
+                ..Camera::default()
+            };
+            let offset = DVec3::new(639_792.184_2, 4_517_057.531_7, 12.5);
+            let translated = Camera { target: offset, ..camera.clone() };
+            let here = camera.pick_on_target_plane(cursor, bounds);
+            let there = translated.pick_on_target_plane(cursor, bounds) - offset;
+            assert!(here.distance(there) < 1e-9, "{projection:?}: {here:?} vs {there:?}");
+        }
+    }
 
     /// The relative-to-eye view carries rotation and nothing else, so where the
     /// camera stands must not reach it at all.
