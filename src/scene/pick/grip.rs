@@ -61,6 +61,7 @@ pub enum GripEditMode {
     RectangleWidth,
     RectangleHeight,
     RectangleResize,
+    MoveParallel,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +123,12 @@ impl GripEdit {
     pub fn rectangle_height(handle: Handle, grip_id: usize, world: DVec3) -> Self {
         let mut edit = Self::single(handle, grip_id, false, world);
         edit.mode = GripEditMode::RectangleHeight;
+        edit
+    }
+
+    pub fn move_parallel(handle: Handle, grip_id: usize, world: DVec3) -> Self {
+        let mut edit = Self::single(handle, grip_id, false, world);
+        edit.mode = GripEditMode::MoveParallel;
         edit
     }
 

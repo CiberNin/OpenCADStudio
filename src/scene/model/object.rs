@@ -178,6 +178,7 @@ pub enum GripMenuAction {
     RectangleWidth,
     RectangleHeight,
     RectangleResize,
+    MoveParallel,
     AddVertex,
     RemoveVertex,
     ConvertToArc,

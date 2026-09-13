@@ -1162,6 +1162,73 @@ fn apply_grip(pline: &mut LwPolyline, grip_id: usize, apply: GripApply) {
     }
 }
 
+fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
+    let n = pline.vertices.len();
+    let count = if pline.is_closed {
+        n
+    } else {
+        n.saturating_sub(1)
+    };
+    if seg >= count || !offset.is_finite() {
+        return;
+    }
+    let i0 = seg;
+    let i1 = (seg + 1) % n;
+    if pline.vertices[i0].bulge.abs() >= 1.0e-9 {
+        return;
+    }
+    let p0 = Vec2::new(pline.vertices[i0].location.x, pline.vertices[i0].location.y);
+    let p1 = Vec2::new(pline.vertices[i1].location.x, pline.vertices[i1].location.y);
+    let selected = p1 - p0;
+    let length = selected.length();
+    if length <= Tolerance::default().linear() {
+        return;
+    }
+    let normal = Vec2::new(-selected.y / length, selected.x / length);
+    let q0 = p0 + normal * offset;
+
+    let intersect = |a: Vec2, direction: Vec2| -> Option<Vec2> {
+        let cross = direction.x * selected.y - direction.y * selected.x;
+        if cross.abs() < 1.0e-9 * direction.length().max(1.0) * length.max(1.0) {
+            return None;
+        }
+        let delta = q0 - a;
+        let t = (delta.x * selected.y - delta.y * selected.x) / cross;
+        Some(a + direction * t)
+    };
+
+    let new0 = if pline.is_closed || seg > 0 {
+        let previous = (i0 + n - 1) % n;
+        let a = Vec2::new(
+            pline.vertices[previous].location.x,
+            pline.vertices[previous].location.y,
+        );
+        let direction = p0 - a;
+        let Some(point) = intersect(a, direction) else {
+            return;
+        };
+        point
+    } else {
+        q0
+    };
+    let new1 = if pline.is_closed || seg + 1 < count {
+        let next = (i1 + 1) % n;
+        let d = Vec2::new(
+            pline.vertices[next].location.x,
+            pline.vertices[next].location.y,
+        );
+        let direction = d - p1;
+        let Some(point) = intersect(p1, direction) else {
+            return;
+        };
+        point
+    } else {
+        p1 + normal * offset
+    };
+    pline.vertices[i0].location = acadrust::types::Vector2::new(new0.x, new0.y);
+    pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+}
+
 fn apply_transform(pline: &mut LwPolyline, t: &EntityTransform) {
     crate::scene::view::transform::apply_standard_entity_transform(pline, t, |entity, p1, p2| {
         for v in &mut entity.vertices {
@@ -1240,6 +1307,12 @@ impl crate::entities::traits::Grippable for LwPolyline {
             }
         };
         let mut items = Vec::new();
+        if !is_arc {
+            items.push(GripMenuItem {
+                label: "Move Parallel",
+                action: GripMenuAction::MoveParallel,
+            });
+        }
         if is_rectangle(self) && seg < 4 {
             // Moving an edge changes the dimension perpendicular to it.
             items.push(GripMenuItem {
@@ -1272,6 +1345,16 @@ impl crate::entities::traits::Grippable for LwPolyline {
     ) -> Option<&'static str> {
         use crate::scene::model::object::GripMenuAction as A;
         let n = self.vertices.len();
+        if action == A::MoveParallel && grip_id >= n {
+            let seg = grip_id - n;
+            let count = if self.is_closed {
+                n
+            } else {
+                n.saturating_sub(1)
+            };
+            return (seg < count && self.vertices[seg].bulge.abs() < 1.0e-9)
+                .then_some("Parallel offset");
+        }
         (is_rectangle(self)
             && n == 4
             && (n..n + 4).contains(&grip_id)
@@ -1289,6 +1372,32 @@ impl crate::entities::traits::Grippable for LwPolyline {
         point: glam::DVec3,
     ) -> Option<f64> {
         use crate::scene::model::object::GripMenuAction as A;
+        if action == A::MoveParallel {
+            let n = self.vertices.len();
+            let seg = grip_id.checked_sub(n)?;
+            let count = if self.is_closed {
+                n
+            } else {
+                n.saturating_sub(1)
+            };
+            if seg >= count || self.vertices[seg].bulge.abs() >= 1.0e-9 {
+                return None;
+            }
+            let plane = crate::entities::curve::lwpolyline_curve(self)?.plane;
+            let point = Vec2::from(plane.project(point.to_array())?);
+            let p0 = Vec2::new(self.vertices[seg].location.x, self.vertices[seg].location.y);
+            let p1 = Vec2::new(
+                self.vertices[(seg + 1) % n].location.x,
+                self.vertices[(seg + 1) % n].location.y,
+            );
+            let direction = p1 - p0;
+            let length = direction.length();
+            if length <= Tolerance::default().linear() {
+                return None;
+            }
+            let normal = Vec2::new(-direction.y / length, direction.x / length);
+            return Some((point - p0).dot(normal));
+        }
         let (frame, plane) = rectangle_frame(self)?;
         let seg = grip_id.checked_sub(4)?;
         if seg >= 4 {
@@ -1316,6 +1425,12 @@ impl crate::entities::traits::Grippable for LwPolyline {
         value: f64,
     ) {
         use crate::scene::model::object::GripMenuAction as A;
+        if action == A::MoveParallel {
+            if let Some(seg) = grip_id.checked_sub(self.vertices.len()) {
+                move_segment_parallel(self, seg, value);
+            }
+            return;
+        }
         if value <= Tolerance::default().linear() {
             return;
         }
@@ -1563,12 +1678,14 @@ mod tests {
     fn rectangle_midpoint_offers_dimension_before_stretch() {
         let pl = make_test_rectangle();
         let bottom = pl.grip_menu(4);
-        assert_eq!(bottom[0].action, GripMenuAction::RectangleHeight);
-        assert_eq!(bottom[1].action, GripMenuAction::Stretch);
+        assert_eq!(bottom[0].action, GripMenuAction::MoveParallel);
+        assert_eq!(bottom[1].action, GripMenuAction::RectangleHeight);
+        assert_eq!(bottom[2].action, GripMenuAction::Stretch);
 
         let right = pl.grip_menu(5);
-        assert_eq!(right[0].action, GripMenuAction::RectangleWidth);
-        assert_eq!(right[1].action, GripMenuAction::Stretch);
+        assert_eq!(right[0].action, GripMenuAction::MoveParallel);
+        assert_eq!(right[1].action, GripMenuAction::RectangleWidth);
+        assert_eq!(right[2].action, GripMenuAction::Stretch);
     }
 
     #[test]
@@ -1612,6 +1729,56 @@ mod tests {
         let value = pl.grip_menu_point_value(5, GripMenuAction::RectangleWidth, point);
 
         assert_eq!(value, Some(14.0));
+    }
+
+    fn polyline(points: &[(f64, f64)], closed: bool) -> LwPolyline {
+        let mut pl = LwPolyline::default();
+        pl.is_closed = closed;
+        pl.vertices = points
+            .iter()
+            .map(|&(x, y)| LwVertex::new(Vector2::new(x, y)))
+            .collect();
+        pl
+    }
+
+    #[test]
+    fn move_parallel_reconnects_internal_edge_to_adjacent_lines() {
+        let mut pl = polyline(
+            &[(0.0, 0.0), (2.0, 2.0), (8.0, 2.0), (10.0, 0.0)],
+            false,
+        );
+        move_segment_parallel(&mut pl, 1, 2.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(0.0, 0.0));
+        assert_eq!(pl.vertices[1].location, Vector2::new(4.0, 4.0));
+        assert_eq!(pl.vertices[2].location, Vector2::new(6.0, 4.0));
+        assert_eq!(pl.vertices[3].location, Vector2::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn move_parallel_translates_free_endpoint_of_open_polyline() {
+        let mut pl = polyline(&[(0.0, 0.0), (6.0, 0.0), (8.0, 2.0)], false);
+        move_segment_parallel(&mut pl, 0, 2.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(0.0, 2.0));
+        assert_eq!(pl.vertices[1].location, Vector2::new(8.0, 2.0));
+        assert_eq!(pl.vertices[2].location, Vector2::new(8.0, 2.0));
+    }
+
+    #[test]
+    fn move_parallel_wraps_closed_polyline_indices() {
+        let mut pl = polyline(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)], true);
+        move_segment_parallel(&mut pl, 3, -1.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(1.0, 0.0));
+        assert_eq!(pl.vertices[3].location, Vector2::new(1.0, 4.0));
+        assert_eq!(pl.vertices[1].location, Vector2::new(4.0, 0.0));
+        assert_eq!(pl.vertices[2].location, Vector2::new(4.0, 4.0));
+    }
+
+    #[test]
+    fn move_parallel_rejects_parallel_adjacent_line() {
+        let mut pl = polyline(&[(0.0, 0.0), (2.0, 0.0), (5.0, 0.0), (6.0, 2.0)], false);
+        let original = pl.vertices.clone();
+        move_segment_parallel(&mut pl, 1, 1.0);
+        assert_eq!(pl.vertices, original);
     }
 
     #[test]

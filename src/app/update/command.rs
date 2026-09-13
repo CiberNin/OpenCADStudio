@@ -211,6 +211,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     | GripEditMode::ArcLength
                                     | GripEditMode::RectangleWidth
                                     | GripEditMode::RectangleHeight
+                                    | GripEditMode::MoveParallel
                             )
                         }) {
                             self.command_line.input.push_str(&s);
@@ -266,6 +267,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     | GripEditMode::ArcLength
                                     | GripEditMode::RectangleWidth
                                     | GripEditMode::RectangleHeight
+                                    | GripEditMode::MoveParallel
                             )
                         }) {
                             self.command_line.input.pop();
@@ -326,6 +328,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         crate::scene::model::object::GripMenuAction::RectangleHeight => {
                             Some(GripEditMode::RectangleHeight)
                         }
+                        crate::scene::model::object::GripMenuAction::MoveParallel => {
+                            Some(GripEditMode::MoveParallel)
+                        }
                         _ => None,
                     };
                     expected_mode.is_some_and(|mode| {
@@ -384,6 +389,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 ) | (
                                     GripEditMode::RectangleHeight,
                                     crate::scene::model::object::GripMenuAction::RectangleHeight,
+                                ) | (
+                                    GripEditMode::MoveParallel,
+                                    crate::scene::model::object::GripMenuAction::MoveParallel,
                                 )
                             )
                                 && grip.handle == pending.handle
@@ -1522,6 +1530,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             | GripMenuAction::ArcLength
                             | GripMenuAction::RectangleWidth
                             | GripMenuAction::RectangleHeight
+                            | GripMenuAction::MoveParallel
                     ) {
                         if let Some((_, grip)) = self.tabs[i]
                             .selected_grip_handles
@@ -1561,6 +1570,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     popup.grip_id,
                                     grip.world,
                                 ),
+                                GripMenuAction::MoveParallel => GripEdit::move_parallel(
+                                    popup.handle,
+                                    popup.grip_id,
+                                    grip.world,
+                                ),
                                 _ => GripEdit::lengthen(
                                     popup.handle,
                                     popup.grip_id,
@@ -1586,6 +1600,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             self.command_line.push_info("Specify point or enter width:");
                         } else if matches!(item.action, GripMenuAction::RectangleHeight) {
                             self.command_line.push_info("Specify point or enter height:");
+                        } else if matches!(item.action, GripMenuAction::MoveParallel) {
+                            self.command_line.push_info("Specify point or enter parallel offset:");
                         } else {
                             self.command_line.push_info(
                                 crate::t!("Specify point or enter distance:").as_ref(),

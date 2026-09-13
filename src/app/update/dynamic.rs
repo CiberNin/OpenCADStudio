@@ -97,6 +97,9 @@ impl OpenCADStudio {
                 crate::scene::pick::grip::GripEditMode::RectangleHeight => {
                     (grip.origin_world, Some(crate::command::DynRole::Height))
                 }
+                crate::scene::pick::grip::GripEditMode::MoveParallel => {
+                    (grip.origin_world, Some(crate::command::DynRole::Distance))
+                }
                 crate::scene::pick::grip::GripEditMode::RectangleResize => {
                     (grip.origin_world, None)
                 }

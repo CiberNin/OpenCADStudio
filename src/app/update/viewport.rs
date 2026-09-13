@@ -1621,6 +1621,9 @@ impl OpenCADStudio {
                 GripEditMode::RectangleHeight => {
                     Some(crate::scene::model::object::GripMenuAction::RectangleHeight)
                 }
+                GripEditMode::MoveParallel => {
+                    Some(crate::scene::model::object::GripMenuAction::MoveParallel)
+                }
                 GripEditMode::RectangleResize => None,
                 GripEditMode::Stretch => None,
             };
@@ -3332,6 +3335,7 @@ impl OpenCADStudio {
                 grip.mode,
                 GripEditMode::Lengthen | GripEditMode::Radius | GripEditMode::ArcLength
                     | GripEditMode::RectangleWidth | GripEditMode::RectangleHeight
+                    | GripEditMode::MoveParallel
             ) {
                 self.grip_pending = None;
                 self.command_line.input.clear();
