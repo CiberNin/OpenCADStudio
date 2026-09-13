@@ -38,7 +38,7 @@ const VIEWCUBE_HIT_SIZE: f32 = VIEWCUBE_REGION_PX;
 static MOBILE_SPONSOR_IMAGE: std::sync::LazyLock<iced::widget::image::Handle> =
     std::sync::LazyLock::new(|| {
         iced::widget::image::Handle::from_bytes(
-            include_bytes!("../../../assets/sponsors/cad-editor-mobile-dwg-viewer.jpeg").as_slice(),
+            include_bytes!("../../../assets/sponsors/cad-editor-mobile-dwg-viewer.png").as_slice(),
         )
     });
 
