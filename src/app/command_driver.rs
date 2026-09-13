@@ -946,55 +946,6 @@ impl OpenCADStudio {
         TableCellEditStart::Started
     }
 
-    /// Adds inferred Coincident constraints after a line is committed.
-    /// Holding Shift suppresses inference. No match means no undo entry.
-    fn infer_and_add_coincident_constraints(&mut self, i: usize, new_handle: Handle, entity: &acadrust::EntityType) {
-        if self.shift_down {
-            return;
-        }
-        let scope = self.tabs[i].current_sketch_scope();
-        let pairs = crate::scene::sketch_constraints::infer_coincident_refs(
-            &self.tabs[i].scene.document,
-            scope,
-            new_handle,
-            entity,
-        );
-        if pairs.is_empty() {
-            return;
-        }
-        let constraints_before = self
-            .tabs[i]
-            .scene
-            .sketch_constraint_set(scope)
-            .cloned()
-            .unwrap_or_else(|| crate::scene::sketch_constraints::SketchConstraintSet::new(scope));
-        let mut touched: Vec<Handle> = Vec::new();
-        for (new_ref, existing_ref) in &pairs {
-            touched.push(new_ref.entity);
-            touched.push(existing_ref.entity);
-        }
-        touched.sort();
-        touched.dedup();
-        let label = "Coincident (inferred)";
-        let pending = self.begin_undo(i, label, touched.len(), true);
-        self.tabs[i]
-            .scene
-            .record_undo_sketch_constraints_before(scope, constraints_before);
-        for (new_ref, existing_ref) in pairs {
-            self.tabs[i].scene.sketch_constraint_set_mut(scope).add(
-                crate::scene::sketch_constraints::ConstraintKind::Coincident,
-                vec![new_ref, existing_ref],
-                None,
-            );
-        }
-        let changes: Vec<(Handle, crate::scene::ChangeKind)> =
-            touched.into_iter().map(|h| (h, crate::scene::ChangeKind::Modified)).collect();
-        self.tabs[i].scene.bump_entities(&changes);
-        if let Some(pd) = pending {
-            self.commit_undo_delta(i, pd);
-        }
-    }
-
     /// Removes and re-solves the first conflicting constraint in the active scope.
     pub(super) fn resolve_one_sketch_conflict(&mut self) {
         let i = self.active_tab;
@@ -1654,20 +1605,6 @@ impl OpenCADStudio {
                 }
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
-                }
-                // Stage 8/§6.2: live inference, scoped to `LINE` (the design
-                // doc's own example) rather than every `CommitEntity` source —
-                // FILLET/OFFSET/MIRROR/etc. also route Lines through this same
-                // dispatch and shouldn't silently acquire constraints a user
-                // never asked for.
-                if let Some(handle) = committed {
-                    let is_line_command =
-                        self.tabs[i].active_cmd.as_ref().is_some_and(|c| c.name() == "LINE");
-                    if is_line_command {
-                        if let Some(new_entity) = self.tabs[i].scene.document.get_entity(handle).cloned() {
-                            self.infer_and_add_coincident_constraints(i, handle, &new_entity);
-                        }
-                    }
                 }
             }
             CmdResult::CommitEntities(mut entities) => {
@@ -6992,43 +6929,18 @@ mod sketch_constraint_undo_tests {
         );
     }
 
-    /// A line endpoint landing on an existing point infers Coincident unless
-    /// Shift is held.
+    /// Drawing commands must not create sketch constraints implicitly.
     #[test]
-    fn drawing_a_line_onto_an_existing_endpoint_infers_a_coincident_constraint() {
+    fn drawing_a_line_onto_an_existing_endpoint_does_not_add_a_constraint() {
         let mut app = OpenCADStudio::new_for_test();
         let _ = app.automation_op(r#"{"op":"new"}"#);
-        let existing = add_line(&mut app, 0.0, 0.0, 5.0, 0.0);
+        let _existing = add_line(&mut app, 0.0, 0.0, 5.0, 0.0);
 
         let new_line = acadrust::EntityType::Line(acadrust::entities::Line::from_points(
             acadrust::types::Vector3::new(5.0, 0.0, 0.0), // exactly on `existing`'s end point
             acadrust::types::Vector3::new(10.0, 0.0, 0.0),
         ));
         app.tabs[app.active_tab].active_cmd = Some(Box::new(crate::modules::draw::draw::line::LineCommand::new()));
-        let _ = app.apply_cmd_result(CmdResult::CommitEntity(new_line));
-
-        let set = app.tabs[app.active_tab].scene.sketch_constraint_set(SketchScope::ModelSpace).expect("a constraint set should exist");
-        assert_eq!(set.constraints.len(), 1, "an inferred Coincident constraint should have been added");
-        let c = &set.constraints[0];
-        assert_eq!(c.kind, ConstraintKind::Coincident);
-        let touches_existing = c.refs.iter().any(|r| r.entity == existing);
-        assert!(touches_existing, "the inferred constraint should reference the pre-existing line");
-    }
-
-    /// Same setup as above, but with Shift held: inference must be
-    /// suppressed entirely.
-    #[test]
-    fn shift_suppresses_the_coincident_inference() {
-        let mut app = OpenCADStudio::new_for_test();
-        let _ = app.automation_op(r#"{"op":"new"}"#);
-        let _existing = add_line(&mut app, 0.0, 0.0, 5.0, 0.0);
-
-        let new_line = acadrust::EntityType::Line(acadrust::entities::Line::from_points(
-            acadrust::types::Vector3::new(5.0, 0.0, 0.0),
-            acadrust::types::Vector3::new(10.0, 0.0, 0.0),
-        ));
-        app.tabs[app.active_tab].active_cmd = Some(Box::new(crate::modules::draw::draw::line::LineCommand::new()));
-        app.shift_down = true;
         let _ = app.apply_cmd_result(CmdResult::CommitEntity(new_line));
 
         assert_eq!(
@@ -7038,7 +6950,7 @@ mod sketch_constraint_undo_tests {
                 .map(|s| s.constraints.len())
                 .unwrap_or(0),
             0,
-            "Shift should have suppressed the inference"
+            "a drawing command must not add an implicit constraint"
         );
     }
 

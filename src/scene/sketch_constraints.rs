@@ -299,8 +299,7 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
 }
 
 /// Below this squared distance (1e-6 world units), two points count as
-/// already coincident for [`infer_coincident_refs`]/[`nearest_sketch_point`]'s
-/// purposes.
+/// already coincident for [`nearest_sketch_point`]'s purposes.
 const COINCIDENT_EPSILON_SQ: f64 = 1.0e-12;
 
 /// Finds the addressable entity point nearest a snapped world position.
@@ -341,51 +340,6 @@ pub(crate) fn nearest_sketch_point(
         }
     }
     best.map(|(_, r)| r)
-}
-
-/// For each point on `new_entity`, finds an existing entity in `scope` (other
-/// than `new_handle` itself) whose corresponding point already coincides,
-/// and returns a `(new, existing)` `SketchRef` pair per match — the caller
-/// adds each as a `Coincident` constraint.
-///
-/// Matching uses a tight world-space tolerance because this runs after the
-/// snapped entity has been committed.
-pub(crate) fn infer_coincident_refs(
-    document: &acadrust::CadDocument,
-    scope: SketchScope,
-    new_handle: Handle,
-    new_entity: &acadrust::EntityType,
-) -> Vec<(SketchRef, SketchRef)> {
-    let owner = scope.owner_handle(document);
-    let new_points = super::dimension_assoc::source_points(new_entity);
-    if new_points.is_empty() {
-        return Vec::new();
-    }
-    let mut pairs = Vec::new();
-    for (new_marker, new_point) in new_points.iter().enumerate() {
-        for candidate in document.entities() {
-            let common = candidate.common();
-            if common.handle == new_handle || common.owner_handle != owner {
-                continue;
-            }
-            for (marker, point) in super::dimension_assoc::source_points(candidate)
-                .iter()
-                .enumerate()
-            {
-                let dx = point.x - new_point.x;
-                let dy = point.y - new_point.y;
-                let dz = point.z - new_point.z;
-                if dx * dx + dy * dy + dz * dz <= COINCIDENT_EPSILON_SQ {
-                    pairs.push((
-                        SketchRef::point(new_handle, new_marker as i32),
-                        SketchRef::point(common.handle, marker as i32),
-                    ));
-                    break;
-                }
-            }
-        }
-    }
-    pairs
 }
 
 impl ConstraintKind {
