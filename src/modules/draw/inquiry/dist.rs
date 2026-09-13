@@ -14,7 +14,7 @@ pub struct DistCommand {
     plane: WorkingPlane,
 }
 pub const ICON: IconKind =
-    IconKind::Svg(include_bytes!("../../../../assets/icons/distance.svg"));
+    IconKind::Svg(include_bytes!("../../../../assets/icons/measure.svg"));
 impl DistCommand {
     pub fn new() -> Self {
         Self {
