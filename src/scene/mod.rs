@@ -46,6 +46,7 @@ mod preview;
 mod project;
 mod scene_markers;
 mod selection;
+pub use selection::pe_url_of;
 pub mod sketch_constraints;
 mod sketch_persist;
 mod sketch_solve;

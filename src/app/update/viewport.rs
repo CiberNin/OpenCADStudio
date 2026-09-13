@@ -3029,6 +3029,67 @@ impl OpenCADStudio {
         };
         let (vw, vh) = vp_size;
 
+        // Ctrl+click on an entity carrying a standard `PE_URL` hyperlink opens
+        // that link in the system browser (the AutoCAD behaviour). Only in
+        // model space with no command running; a hit consumes the click, so no
+        // box/lasso selection starts. Anything else (no Ctrl, no link) falls
+        // through to the existing logic untouched.
+        if self.ctrl_down
+            && self.tabs[i].active_cmd.is_none()
+            && self.tabs[i].scene.current_layout == "Model"
+        {
+            // Match the selection pick below: map the cursor into the active
+            // model tile and use a zero-origin bounds rectangle.
+            let tile_b = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+            let local = iced::Point {
+                x: p.x - tile_b.x,
+                y: p.y - tile_b.y,
+            };
+            let bounds = iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: tile_b.width,
+                height: tile_b.height,
+            };
+            let (view_rot, eye) = {
+                let cam = self.tabs[i].scene.camera.borrow();
+                (cam.view_proj_rte(bounds), cam.eye())
+            };
+            // The ViewCube/compass gizmo is drawn over the top-right corner:
+            // clicks inside its hit region belong to the gizmo, never to a
+            // hyperlink drawn underneath it.
+            let (ccx, ccy, cw, ch) = match self.tabs[i]
+                .scene
+                .active_viewport
+                .and_then(|hndl| self.tabs[i].scene.viewport_screen_rect(hndl, (vw, vh)))
+            {
+                Some(rect) => (p.x - rect.x, p.y - rect.y, rect.width, rect.height),
+                None => (local.x, local.y, tile_b.width, tile_b.height),
+            };
+            let on_gizmo = scene::hit_test(ccx, ccy, cw, ch, view_rot, VIEWCUBE_PX).is_some();
+            let wires = self.tabs[i].scene.hit_test_wires();
+            let hit = if on_gizmo {
+                None
+            } else {
+                scene::pick::hit_test::click_hit(
+                    local,
+                    &*wires,
+                    view_rot,
+                    eye,
+                    bounds,
+                    self.tabs[i].scene.document.header.lineweight_display,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
+                )
+                .and_then(|s| Scene::handle_from_wire_name(s))
+            };
+            if let Some(url) =
+                hit.and_then(|handle| scene::pe_url_of(&self.tabs[i].scene.document, handle))
+            {
+                self.command_line.push_info(&format!("Opening hyperlink: {url}"));
+                return crate::sys::open_url(&url, self.main_window);
+            }
+        }
+
         // An engaged grip owns the next left press (click-move-click placement
         // or the release of a press-drag). Do not let the same press arm the
         // normal box/lasso state or trigger another viewport control; the
