@@ -287,8 +287,30 @@ impl OpenCADStudio {
             "DYNINPUT" => Message::ToggleDynInput,
             "SELECTALL" => Message::SelectAllShortcut,
             "PASTECLIP" => Message::PasteShortcut,
+
+            "UNDO" => {
+                let i = self.active_tab;
+
+                // Multi-step drawing commands may consume Ctrl+Z themselves.
+                // For example PLINE/SPLINE should remove only the last entered
+                // point instead of cancelling the whole in-progress command.
+                let command_result = self.tabs[i]
+                    .active_cmd
+                    .as_mut()
+                    .and_then(|cmd| cmd.on_undo_step());
+
+                if let Some(result) = command_result {
+                    return self.apply_cmd_result(result);
+                }
+
+                Message::Undo
+            }
+
+            "REDO" => Message::Redo,
+
             other => Message::Command(other.to_string()),
-        };
-        self.update(message)
+            };
+
+            self.update(message)
     }
 }
