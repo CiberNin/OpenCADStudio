@@ -400,28 +400,68 @@ pub(crate) fn glyph_label(constraint: &SketchConstraint) -> String {
     }
 }
 
-/// World-space point to anchor `constraint`'s glyph at, or `None` if it
-/// can't be resolved (dangling ref, unsupported entity/marker). A point ref
-/// resolves straight through [`resolve_point`]; a whole-entity ref falls
-/// back to a representative point on the entity (a line's midpoint, a
-/// circle's rightmost point) since there's no single named point to anchor
-/// on otherwise.
-pub(crate) fn glyph_anchor(
+/// World-space anchor and outward direction for a constraint glyph.
+pub(crate) fn glyph_placement(
     document: &acadrust::CadDocument,
     constraint: &SketchConstraint,
-) -> Option<Vector3> {
+) -> Option<(Vector3, Vector3)> {
     let r = constraint.refs.first()?;
     let entity = document.get_entity(r.entity)?;
-    if let Some(marker) = r.marker {
-        return resolve_point(entity, marker);
-    }
-    match entity {
-        acadrust::EntityType::Line(l) => Some(Vector3::new(
-            (l.start.x + l.end.x) * 0.5,
-            (l.start.y + l.end.y) * 0.5,
-            (l.start.z + l.end.z) * 0.5,
-        )),
-        acadrust::EntityType::Circle(c) => Some(c.point_at_angle_wcs(0.0)),
+    let line_midpoint = |line: &acadrust::entities::Line| {
+        Vector3::new(
+            (line.start.x + line.end.x) * 0.5,
+            (line.start.y + line.end.y) * 0.5,
+            (line.start.z + line.end.z) * 0.5,
+        )
+    };
+    let line_normal = |line: &acadrust::entities::Line| {
+        let direction = Vector3::new(
+            -(line.end.y - line.start.y),
+            line.end.x - line.start.x,
+            0.0,
+        );
+        (direction.length_squared() > 1e-24)
+            .then_some(direction)
+            .unwrap_or(Vector3::UNIT_Y)
+    };
+    match (entity, r.marker) {
+        (acadrust::EntityType::Line(line), None) => {
+            Some((line_midpoint(line), line_normal(line)))
+        }
+        (acadrust::EntityType::Circle(circle), None | Some(-3)) => {
+            let center = circle.center_wcs();
+            let anchor = circle.point_at_angle_wcs(0.0);
+            Some((anchor, anchor - center))
+        }
+        (acadrust::EntityType::Arc(arc), None | Some(-3)) => {
+            let center = arc.center_wcs();
+            let anchor = arc.midpoint_wcs();
+            Some((anchor, anchor - center))
+        }
+        (acadrust::EntityType::Line(line), Some(marker)) => {
+            let anchor = resolve_point(entity, marker)?;
+            let direction = anchor - line_midpoint(line);
+            Some((
+                anchor,
+                (direction.length_squared() > 1e-24)
+                    .then_some(direction)
+                    .unwrap_or_else(|| line_normal(line)),
+            ))
+        }
+        (acadrust::EntityType::Arc(arc), Some(marker)) => {
+            let anchor = resolve_point(entity, marker)?;
+            let direction = anchor - arc.center_wcs();
+            Some((
+                anchor,
+                (direction.length_squared() > 1e-24)
+                    .then_some(direction)
+                    .unwrap_or(Vector3::UNIT_Y),
+            ))
+        }
+        (_, Some(marker)) => {
+            let anchor = resolve_point(entity, marker)?;
+            Some((anchor, Vector3::UNIT_Y))
+        }
         _ => None,
     }
 }
@@ -555,6 +595,44 @@ mod tests {
 
     fn h(v: u64) -> Handle {
         Handle::new(v)
+    }
+
+    #[test]
+    fn glyph_placement_points_away_from_its_geometry() {
+        let mut document = acadrust::CadDocument::new();
+        let mut line = acadrust::entities::Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        );
+        line.common.handle = h(1);
+        document
+            .add_entity(acadrust::EntityType::Line(line))
+            .unwrap();
+        let mut circle = acadrust::entities::Circle::from_center_radius(Vector3::ZERO, 5.0);
+        circle.common.handle = h(2);
+        document
+            .add_entity(acadrust::EntityType::Circle(circle))
+            .unwrap();
+
+        let constraint = |reference| SketchConstraint {
+            id: 0,
+            kind: ConstraintKind::Fixed,
+            refs: vec![reference],
+            driving_param: None,
+            enabled: true,
+        };
+        let (anchor, direction) =
+            glyph_placement(&document, &constraint(SketchRef::whole(h(1)))).unwrap();
+        assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
+        assert_eq!(direction, Vector3::new(0.0, 10.0, 0.0));
+        let (anchor, direction) =
+            glyph_placement(&document, &constraint(SketchRef::point(h(1), 0))).unwrap();
+        assert_eq!(anchor, Vector3::ZERO);
+        assert_eq!(direction, Vector3::new(-5.0, 0.0, 0.0));
+        let (anchor, direction) =
+            glyph_placement(&document, &constraint(SketchRef::center(h(2)))).unwrap();
+        assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
+        assert_eq!(direction, Vector3::new(5.0, 0.0, 0.0));
     }
 
     #[test]

@@ -818,7 +818,7 @@ bg={bg_ms:.1}ms n={view_count}"
                 !cmd.needs_entity_pick() && !cmd.is_selection_gathering()
             });
             // Constraint glyphs are displayed in model space only.
-            let constraint_glyphs: Vec<(iced::Point, String, bool)> = if is_paper {
+            let constraint_glyphs: Vec<(iced::Point, [f32; 2], String, bool)> = if is_paper {
                 Vec::new()
             } else {
                 let (vw, vh) = sel_ref.vp_size;
@@ -840,21 +840,43 @@ bg={bg_ms:.1}ms n={view_count}"
                             .iter()
                             .filter(|c| c.enabled)
                             .filter_map(|c| {
-                                let anchor = crate::scene::sketch_constraints::glyph_anchor(&tab.scene.document, c)?;
+                                let (anchor, outward) =
+                                    crate::scene::sketch_constraints::glyph_placement(
+                                        &tab.scene.document,
+                                        c,
+                                    )?;
                                 let screen = crate::scene::pick::grip::project_rte(
                                     glam::DVec3::new(anchor.x, anchor.y, anchor.z),
                                     view_rot,
                                     eye,
                                     bounds,
                                 )?;
-                                let point = iced::Point::new(bounds.x + screen.x, bounds.y + screen.y);
-                                let is_conflicting = set.conflicts.iter().any(|(id, _)| *id == c.id);
+                                let outward_screen = crate::scene::pick::grip::project_rte(
+                                    glam::DVec3::new(
+                                        anchor.x + outward.x,
+                                        anchor.y + outward.y,
+                                        anchor.z + outward.z,
+                                    ),
+                                    view_rot,
+                                    eye,
+                                    bounds,
+                                )?;
+                                let direction = (outward_screen - screen)
+                                    .normalize_or(glam::Vec2::NEG_Y);
+                                let point = iced::Point::new(
+                                    bounds.x + screen.x,
+                                    bounds.y + screen.y,
+                                );
+                                let is_conflicting =
+                                    set.conflicts.iter().any(|(id, _)| *id == c.id);
                                 let label = if self.show_constraint_values {
                                     crate::scene::sketch_constraints::glyph_label(c)
                                 } else {
                                     c.kind.glyph_symbol().to_string()
                                 };
-                                point.x.is_finite().then(|| (point, label, is_conflicting))
+                                point.x.is_finite().then(|| {
+                                    (point, direction.to_array(), label, is_conflicting)
+                                })
                             })
                             .collect()
                     }

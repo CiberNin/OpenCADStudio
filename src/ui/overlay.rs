@@ -21,6 +21,26 @@ pub const CROSSHAIR_ARM: f32 = 60.0;
 const DEFAULT_CURSOR_SIZE: i32 = 5;
 const DEFAULT_PICK_BOX: i32 = 3;
 const DEFAULT_PICK_APERTURE: f32 = 8.0;
+const CONSTRAINT_GLYPH_SIZE: f32 = 14.0;
+const CONSTRAINT_GLYPH_PAD_X: f32 = 7.0;
+const CONSTRAINT_GLYPH_PAD_Y: f32 = 4.0;
+const CONSTRAINT_GLYPH_GAP: f32 = 6.0;
+
+fn constraint_glyph_box(anchor: Point, outward: [f32; 2], label: &str) -> (Point, Size) {
+    let w = label.chars().count() as f32 * CONSTRAINT_GLYPH_SIZE * 0.62
+        + CONSTRAINT_GLYPH_PAD_X * 2.0;
+    let h = CONSTRAINT_GLYPH_SIZE + CONSTRAINT_GLYPH_PAD_Y * 2.0;
+    let distance = outward[0].abs() * w * 0.5
+        + outward[1].abs() * h * 0.5
+        + CONSTRAINT_GLYPH_GAP;
+    (
+        Point::new(
+            anchor.x + outward[0] * distance - w * 0.5,
+            anchor.y + outward[1] * distance - h * 0.5,
+        ),
+        Size::new(w, h),
+    )
+}
 
 /// Convert CURSORSIZE to a screen-space arm length while keeping the original
 /// 60 px cursor at the default value and the full-viewport result at 100.
@@ -651,7 +671,7 @@ pub fn selection_overlay<'a>(
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    constraint_glyphs: Vec<(Point, String, bool)>,
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool)>,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -734,8 +754,8 @@ struct SelectionCanvas {
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    /// Constraint glyph anchor, label, and conflict state for the current scope.
-    constraint_glyphs: Vec<(Point, String, bool)>,
+    /// Constraint glyph anchor, outward screen direction, label, and conflict state.
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool)>,
 }
 
 fn draw_grip_marker(
@@ -1633,9 +1653,6 @@ impl canvas::Program<Message> for SelectionCanvas {
         }
         // Constraint glyphs are visual-only and have no hit testing.
         if !self.constraint_glyphs.is_empty() {
-            const GLYPH_SIZE: f32 = 11.0;
-            const GLYPH_PAD_X: f32 = 5.0;
-            const GLYPH_PAD_Y: f32 = 2.0;
             let normal_bg = theme.palette().primary.base.color;
             let normal_fg = theme.palette().primary.base.text;
             // A redundant or conflicting constraint gets the danger palette
@@ -1644,23 +1661,26 @@ impl canvas::Program<Message> for SelectionCanvas {
             // would show, surfaced right on the geometry.
             let conflict_bg = theme.palette().danger.base.color;
             let conflict_fg = theme.palette().danger.base.text;
-            for (anchor, label, is_conflicting) in &self.constraint_glyphs {
+            for (anchor, outward, label, is_conflicting) in &self.constraint_glyphs {
                 if !anchor.x.is_finite() || !anchor.y.is_finite() {
                     continue;
                 }
                 let (bg, fg) = if *is_conflicting { (conflict_bg, conflict_fg) } else { (normal_bg, normal_fg) };
-                // Rough width estimate (monospace-ish glyph set, short labels)
-                // avoids a text-measurement pass just to size the background pill.
-                let w = label.chars().count() as f32 * GLYPH_SIZE * 0.62 + GLYPH_PAD_X * 2.0;
-                let h = GLYPH_SIZE + GLYPH_PAD_Y * 2.0;
-                let top_left = Point::new(anchor.x - w * 0.5, anchor.y - h * 0.5);
-                let pill = canvas::Path::rounded_rectangle(top_left, iced::Size::new(w, h), (h * 0.5).into());
+                let (top_left, size) = constraint_glyph_box(*anchor, *outward, label);
+                let pill = canvas::Path::rounded_rectangle(
+                    top_left,
+                    size,
+                    (size.height * 0.5).into(),
+                );
                 frame.fill(&pill, bg);
                 frame.fill_text(canvas::Text {
                     content: label.clone(),
-                    position: Point::new(top_left.x + GLYPH_PAD_X, top_left.y + GLYPH_PAD_Y),
+                    position: Point::new(
+                        top_left.x + CONSTRAINT_GLYPH_PAD_X,
+                        top_left.y + CONSTRAINT_GLYPH_PAD_Y,
+                    ),
                     color: fg,
-                    size: iced::Pixels(GLYPH_SIZE),
+                    size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
                     shaping: iced::advanced::text::Shaping::Advanced,
                     ..Default::default()
                 });
@@ -3310,6 +3330,22 @@ mod clip_tests {
         let (a, c) = clip_seg(Point::new(10.0, 10.0), Point::new(700.0, 500.0), b()).unwrap();
         assert!((a.x - 10.0).abs() < 0.01 && (c.x - 700.0).abs() < 0.01);
         assert!(clip_seg(Point::new(-9000.0, -9000.0), Point::new(-8000.0, -8000.0), b()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod constraint_glyph_tests {
+    use super::*;
+
+    #[test]
+    fn enlarged_glyph_box_stays_clear_of_its_geometry_anchor() {
+        let anchor = Point::new(100.0, 80.0);
+        let (right, size) = constraint_glyph_box(anchor, [1.0, 0.0], "⊥");
+        assert_eq!(size.height, 22.0);
+        assert!((right.x - anchor.x - CONSTRAINT_GLYPH_GAP).abs() < 1e-6);
+
+        let (above, size) = constraint_glyph_box(anchor, [0.0, -1.0], "↔ 25.00");
+        assert!((anchor.y - (above.y + size.height) - CONSTRAINT_GLYPH_GAP).abs() < 1e-6);
     }
 }
 
