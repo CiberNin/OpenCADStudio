@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: vytvořené objekty: __ocs_arg_created__; zdroje s neúspěšnou rotací: __ocs_arg_failed__.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: žádný vybraný objekt nelze rotovat s těmito možnostmi.
 
+    .auto-constrain = Automatické vazby
+    .show-all = Zobrazit vše
+    .hide-all = Skrýt vše
+    .delete-constraints = Odstranit vazby
+    .parameters-manager = Správce parametrů
+    .geometric = Geometrické
+    .dimensional = Rozměrové
+    .show-hide = Zobrazit/skrýt
+
 errors =
     .save-warning = Uložit varování
     .unable-to-save-drawing = Nákres nelze uložit

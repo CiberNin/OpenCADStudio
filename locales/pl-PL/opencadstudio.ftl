@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: utworzono __ocs_arg_created__ obiektów; obrót __ocs_arg_failed__ źródeł nie powiódł się.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: nie udało się obrócić żadnego zaznaczonego obiektu z tymi opcjami.
 
+    .auto-constrain = Więzy automatyczne
+    .show-all = Pokaż wszystko
+    .hide-all = Ukryj wszystko
+    .delete-constraints = Usuń więzy
+    .parameters-manager = Menedżer parametrów
+    .geometric = Geometryczne
+    .dimensional = Wymiarowe
+    .show-hide = Pokaż/Ukryj
+
 errors =
     .save-warning = Zapisz ostrzeżenie
     .unable-to-save-drawing = Nie można zapisać rysunku

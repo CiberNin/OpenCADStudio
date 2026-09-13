@@ -1859,6 +1859,15 @@ common =
     .dwgunits-convert-drawing-to = DWGUNITS  Convert drawing to:
     .opened-plot-preview = Opened plot preview.
 
+    .auto-constrain = Auto Constrain
+    .show-all = Show All
+    .hide-all = Hide All
+    .delete-constraints = Delete Constraints
+    .parameters-manager = Parameters Manager
+    .geometric = Geometric
+    .dimensional = Dimensional
+    .show-hide = Show/Hide
+
 errors =
     .save-warning = Save Warning
     .unable-to-save-drawing = Unable to Save Drawing

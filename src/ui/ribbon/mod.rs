@@ -848,6 +848,9 @@ impl Ribbon {
                     RibbonItem::Dropdown {
                         id, items, default, ..
                     } => (*id, items, *default),
+                    RibbonItem::LabeledDropdown { id, items, default, .. } => {
+                        (*id, items, *default)
+                    }
                     RibbonItem::LargeDropdown {
                         id, items, default, ..
                     } => (*id, items, *default),
@@ -1356,7 +1359,8 @@ fn render_group<'a>(
     for item in &group.tools {
         let is_large = match item {
             RibbonItem::LargeTool(_) | RibbonItem::LargeDropdown { .. } => !compact,
-            RibbonItem::LayerComboGroup { .. }
+            RibbonItem::ToolGrid { .. }
+            | RibbonItem::LayerComboGroup { .. }
             | RibbonItem::PropertiesGroup { .. }
             | RibbonItem::StyleComboGroup { .. } => true,
             _ => false,
@@ -1400,8 +1404,10 @@ fn render_group<'a>(
 /// The top-level command id of a ribbon item, if it has one.
 fn item_id(it: &RibbonItem) -> Option<&'static str> {
     match it {
-        RibbonItem::Tool(t) | RibbonItem::LargeTool(t) => Some(t.id),
-        RibbonItem::Dropdown { id, .. } | RibbonItem::LargeDropdown { id, .. } => Some(*id),
+        RibbonItem::Tool(t) | RibbonItem::LabeledTool(t) | RibbonItem::LargeTool(t) => Some(t.id),
+        RibbonItem::Dropdown { id, .. }
+        | RibbonItem::LabeledDropdown { id, .. }
+        | RibbonItem::LargeDropdown { id, .. } => Some(*id),
         RibbonItem::PropertiesGroup { match_prop } => Some(match_prop.id),
         _ => None,
     }
@@ -1427,13 +1433,17 @@ fn representative<'g>(group: &'g RibbonGroup, last_used: Option<&str>) -> Option
 /// still get a representative icon.
 fn first_tool_icon(group: &RibbonGroup) -> Option<IconKind> {
     group.tools.iter().find_map(|it| match it {
-        RibbonItem::Tool(t) | RibbonItem::LargeTool(t) => Some(t.icon),
-        RibbonItem::Dropdown { icon, .. } | RibbonItem::LargeDropdown { icon, .. } => Some(*icon),
+        RibbonItem::Tool(t) | RibbonItem::LabeledTool(t) | RibbonItem::LargeTool(t) => Some(t.icon),
+        RibbonItem::Dropdown { icon, .. }
+        | RibbonItem::LabeledDropdown { icon, .. }
+        | RibbonItem::LargeDropdown { icon, .. } => Some(*icon),
         RibbonItem::PropertiesGroup { match_prop } => Some(match_prop.icon),
         RibbonItem::LayerComboGroup { row2, .. } => row2.first().map(|t| t.icon),
         RibbonItem::StyleComboGroup { rows, .. } => {
             rows.first().and_then(|r| r.first()).map(|t| t.icon)
-        }
+        },
+        RibbonItem::ToolGrid { columns } => columns.first()
+            .and_then(|column| column.first()).map(|tool| tool.icon),
     })
 }
 
@@ -1611,4 +1621,3 @@ mod tests {
         assert_eq!(ribbon.open_dropdown, None);
     }
 }
-

@@ -3,6 +3,14 @@
 
 pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static str)> {
     match source {
+        "Auto Constrain" => Some(("common", "auto-constrain")),
+        "Delete Constraints" => Some(("common", "delete-constraints")),
+        "Dimensional" => Some(("common", "dimensional")),
+        "Geometric" => Some(("common", "geometric")),
+        "Hide All" => Some(("common", "hide-all")),
+        "Parameters Manager" => Some(("common", "parameters-manager")),
+        "Show All" => Some(("common", "show-all")),
+        "Show/Hide" => Some(("common", "show-hide")),
         "Boolean" => Some(("model", "boolean")),
         "Create" => Some(("model", "create")),
         "Extrude" => Some(("model", "extrude")),

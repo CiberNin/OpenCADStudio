@@ -1846,6 +1846,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE：已创建 __ocs_arg_created__ 个对象；__ocs_arg_failed__ 个源对象无法旋转。
     .revolve-no-selected-object-could-be-revolved = REVOLVE：无法使用指定选项旋转任何选定对象。
 
+    .auto-constrain = 自动约束
+    .show-all = 全部显示
+    .hide-all = 全部隐藏
+    .delete-constraints = 删除约束
+    .parameters-manager = 参数管理器
+    .geometric = 几何
+    .dimensional = 标注
+    .show-hide = 显示/隐藏
+
 errors =
     .save-warning = 保存警告
     .unable-to-save-drawing = 无法保存图形

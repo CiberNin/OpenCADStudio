@@ -59,6 +59,7 @@ const LARGE_LABEL_LINES: f32 = 2.0;
 const LARGE_LABEL_SIZE: f32 = 10.0;
 /// Width of a 1-row (small) button.
 pub(super) const SMALL_W: f32 = ROW_H;
+const LABELED_SMALL_W: f32 = ROW_H * 4.0;
 /// Width of the ▾ strip on a small dropdown.
 pub(super) const ARROW_W: f32 = ROW_H * 0.4;
 /// Height of the ▾ strip at the bottom of a large dropdown.
@@ -524,6 +525,26 @@ pub(super) fn render_small<'a>(
                 .into()
         }
 
+        RibbonItem::LabeledTool(t) => {
+            let active = is_active_tool(t.id, active_tool, &state);
+            let event = t.event.clone();
+            let tool_id = t.id.to_string();
+            let label = t!(t.label).into_owned();
+            let tip_text = format!("{}\n{} {}", label, t!("Command:"), t.id);
+            let content = row![
+                container(make_icon(t.icon, SMALL_ICON)).width(Length::Fixed(SMALL_W)),
+                text(label).size(10).wrapping(advanced_text::Wrapping::None),
+            ].spacing(3).align_y(iced::Center);
+            let btn = button(content)
+                .on_press(Message::RibbonToolClick { tool_id, event })
+                .style(move |theme: &Theme, status| tool_btn_style(theme, active, status))
+                .width(Length::Fixed(LABELED_SMALL_W + ARROW_W))
+                .height(ROW_H)
+                .padding([3, 4]);
+            tooltip(btn, make_tip(tip_text), TipPos::Right)
+                .gap(6.0).delay(Duration::from_millis(400)).style(tip_style).into()
+        }
+
         RibbonItem::Dropdown {
             id,
             icon,
@@ -609,6 +630,42 @@ pub(super) fn render_small<'a>(
                 row![icon_with_tip, arr_with_tip].spacing(0).height(ROW_H),
             )
             .into()
+        }
+
+        RibbonItem::LabeledDropdown { id, label, icon, items, default } => {
+            let active = active_tool.as_deref() == Some(*id)
+                || items.iter().any(|(cmd, _, _)| active_tool.as_deref() == Some(*cmd));
+            let dd_open = open_dd.as_deref() == Some(*id);
+            let last = last_cmd.get(id).copied().unwrap_or(*default);
+            let cur_icon = last_cmd.get(id).copied().and_then(|cmd| {
+                items.iter().find(|(candidate, _, _)| *candidate == cmd)
+                    .map(|(_, _, item_icon)| *item_icon)
+            }).or_else(|| items.first().map(|(_, _, item_icon)| *item_icon)).unwrap_or(*icon);
+            let localized_label = t!(*label).into_owned();
+            let face = row![
+                container(make_icon(cur_icon, SMALL_ICON)).width(Length::Fixed(SMALL_W)),
+                text(localized_label.clone()).size(10).wrapping(advanced_text::Wrapping::None),
+            ].spacing(3).align_y(iced::Center);
+            let face_btn = button(face)
+                .on_press(Message::RibbonToolClick {
+                    tool_id: last.to_string(),
+                    event: ModuleEvent::Command(last.to_string()),
+                })
+                .style(move |theme: &Theme, status| tool_btn_style(theme, active, status))
+                .width(Length::Fixed(LABELED_SMALL_W)).height(ROW_H).padding([3, 4]);
+            let arrow = button(container(icons::themed_arrow_down(8.0))
+                .width(Fill).height(Fill).align_x(iced::Center).align_y(iced::Center))
+                .on_press(Message::ToggleRibbonDropdown(id.to_string()))
+                .style(move |theme: &Theme, status| tool_btn_style(theme, dd_open, status))
+                .width(Length::Fixed(ARROW_W)).height(ROW_H).padding(0);
+            let face_tip = format!("{}\n{} {}", localized_label, t!("Command:"), last);
+            let arrow_tip = format!("{} {}", localized_label, t!("options"));
+            PosReport::new(*id, row![
+                tooltip(face_btn, make_tip(face_tip), TipPos::Right)
+                    .gap(6.0).delay(Duration::from_millis(400)).style(tip_style),
+                tooltip(arrow, make_tip(arrow_tip), TipPos::Right)
+                    .gap(6.0).delay(Duration::from_millis(400)).style(tip_style),
+            ].spacing(0).height(ROW_H)).into()
         }
 
         _ => text("").into(),
@@ -802,7 +859,7 @@ pub(super) fn render_large<'a>(
     match item {
         // A plain Tool renders large too, so a collapsed panel can show its
         // representative tool as a big icon.
-        RibbonItem::LargeTool(t) | RibbonItem::Tool(t) => {
+        RibbonItem::LargeTool(t) | RibbonItem::Tool(t) | RibbonItem::LabeledTool(t) => {
             let active = is_active_tool(t.id, active_tool, &state);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
@@ -856,6 +913,23 @@ pub(super) fn render_large<'a>(
         } => {
                 render_large_dropdown(*id, *icon, Some(*label), items, *default, ctx)
             }
+
+        RibbonItem::LabeledDropdown { id, label, icon, items, default } => {
+            render_large_dropdown(*id, *icon, Some(*label), items, *default, ctx)
+        }
+
+        RibbonItem::ToolGrid { columns } => columns.iter().fold(
+            row![].spacing(2).height(Fill).align_y(iced::Top),
+            |row, tools| {
+                let column = tools.iter().fold(
+                    column![].spacing(2).width(Length::Fixed(SMALL_W)),
+                    |column, tool| column.push(render_small(
+                        &RibbonItem::Tool(tool.clone()), active_tool, open_dd, last_cmd, state,
+                    )),
+                );
+                row.push(column)
+            },
+        ).into(),
 
         // A plain Dropdown renders large too (used by a collapsed panel whose
         // representative tool is a dropdown).

@@ -1849,6 +1849,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: __ocs_arg_created__ 個のオブジェクトを作成しました。__ocs_arg_failed__ 個の元の図形は回転できませんでした。
     .revolve-no-selected-object-could-be-revolved = REVOLVE: 指定したオプションでは、選択したどのオブジェクトも回転できませんでした。
 
+    .auto-constrain = 自動拘束
+    .show-all = すべて表示
+    .hide-all = すべて非表示
+    .delete-constraints = 拘束を削除
+    .parameters-manager = パラメータ管理
+    .geometric = 幾何拘束
+    .dimensional = 寸法拘束
+    .show-hide = 表示/非表示
+
 errors =
     .save-warning = 保存の警告
     .unable-to-save-drawing = 図面を保存できません

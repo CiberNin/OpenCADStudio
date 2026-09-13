@@ -978,6 +978,267 @@ impl OpenCADStudio {
             }
 
             // ── Persistent constraints ────────────────────────────────────
+            "GCSHOW" | "GCHIDE" | "DCSHOW" | "DCHIDE" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let sel = SelectObjectsCommand::new(cmd);
+                    self.command_line.push_info(&sel.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(sel));
+                } else {
+                    let scope = self.tabs[i].current_sketch_scope();
+                    let dimensional = cmd.starts_with("DC");
+                    let visible = !matches!(cmd, "GCHIDE" | "DCHIDE");
+                    let count = self.tabs[i].scene.set_sketch_constraint_visibility(
+                        scope,
+                        Some(&handles),
+                        dimensional,
+                        visible,
+                    );
+                    self.command_line.push_output(
+                        format!("{} constraint indicator(s) updated.", count).as_str(),
+                    );
+                }
+            }
+
+            "GCRESET" => {
+                let scope = self.tabs[i].current_sketch_scope();
+                let count = self.tabs[i]
+                    .scene
+                    .set_sketch_constraint_visibility(scope, None, false, true);
+                self.command_line
+                    .push_output(format!("{} constraint indicator(s) reset.", count).as_str());
+            }
+
+            "GCSHOWALL" | "GCHIDEALL" | "DCSHOWALL" | "DCHIDEALL" => {
+                let scope = self.tabs[i].current_sketch_scope();
+                let dimensional = cmd.starts_with("DC");
+                let visible = matches!(cmd, "GCSHOWALL" | "DCSHOWALL");
+                let count = self.tabs[i].scene.set_sketch_constraint_visibility(
+                    scope,
+                    None,
+                    dimensional,
+                    visible,
+                );
+                self.command_line
+                    .push_output(format!("{} constraint indicator(s) updated.", count).as_str());
+            }
+
+            "DELCONSTRAINT" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let sel = SelectObjectsCommand::new(cmd);
+                    self.command_line.push_info(&sel.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(sel));
+                } else {
+                    let scope = self.tabs[i].current_sketch_scope();
+                    let Some(before) = self.tabs[i]
+                        .scene
+                        .sketch_constraint_set(scope)
+                        .cloned()
+                    else {
+                        self.command_line.push_output("No constraints found.");
+                        return None;
+                    };
+                    let mut ids: Vec<_> = before
+                        .constraints
+                        .iter()
+                        .filter(|constraint| {
+                            constraint
+                                .refs
+                                .iter()
+                                .any(|reference| handles.contains(&reference.entity))
+                        })
+                        .map(|constraint| constraint.id)
+                        .collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    if ids.is_empty() {
+                        self.command_line.push_output("No constraints found.");
+                        return None;
+                    }
+                    let pending = self.begin_undo(i, "Delete constraints", handles.len(), true);
+                    self.tabs[i]
+                        .scene
+                        .record_undo_sketch_constraints_before(scope, before);
+                    let set = self.tabs[i].scene.sketch_constraint_set_mut(scope);
+                    for id in &ids {
+                        set.remove(*id);
+                    }
+                    let changes: Vec<_> = handles
+                        .iter()
+                        .copied()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                    self.refresh_properties();
+                    self.command_line
+                        .push_output(format!("{} constraint(s) deleted.", ids.len()).as_str());
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
+                    }
+                }
+            }
+
+            "AUTOCONSTRAIN" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let sel = SelectObjectsCommand::new(cmd);
+                    self.command_line.push_info(&sel.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(sel));
+                } else {
+                    let scope = self.tabs[i].current_sketch_scope();
+                    let inferred = self.tabs[i]
+                        .scene
+                        .inferred_sketch_constraints(scope, &handles);
+                    if inferred.is_empty() {
+                        self.command_line
+                            .push_output("No supported geometric relations were found.");
+                        return None;
+                    }
+                    let before = self.tabs[i]
+                        .scene
+                        .sketch_constraint_set(scope)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            crate::scene::sketch_constraints::SketchConstraintSet::new(scope)
+                        });
+                    let pending = self.begin_undo(i, "Auto constrain", handles.len(), true);
+                    self.tabs[i]
+                        .scene
+                        .record_undo_sketch_constraints_before(scope, before);
+                    let count = inferred.len();
+                    for (kind, refs) in inferred {
+                        self.tabs[i]
+                            .scene
+                            .sketch_constraint_set_mut(scope)
+                            .add(kind, refs, None);
+                    }
+                    let changes: Vec<_> = handles
+                        .iter()
+                        .copied()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                    self.refresh_properties();
+                    self.command_line
+                        .push_output(format!("{} constraint(s) applied.", count).as_str());
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
+                    }
+                }
+            }
+
+            "SMOOTHCONSTRAINT" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let sel = SelectObjectsCommand::new(cmd);
+                    self.command_line.push_info(&sel.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(sel));
+                } else {
+                    let Some(refs) = self.tabs[i].scene.smooth_constraint_refs(&handles) else {
+                        self.command_line.push_output(
+                            "Select one open spline and one open target curve.",
+                        );
+                        return None;
+                    };
+                    use crate::command::CmdResult;
+                    use crate::scene::sketch_constraints::ConstraintKind;
+                    return Some(self.apply_cmd_result(CmdResult::AddSketchConstraint {
+                        kind: ConstraintKind::Smooth,
+                        refs,
+                        driving_param: None,
+                        label: "Smooth constraint",
+                    }));
+                }
+            }
+
+            "DCCONVERT" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let sel = SelectObjectsCommand::new(cmd);
+                    self.command_line.push_info(&sel.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(sel));
+                } else {
+                    let scope = self.tabs[i].current_sketch_scope();
+                    let conversions: Vec<_> = handles
+                        .iter()
+                        .copied()
+                        .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                        .filter_map(|handle| {
+                            let (kind, refs, value) =
+                                crate::scene::dimension_assoc::constraint_from_associative_dimension(
+                                    &self.tabs[i].scene.document,
+                                    handle,
+                                )?;
+                            self.tabs[i]
+                                .scene
+                                .validate_sketch_constraint(kind, &refs, Some(&value))
+                                .ok()?;
+                            Some((handle, kind, refs, value))
+                        })
+                        .collect();
+                    if conversions.is_empty() {
+                        self.command_line.push_output(
+                            "No supported associative dimensions were selected.",
+                        );
+                        return None;
+                    }
+                    let before = self.tabs[i]
+                        .scene
+                        .sketch_constraint_set(scope)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            crate::scene::sketch_constraints::SketchConstraintSet::new(scope)
+                        });
+                    let mut touched: Vec<_> = conversions
+                        .iter()
+                        .flat_map(|(_, _, refs, _)| refs.iter().map(|reference| reference.entity))
+                        .collect();
+                    touched.sort_unstable();
+                    touched.dedup();
+                    let dimensions: Vec<_> = conversions
+                        .iter()
+                        .map(|(handle, _, _, _)| *handle)
+                        .collect();
+                    let pending = self.begin_undo(
+                        i,
+                        "Convert dimensions to constraints",
+                        touched.len() + dimensions.len(),
+                        false,
+                    );
+                    self.tabs[i]
+                        .scene
+                        .record_undo_sketch_constraints_before(scope, before);
+                    for (_, kind, refs, value) in conversions {
+                        self.tabs[i]
+                            .scene
+                            .sketch_constraint_set_mut(scope)
+                            .add(kind, refs, Some(value));
+                    }
+                    self.tabs[i].scene.erase_entities(&dimensions);
+                    let changes: Vec<_> = touched
+                        .into_iter()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                    self.refresh_properties();
+                    self.command_line.push_output(
+                        format!("{} dimension(s) converted.", dimensions.len()).as_str(),
+                    );
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
+                    }
+                }
+            }
+
             "HCONSTRAINT" | "VCONSTRAINT" | "FXCONSTRAINT" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
@@ -1119,7 +1380,8 @@ impl OpenCADStudio {
                 }
             }
 
-            "DCONSTRAINT" => {
+            "DCONSTRAINT" | "DCLINEAR" | "DCHORIZONTAL" | "DCVERTICAL" | "DCALIGNED"
+            | "DCRADIUS" | "DCDIAMETER" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -1130,8 +1392,22 @@ impl OpenCADStudio {
                     self.command_line
                         .push_output("Select exactly one line or circle, then run this constraint again.");
                 } else {
-                    use crate::modules::parametric::DistanceConstraintCommand;
-                    match DistanceConstraintCommand::new(&self.tabs[i].scene, handles[0]) {
+                    use crate::modules::parametric::{DistanceConstraintCommand, DistanceMode};
+                    let (command_name, mode) = match cmd {
+                        "DCLINEAR" => ("DCLINEAR", DistanceMode::Linear),
+                        "DCHORIZONTAL" => ("DCHORIZONTAL", DistanceMode::X),
+                        "DCVERTICAL" => ("DCVERTICAL", DistanceMode::Y),
+                        "DCALIGNED" => ("DCALIGNED", DistanceMode::Aligned),
+                        "DCRADIUS" => ("DCRADIUS", DistanceMode::Radius),
+                        "DCDIAMETER" => ("DCDIAMETER", DistanceMode::Diameter),
+                        _ => ("DCONSTRAINT", DistanceMode::Auto),
+                    };
+                    match DistanceConstraintCommand::with_mode(
+                        &self.tabs[i].scene,
+                        handles[0],
+                        command_name,
+                        mode,
+                    ) {
                         Some(new_cmd) => {
                             self.command_line.push_info(&new_cmd.prompt());
                             self.tabs[i].active_cmd = Some(Box::new(new_cmd));
@@ -1141,7 +1417,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "ACONSTRAINT" => {
+            "ACONSTRAINT" | "DCANGULAR" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -1154,7 +1430,17 @@ impl OpenCADStudio {
                     );
                 } else {
                     use crate::modules::parametric::AngleConstraintCommand;
-                    match AngleConstraintCommand::new(&self.tabs[i].scene, handles[0], handles[1]) {
+                    let command_name = if cmd == "DCANGULAR" {
+                        "DCANGULAR"
+                    } else {
+                        "ACONSTRAINT"
+                    };
+                    match AngleConstraintCommand::with_name(
+                        &self.tabs[i].scene,
+                        handles[0],
+                        handles[1],
+                        command_name,
+                    ) {
                         Some(new_cmd) => {
                             self.command_line.push_info(&new_cmd.prompt());
                             self.tabs[i].active_cmd = Some(Box::new(new_cmd));

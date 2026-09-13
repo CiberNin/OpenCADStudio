@@ -1858,6 +1858,15 @@ common =
     .dwgunits-convert-drawing-to = DWGUNITS  { common.convert }: { common.drawing } →
     .opened-plot-preview = { plot.preview } ✓
 
+    .auto-constrain = Αυτόματοι περιορισμοί
+    .show-all = Εμφάνιση όλων
+    .hide-all = Απόκρυψη όλων
+    .delete-constraints = Διαγραφή περιορισμών
+    .parameters-manager = Διαχείριση παραμέτρων
+    .geometric = Γεωμετρικοί
+    .dimensional = Διαστατικοί
+    .show-hide = Εμφάνιση/Απόκρυψη
+
 errors =
     .save-warning = Προειδοποίηση αποθήκευσης
     .unable-to-save-drawing = Αδυναμία αποθήκευσης σχεδίου

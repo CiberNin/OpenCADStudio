@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: 객체 __ocs_arg_created__개 생성, 원본 __ocs_arg_failed__개 회전 실패.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: 지정한 옵션으로 선택한 객체를 회전할 수 없습니다.
 
+    .auto-constrain = 자동 구속
+    .show-all = 모두 표시
+    .hide-all = 모두 숨기기
+    .delete-constraints = 구속 삭제
+    .parameters-manager = 매개변수 관리자
+    .geometric = 기하 구속
+    .dimensional = 치수 구속
+    .show-hide = 표시/숨기기
+
 errors =
     .save-warning = 경고 저장
     .unable-to-save-drawing = 도면을 저장할 수 없습니다

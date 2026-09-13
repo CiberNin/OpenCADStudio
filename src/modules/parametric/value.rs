@@ -60,6 +60,23 @@ pub mod distance_tool {
     }
 }
 
+pub mod dimensional_tools {
+    use super::*;
+
+    fn command(id: &'static str, label: &'static str, icon: &'static [u8]) -> ToolDef {
+        ToolDef { id, label, icon: IconKind::Svg(icon), event: ModuleEvent::Command(id.to_string()) }
+    }
+
+    pub fn linear() -> ToolDef { command("DCLINEAR", "Linear", include_bytes!("../../../assets/icons/dim_linear.svg")) }
+    pub fn horizontal() -> ToolDef { command("DCHORIZONTAL", "Horizontal", include_bytes!("../../../assets/icons/constrain/distance_x.svg")) }
+    pub fn vertical() -> ToolDef { command("DCVERTICAL", "Vertical", include_bytes!("../../../assets/icons/constrain/distance_y.svg")) }
+    pub fn aligned() -> ToolDef { command("DCALIGNED", "Aligned", include_bytes!("../../../assets/icons/dim_aligned.svg")) }
+    pub fn angular() -> ToolDef { command("DCANGULAR", "Angular", include_bytes!("../../../assets/icons/dim_angular.svg")) }
+    pub fn radius() -> ToolDef { command("DCRADIUS", "Radius", include_bytes!("../../../assets/icons/dim_radius.svg")) }
+    pub fn diameter() -> ToolDef { command("DCDIAMETER", "Diameter", include_bytes!("../../../assets/icons/dim_diameter.svg")) }
+    pub fn convert() -> ToolDef { command("DCCONVERT", "Convert", include_bytes!("../../../assets/icons/constrain/convert.svg")) }
+}
+
 pub mod angle_tool {
     use super::*;
     pub fn tool() -> ToolDef {
@@ -76,10 +93,14 @@ pub mod angle_tool {
 
 /// Which flavor of dimensional constraint the typed value drives.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum DistanceMode {
+pub enum DistanceMode {
     /// Line length (two-point distance) or a circle/arc's radius —
     /// whichever `is_circle` selects.
     Auto,
+    /// Chooses the dominant world-axis component.
+    Linear,
+    Aligned,
+    Radius,
     X,
     Y,
     Diameter,
@@ -92,6 +113,7 @@ enum DistanceMode {
 /// its two endpoints, or a circle/arc's radius (or diameter, or — for an
 /// arc specifically — its swept arc length), to a typed target value.
 pub struct DistanceConstraintCommand {
+    command_name: &'static str,
     handle: Handle,
     /// Whether `handle` is a circle/arc (Radius/Diameter) or a line
     /// (Distance/DistanceX/DistanceY) — decided once at construction from
@@ -115,6 +137,15 @@ pub struct DistanceConstraintCommand {
 impl DistanceConstraintCommand {
     /// `None` if `handle` isn't a Line, Circle, or Arc.
     pub fn new(scene: &Scene, handle: Handle) -> Option<Self> {
+        Self::with_mode(scene, handle, "DCONSTRAINT", DistanceMode::Auto)
+    }
+
+    pub fn with_mode(
+        scene: &Scene,
+        handle: Handle,
+        command_name: &'static str,
+        requested_mode: DistanceMode,
+    ) -> Option<Self> {
         let entity = scene.document.get_entity(handle)?;
         let (is_circle, is_arc, default_value, default_x, default_y, default_arc_length) =
             match entity {
@@ -132,11 +163,23 @@ impl DistanceConstraintCommand {
             .iter()
             .map(|p| p.name.clone())
             .collect();
+        let mode = match requested_mode {
+            DistanceMode::Linear if !is_circle => {
+                if default_x.abs() >= default_y.abs() { DistanceMode::X } else { DistanceMode::Y }
+            }
+            DistanceMode::Aligned if !is_circle => DistanceMode::Aligned,
+            DistanceMode::Radius if is_circle => DistanceMode::Radius,
+            DistanceMode::Diameter if is_circle => DistanceMode::Diameter,
+            DistanceMode::X | DistanceMode::Y if !is_circle => requested_mode,
+            DistanceMode::Auto => DistanceMode::Auto,
+            _ => return None,
+        };
         Some(Self {
+            command_name,
             handle,
             is_circle,
             is_arc,
-            mode: DistanceMode::Auto,
+            mode,
             default_value,
             default_x,
             default_y,
@@ -163,7 +206,7 @@ impl DistanceConstraintCommand {
                 vec![SketchRef::whole(self.handle)],
                 "Arc length constraint",
             ),
-            (true, _) => (
+            (true, DistanceMode::Auto | DistanceMode::Radius) => (
                 ConstraintKind::Radius,
                 vec![SketchRef::whole(self.handle)],
                 "Radius constraint",
@@ -184,7 +227,7 @@ impl DistanceConstraintCommand {
                 ],
                 "DistanceY constraint",
             ),
-            (false, _) => (
+            (false, DistanceMode::Auto | DistanceMode::Aligned | DistanceMode::Linear) => (
                 ConstraintKind::Distance,
                 vec![
                     SketchRef::point(self.handle, 0),
@@ -192,6 +235,7 @@ impl DistanceConstraintCommand {
                 ],
                 "Distance constraint",
             ),
+            _ => return None,
         };
         Some(CmdResult::AddSketchConstraint {
             kind,
@@ -204,7 +248,7 @@ impl DistanceConstraintCommand {
 
 impl CadCommand for DistanceConstraintCommand {
     fn name(&self) -> &'static str {
-        "DCONSTRAINT"
+        self.command_name
     }
 
     fn prompt(&self) -> String {
@@ -219,20 +263,21 @@ impl CadCommand for DistanceConstraintCommand {
                     self.default_arc_length
                 )
             }
-            (true, _) if self.is_arc => format!(
+            (true, DistanceMode::Auto | DistanceMode::Radius) if self.is_arc => format!(
                 "Specify distance <{:.4}> or [Diameter/Arclength]: ",
                 self.default_value
             ),
-            (true, _) => format!(
+            (true, DistanceMode::Auto | DistanceMode::Radius) => format!(
                 "Specify distance <{:.4}> or [Diameter]: ",
                 self.default_value
             ),
             (false, DistanceMode::X) => format!("Specify X distance <{:.4}>: ", self.default_x),
             (false, DistanceMode::Y) => format!("Specify Y distance <{:.4}>: ", self.default_y),
-            (false, _) => format!(
+            (false, DistanceMode::Auto | DistanceMode::Aligned | DistanceMode::Linear) => format!(
                 "Specify distance <{:.4}> or [Xdistance/Ydistance]: ",
                 self.default_value
             ),
+            _ => "Unsupported distance constraint mode.".to_string(),
         }
     }
 
@@ -247,10 +292,10 @@ impl CadCommand for DistanceConstraintCommand {
     fn on_enter(&mut self) -> CmdResult {
         let default = match self.mode {
             DistanceMode::Diameter => self.default_value * 2.0,
-            DistanceMode::ArcLength if self.is_arc => self.default_arc_length,
+            DistanceMode::ArcLength => self.default_arc_length,
             DistanceMode::X => self.default_x,
             DistanceMode::Y => self.default_y,
-            _ => self.default_value,
+            DistanceMode::Auto | DistanceMode::Aligned | DistanceMode::Linear | DistanceMode::Radius => self.default_value,
         };
         self.build(DrivingValue::Literal(default))
             .unwrap_or(CmdResult::Cancel)
@@ -274,7 +319,7 @@ impl CadCommand for DistanceConstraintCommand {
                 return Some(CmdResult::NeedPoint);
             }
             (true, "R" | "RADIUS") => {
-                self.mode = DistanceMode::Auto;
+                self.mode = DistanceMode::Radius;
                 return Some(CmdResult::NeedPoint);
             }
             (false, "X" | "XDISTANCE") => {
@@ -298,6 +343,7 @@ impl CadCommand for DistanceConstraintCommand {
 
 /// Constrains the angle (in degrees) from `fixed`'s direction to `moving`'s.
 pub struct AngleConstraintCommand {
+    command_name: &'static str,
     fixed_handle: Handle,
     moving_handle: Handle,
     default_value: f64,
@@ -309,6 +355,15 @@ pub struct AngleConstraintCommand {
 impl AngleConstraintCommand {
     /// `None` unless both `fixed` and `moving` are lines.
     pub fn new(scene: &Scene, fixed: Handle, moving: Handle) -> Option<Self> {
+        Self::with_name(scene, fixed, moving, "ACONSTRAINT")
+    }
+
+    pub fn with_name(
+        scene: &Scene,
+        fixed: Handle,
+        moving: Handle,
+        command_name: &'static str,
+    ) -> Option<Self> {
         let fixed_entity = scene.document.get_entity(fixed)?;
         let moving_entity = scene.document.get_entity(moving)?;
         let (EntityType::Line(f), EntityType::Line(m)) = (fixed_entity, moving_entity) else {
@@ -323,6 +378,7 @@ impl AngleConstraintCommand {
             .map(|p| p.name.clone())
             .collect();
         Some(Self {
+            command_name,
             fixed_handle: fixed,
             moving_handle: moving,
             default_value,
@@ -348,7 +404,7 @@ impl AngleConstraintCommand {
 
 impl CadCommand for AngleConstraintCommand {
     fn name(&self) -> &'static str {
-        "ACONSTRAINT"
+        self.command_name
     }
 
     fn prompt(&self) -> String {
@@ -380,7 +436,10 @@ impl CadCommand for AngleConstraintCommand {
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration {
-    names: &["DCONSTRAINT", "ACONSTRAINT"]
+    names: &[
+        "DCONSTRAINT", "ACONSTRAINT", "DCLINEAR", "DCHORIZONTAL", "DCVERTICAL",
+        "DCALIGNED", "DCANGULAR", "DCRADIUS", "DCDIAMETER",
+    ]
 });
 
 #[cfg(test)]

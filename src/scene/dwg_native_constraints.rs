@@ -250,6 +250,7 @@ fn geometrical_class_name(kind: ConstraintKind) -> Option<&'static str> {
         ConstraintKind::Vertical => Some("ACVERTICALCONSTRAINT"),
         ConstraintKind::Perpendicular => Some("ACPERPENDICULARCONSTRAINT"),
         ConstraintKind::Tangent => Some("ACTANGENTCONSTRAINT"),
+        ConstraintKind::Smooth => Some("ACG2SMOOTHCONSTRAINT"),
         // the native format's own `GeomConstraintType` enum (native SDK's
         // `AcGeomConstraint.h`) lists `kNormal` alongside `kPerpendicular`
         // as a distinct, real geometric-constraint kind.

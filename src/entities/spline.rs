@@ -47,6 +47,43 @@ pub(crate) fn fit_nurbs3(spline: &Spline) -> Option<NurbsCurve3> {
         tangent(spline.end_tangent), parameterization)
 }
 
+pub(crate) fn nurbs3(spline: &Spline) -> Option<NurbsCurve3> {
+    let curve = if uses_fit_method(spline) {
+        fit_nurbs3(spline)?
+    } else {
+        let degree = usize::try_from(spline.degree).ok()?;
+        let weights = if spline.weights.is_empty() {
+            vec![1.0; spline.control_points.len()]
+        } else {
+            spline.weights.clone()
+        };
+        NurbsCurve3::new_strict(
+            degree,
+            spline.control_points.iter().map(|point| [point.x, point.y, point.z]).collect(),
+            spline.knots.clone(),
+            weights,
+        )?
+    };
+    Some(curve.with_periodicity(spline.flags.closed || spline.flags.periodic))
+}
+
+pub(crate) fn replace_with_nurbs(spline: &mut Spline, curve: &NurbsCurve3) {
+    spline.degree = curve.degree() as i32;
+    spline.knots = curve.knots().to_vec();
+    spline.control_points = curve.control_points().iter()
+        .map(|point| acadrust::types::Vector3::new(point[0], point[1], point[2])).collect();
+    spline.weights = curve.weights().to_vec();
+    spline.fit_points.clear();
+    spline.begin_tangent = acadrust::types::Vector3::ZERO;
+    spline.end_tangent = acadrust::types::Vector3::ZERO;
+    spline.flags.rational = spline.weights.windows(2)
+        .any(|pair| (pair[0] - pair[1]).abs() > 1e-12);
+    spline.flags.closed = false;
+    spline.flags.periodic = false;
+    spline.dwg_flags1 &= !1;
+    spline.dxf_flags &= !(32 | 1024);
+}
+
 /// Conservative world bounds of a fit-method spline. Fit points are interpolation
 /// constraints, not control-hull vertices, so their box can exclude the curve.
 /// The shared kernel reconstructs the same spatial interpolation used by the

@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: създадени обекти: __ocs_arg_created__; неуспешно завъртени източници: __ocs_arg_failed__.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: нито един избран обект не може да се завърти с тези опции.
 
+    .auto-constrain = Автоматично ограничаване
+    .show-all = Показване на всички
+    .hide-all = Скриване на всички
+    .delete-constraints = Изтриване на ограничения
+    .parameters-manager = Диспечер на параметри
+    .geometric = Геометрични
+    .dimensional = Размерни
+    .show-hide = Показване/скриване
+
 errors =
     .save-warning = Предупреждение при запазване
     .unable-to-save-drawing = Чертежът не може да бъде запазен

@@ -1859,6 +1859,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: __ocs_arg_created__ Objekt(e) erstellt; __ocs_arg_failed__ Quelle(n) konnten nicht rotiert werden.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: Kein ausgewähltes Objekt konnte mit diesen Optionen rotiert werden.
 
+    .auto-constrain = Automatisch beschränken
+    .show-all = Alle anzeigen
+    .hide-all = Alle ausblenden
+    .delete-constraints = Abhängigkeiten löschen
+    .parameters-manager = Parameter-Manager
+    .geometric = Geometrisch
+    .dimensional = Bemaßung
+    .show-hide = Anzeigen/Ausblenden
+
 errors =
     .save-warning = Warnhinweise speichern
     .unable-to-save-drawing = Zeichnung konnte nicht gespeichert werden

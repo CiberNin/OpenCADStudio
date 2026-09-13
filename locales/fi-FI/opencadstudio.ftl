@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: luotu __ocs_arg_created__ objektia; __ocs_arg_failed__ lähteen pyöräytys epäonnistui.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: yhtäkään valittua objektia ei voitu pyöräyttää näillä asetuksilla.
 
+    .auto-constrain = Automaattiset rajoitteet
+    .show-all = Näytä kaikki
+    .hide-all = Piilota kaikki
+    .delete-constraints = Poista rajoitteet
+    .parameters-manager = Parametrien hallinta
+    .geometric = Geometriset
+    .dimensional = Mitalliset
+    .show-hide = Näytä/Piilota
+
 errors =
     .save-warning = Tallenna varoitus
     .unable-to-save-drawing = Piirustusta ei voi tallentaa

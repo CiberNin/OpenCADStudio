@@ -1927,6 +1927,11 @@ pub struct Scene {
     /// Persistent parametric constraint sets, one per sketch scope.
     /// Materialized into scoped XRecords during save and restored on open.
     pub(crate) sketch_constraints: Vec<sketch_constraints::SketchConstraintSet>,
+    /// Session-only visibility overrides for constraint glyphs.
+    hidden_sketch_constraints: HashSet<(
+        sketch_constraints::SketchScope,
+        sketch_constraints::ConstraintId,
+    )>,
     /// Document-wide named-parameter and expression table.
     /// Persisted through a single drawing XRecord.
     pub(crate) named_parameters: named_parameters::ParameterTable,
@@ -2244,6 +2249,7 @@ impl Scene {
             dependency_index_cache: RefCell::new(None),
             associative_hatch_source_cache: RefCell::new(None),
             sketch_constraints: Vec::new(),
+            hidden_sketch_constraints: HashSet::default(),
             named_parameters: named_parameters::ParameterTable::new(),
             has_associative_centers: std::cell::Cell::new(None),
             block_defn_cache: RefCell::new(HashMap::default()),

@@ -74,11 +74,21 @@ pub struct ToolDef {
 pub enum RibbonItem {
     /// 1-row button — icon only, no label.
     Tool(ToolDef),
+    /// 1-row button — icon and label.
+    LabeledTool(ToolDef),
     /// 3-row button — icon + label below; full ribbon height.
     LargeTool(ToolDef),
     /// 1-row dropdown — icon + ▾ on right, no label.
     Dropdown {
         id: &'static str,
+        icon: IconKind,
+        items: Vec<(&'static str, &'static str, IconKind)>,
+        default: &'static str,
+    },
+    /// 1-row split dropdown — icon and fixed label, plus a menu arrow.
+    LabeledDropdown {
+        id: &'static str,
+        label: &'static str,
         icon: IconKind,
         items: Vec<(&'static str, &'static str, IconKind)>,
         default: &'static str,
@@ -91,6 +101,8 @@ pub enum RibbonItem {
         items: Vec<(&'static str, &'static str, IconKind)>,
         default: &'static str,
     },
+    /// Explicit columns of small icon-only buttons.
+    ToolGrid { columns: Vec<Vec<ToolDef>> },
     /// Layer combo + two rows of small tools below.
     /// row2: operates on the layer of a selected object (off/freeze/lock/make-current)
     /// row3: all-layers operations + match (on/thaw/unlock/match)

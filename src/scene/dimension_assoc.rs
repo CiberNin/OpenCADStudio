@@ -275,6 +275,12 @@ pub(crate) fn source_points(entity: &EntityType) -> Vec<Vector3> {
         EntityType::Line(line) => vec![line.start, line.end],
         EntityType::Arc(arc) => vec![arc.start_point_wcs(), arc.end_point_wcs()],
         EntityType::Circle(_) => Vec::new(),
+        EntityType::Spline(spline) => crate::entities::spline::nurbs3(spline)
+            .map(|curve| {
+                let (start, end) = curve.domain();
+                [curve.point_at_knot(start), curve.point_at_knot(end)].into_iter()
+                    .map(|point| Vector3::new(point[0], point[1], point[2])).collect()
+            }).unwrap_or_default(),
         EntityType::LwPolyline(polyline) => polyline
             .vertices
             .iter()
@@ -562,6 +568,59 @@ pub(crate) fn dimension_is_associative(
                     .any(|source| document.get_entity(*source).is_some())
             })
     })
+}
+
+pub(crate) fn constraint_from_associative_dimension(
+    document: &acadrust::CadDocument,
+    handle: Handle,
+) -> Option<(
+    super::sketch_constraints::ConstraintKind,
+    Vec<super::sketch_constraints::SketchRef>,
+    super::named_parameters::DrivingValue,
+)> {
+    use super::named_parameters::DrivingValue;
+    use super::sketch_constraints::{ConstraintKind, SketchRef};
+
+    let EntityType::Dimension(dimension) = document.get_entity(handle)? else { return None };
+    let association = document.objects.values().find_map(|object| {
+        let ObjectType::Associative(object) = object else { return None };
+        let AssociativeData::DimensionAssociation(association) = &object.data else { return None };
+        (association.dimension == handle && association.associativity != 0).then_some(association)
+    })?;
+    let point = |index: usize| {
+        let reference = association.references.get(index)?.first()?;
+        Some(SketchRef::point(*reference.xrefs.first()?, reference.main_gs_marker))
+    };
+    let whole = |index: usize| {
+        let reference = association.references.get(index)?.first()?;
+        Some(SketchRef::whole(*reference.xrefs.first()?))
+    };
+    let measurement = DrivingValue::Literal(dimension.measurement());
+    match dimension {
+        Dimension::Aligned(_) => Some((ConstraintKind::Distance, vec![point(0)?, point(1)?], measurement)),
+        Dimension::Linear(linear) => {
+            let direction = [linear.rotation.cos().abs(), linear.rotation.sin().abs()];
+            let kind = if direction[1] <= 1e-9 { ConstraintKind::DistanceX }
+                else if direction[0] <= 1e-9 { ConstraintKind::DistanceY }
+                else { return None };
+            Some((kind, vec![point(0)?, point(1)?], measurement))
+        }
+        Dimension::Radius(_) | Dimension::LargeRadial(_) => {
+            Some((ConstraintKind::Radius, vec![whole(0)?], measurement))
+        }
+        Dimension::Diameter(_) => Some((ConstraintKind::Diameter, vec![whole(0)?], measurement)),
+        Dimension::Angular2Ln(_) => {
+            let mut sources: Vec<Handle> = association.references.iter().flatten()
+                .filter_map(|reference| reference.xrefs.first().copied()).collect();
+            sources.sort_unstable();
+            sources.dedup();
+            let [first, second] = sources.as_slice() else { return None };
+            Some((ConstraintKind::Angle,
+                vec![SketchRef::whole(*first), SketchRef::whole(*second)], measurement))
+        }
+        Dimension::Arc(_) => Some((ConstraintKind::ArcLength, vec![whole(0)?], measurement)),
+        Dimension::Angular3Pt(_) | Dimension::Ordinate(_) => None,
+    }
 }
 
 pub(crate) fn radial_extension_points(

@@ -77,6 +77,8 @@ pub enum ConstraintKind {
     Angle,
     Radius,
     Tangent,
+    /// An open spline endpoint remains curvature-continuous with another curve endpoint.
+    Smooth,
     /// Two circles/arcs share a center — `refs`: `[center(a), center(b)]`.
     /// Solves identically to `Coincident` (`sketch_solve.rs` broadens that
     /// match arm rather than duplicating it) — only the DWG-native class
@@ -359,6 +361,7 @@ impl ConstraintKind {
             ConstraintKind::Angle => "∠",
             ConstraintKind::Radius => "R",
             ConstraintKind::Tangent => "T",
+            ConstraintKind::Smooth => "G²",
             ConstraintKind::Concentric => "◎",
             ConstraintKind::CenterPoint => "⊕",
             ConstraintKind::Colinear => "L",
@@ -467,6 +470,136 @@ pub(crate) fn glyph_placement(
 }
 
 impl super::Scene {
+    pub fn is_sketch_constraint_visible(&self, scope: SketchScope, id: ConstraintId) -> bool {
+        !self.hidden_sketch_constraints.contains(&(scope, id))
+    }
+
+    pub fn set_sketch_constraint_visibility(
+        &mut self,
+        scope: SketchScope,
+        handles: Option<&[Handle]>,
+        dimensional: bool,
+        visible: bool,
+    ) -> usize {
+        let ids: Vec<_> = self.sketch_constraint_set(scope).into_iter()
+            .flat_map(|set| set.constraints.iter())
+            .filter(|constraint| constraint.driving_param.is_some() == dimensional)
+            .filter(|constraint| handles.is_none_or(|handles| constraint.refs.iter()
+                .any(|reference| handles.contains(&reference.entity))))
+            .map(|constraint| constraint.id).collect();
+        for id in &ids {
+            if visible { self.hidden_sketch_constraints.remove(&(scope, *id)); }
+            else { self.hidden_sketch_constraints.insert((scope, *id)); }
+        }
+        ids.len()
+    }
+
+    /// Infers relations already present in the selected geometry.
+    pub fn inferred_sketch_constraints(
+        &self,
+        scope: SketchScope,
+        handles: &[Handle],
+    ) -> Vec<(ConstraintKind, Vec<SketchRef>)> {
+        use cadkernel::geom2d::{
+            infer_constraints, Arc, Circle, ConstraintEndpoint, InferredConstraint, Line,
+            SketchPrimitive, Tolerance,
+        };
+        let mut sources = Vec::new();
+        for handle in handles {
+            let primitive = match self.document.get_entity(*handle) {
+                Some(acadrust::EntityType::Line(line)) => SketchPrimitive::Line(Line {
+                    start: [line.start.x, line.start.y], end: [line.end.x, line.end.y],
+                }),
+                Some(acadrust::EntityType::Circle(circle)) => SketchPrimitive::Circle(Circle {
+                    centre: [circle.center.x, circle.center.y], radius: circle.radius,
+                }),
+                Some(acadrust::EntityType::Arc(arc)) => SketchPrimitive::Arc(Arc {
+                    centre: [arc.center.x, arc.center.y], radius: arc.radius,
+                    start_angle: arc.start_angle, end_angle: arc.end_angle,
+                }),
+                _ => continue,
+            };
+            sources.push((*handle, primitive));
+        }
+        let primitives: Vec<_> = sources.iter().map(|(_, primitive)| *primitive).collect();
+        let marker = |endpoint| match endpoint {
+            ConstraintEndpoint::Start => 0,
+            ConstraintEndpoint::End => 1,
+        };
+        let mut mapped: Vec<_> = infer_constraints(
+            &primitives, Tolerance::new(1e-6), 0.5_f64.to_radians(),
+        ).into_iter().map(|relation| match relation {
+            InferredConstraint::Coincident { first, first_endpoint, second, second_endpoint } => (
+                ConstraintKind::Coincident,
+                vec![SketchRef::point(sources[first].0, marker(first_endpoint)),
+                     SketchRef::point(sources[second].0, marker(second_endpoint))],
+            ),
+            InferredConstraint::Collinear { first, second } => (
+                ConstraintKind::Colinear,
+                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
+            ),
+            InferredConstraint::Concentric { first, second } => (
+                ConstraintKind::Concentric,
+                vec![SketchRef::center(sources[first].0), SketchRef::center(sources[second].0)],
+            ),
+            InferredConstraint::Parallel { first, second } => (
+                ConstraintKind::Parallel,
+                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
+            ),
+            InferredConstraint::Perpendicular { first, second } => (
+                ConstraintKind::Perpendicular,
+                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
+            ),
+            InferredConstraint::Horizontal { entity } => (
+                ConstraintKind::Horizontal, vec![SketchRef::whole(sources[entity].0)],
+            ),
+            InferredConstraint::Vertical { entity } => (
+                ConstraintKind::Vertical, vec![SketchRef::whole(sources[entity].0)],
+            ),
+            InferredConstraint::Tangent { first, second } => (
+                ConstraintKind::Tangent,
+                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
+            ),
+        }).collect();
+        if let Some(existing) = self.sketch_constraint_set(scope) {
+            mapped.retain(|(kind, refs)| !existing.constraints.iter().any(|constraint| {
+                constraint.kind == *kind && (constraint.refs == *refs
+                    || (constraint.refs.len() == 2 && refs.len() == 2
+                        && constraint.refs[0] == refs[1] && constraint.refs[1] == refs[0]))
+            }));
+        }
+        mapped.retain(|(kind, refs)| self.validate_sketch_constraint(*kind, refs, None).is_ok());
+        mapped
+    }
+
+    pub fn smooth_constraint_refs(&self, handles: &[Handle]) -> Option<Vec<SketchRef>> {
+        let [first, second] = handles else { return None };
+        let first_entity = self.document.get_entity(*first)?;
+        let second_entity = self.document.get_entity(*second)?;
+        let (spline_handle, spline, target_handle, target) = match (first_entity, second_entity) {
+            (acadrust::EntityType::Spline(spline), target) => (*first, spline, *second, target),
+            (target, acadrust::EntityType::Spline(spline)) => (*second, spline, *first, target),
+            _ => return None,
+        };
+        if spline.flags.closed || spline.flags.periodic { return None; }
+        let spline_points = super::dimension_assoc::source_points(
+            &acadrust::EntityType::Spline(spline.clone()));
+        let target_points = super::dimension_assoc::source_points(target);
+        let spline_ends = [*spline_points.first()?, *spline_points.last()?];
+        let target_ends = [*target_points.first()?, *target_points.last()?];
+        let mut best = (f64::INFINITY, 0, 0);
+        for (source_marker, source) in spline_ends.iter().enumerate() {
+            for (target_marker, target) in target_ends.iter().enumerate() {
+                let distance = (*source - *target).length_squared();
+                if distance < best.0 { best = (distance, source_marker, target_marker); }
+            }
+        }
+        Some(vec![
+            SketchRef::point(spline_handle, best.1 as i32),
+            SketchRef::point(target_handle, best.2 as i32),
+        ])
+    }
+
     /// The constraint set for `scope`, if one has been created.
     pub fn sketch_constraint_set(&self, scope: SketchScope) -> Option<&SketchConstraintSet> {
         self.sketch_constraints.iter().find(|s| s.scope == scope)
@@ -862,5 +995,77 @@ mod tests {
         let usage = scene.parameter_usage("len");
         assert_eq!(usage.len(), 1);
         assert_eq!(usage[0].entities, vec![h(1)]);
+    }
+
+    #[test]
+    fn automatic_inference_maps_relations_and_skips_existing_constraints() {
+        let mut scene = super::super::Scene::new();
+        let first = scene.add_entity(acadrust::EntityType::Line(
+            acadrust::entities::Line::from_points(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(5.0, 0.0, 0.0),
+            ),
+        ));
+        let second = scene.add_entity(acadrust::EntityType::Line(
+            acadrust::entities::Line::from_points(
+                Vector3::new(5.0, 0.0, 0.0),
+                Vector3::new(10.0, 0.0, 0.0),
+            ),
+        ));
+        scene
+            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .add(
+                ConstraintKind::Horizontal,
+                vec![SketchRef::whole(first)],
+                None,
+            );
+
+        let inferred = scene.inferred_sketch_constraints(
+            SketchScope::ModelSpace,
+            &[first, second],
+        );
+
+        assert!(!inferred.iter().any(|(kind, refs)| {
+            *kind == ConstraintKind::Horizontal && *refs == [SketchRef::whole(first)]
+        }));
+        assert!(inferred.iter().any(|(kind, refs)| {
+            *kind == ConstraintKind::Horizontal && *refs == [SketchRef::whole(second)]
+        }));
+        assert!(inferred.iter().any(|(kind, _)| *kind == ConstraintKind::Coincident));
+        assert!(inferred.iter().any(|(kind, _)| *kind == ConstraintKind::Colinear));
+    }
+
+    #[test]
+    fn visibility_toggles_geometric_and_dimensional_independently() {
+        let mut scene = super::super::Scene::new();
+        let line = scene.add_entity(acadrust::EntityType::Line(
+            acadrust::entities::Line::from_points(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(5.0, 0.0, 0.0),
+            ),
+        ));
+        let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+        let geometric = set.add(
+            ConstraintKind::Horizontal,
+            vec![SketchRef::whole(line)],
+            None,
+        );
+        let dimensional = set.add(
+            ConstraintKind::Distance,
+            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            Some(DrivingValue::Literal(5.0)),
+        );
+
+        assert_eq!(
+            scene.set_sketch_constraint_visibility(
+                SketchScope::ModelSpace,
+                None,
+                false,
+                false,
+            ),
+            1
+        );
+        assert!(!scene.is_sketch_constraint_visible(SketchScope::ModelSpace, geometric));
+        assert!(scene.is_sketch_constraint_visible(SketchScope::ModelSpace, dimensional));
     }
 }

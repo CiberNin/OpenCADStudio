@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: létrehozott objektumok: __ocs_arg_created__; sikertelen megforgatások: __ocs_arg_failed__.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: egyik kijelölt objektum sem forgatható meg ezekkel a beállításokkal.
 
+    .auto-constrain = Automatikus kényszerezés
+    .show-all = Összes megjelenítése
+    .hide-all = Összes elrejtése
+    .delete-constraints = Kényszerek törlése
+    .parameters-manager = Paraméterkezelő
+    .geometric = Geometriai
+    .dimensional = Méretkényszerek
+    .show-hide = Megjelenítés/Elrejtés
+
 errors =
     .save-warning = Figyelmeztetés mentése
     .unable-to-save-drawing = Nem sikerült menteni a rajzot

@@ -23,9 +23,17 @@ pub enum OwnedIconKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OwnedRibbonItem {
     Tool(OwnedToolDef),
+    LabeledTool(OwnedToolDef),
     LargeTool(OwnedToolDef),
     Dropdown {
         id: String,
+        icon: OwnedIconKind,
+        items: Vec<(String, String, OwnedIconKind)>,
+        default: String,
+    },
+    LabeledDropdown {
+        id: String,
+        label: String,
         icon: OwnedIconKind,
         items: Vec<(String, String, OwnedIconKind)>,
         default: String,
@@ -36,6 +44,9 @@ pub enum OwnedRibbonItem {
         icon: OwnedIconKind,
         items: Vec<(String, String, OwnedIconKind)>,
         default: String,
+    },
+    ToolGrid {
+        columns: Vec<Vec<OwnedToolDef>>,
     },
     LayerComboGroup {
         row2: Vec<OwnedToolDef>,
@@ -79,10 +90,19 @@ fn push_tool_command(tool: &OwnedToolDef, out: &mut Vec<String>) {
 
 fn collect_item_command_ids(item: &OwnedRibbonItem, out: &mut Vec<String>) {
     match item {
-        OwnedRibbonItem::Tool(t) | OwnedRibbonItem::LargeTool(t) => push_tool_command(t, out),
-        OwnedRibbonItem::Dropdown { items, .. } | OwnedRibbonItem::LargeDropdown { items, .. } => {
+        OwnedRibbonItem::Tool(t)
+        | OwnedRibbonItem::LabeledTool(t)
+        | OwnedRibbonItem::LargeTool(t) => push_tool_command(t, out),
+        OwnedRibbonItem::Dropdown { items, .. }
+        | OwnedRibbonItem::LabeledDropdown { items, .. }
+        | OwnedRibbonItem::LargeDropdown { items, .. } => {
             // Each entry is (command id, label, icon).
             out.extend(items.iter().map(|(id, _, _)| id.clone()));
+        }
+        OwnedRibbonItem::ToolGrid { columns } => {
+            for tool in columns.iter().flatten() {
+                push_tool_command(tool, out);
+            }
         }
         OwnedRibbonItem::LayerComboGroup { row2, row3 } => {
             for t in row2.iter().chain(row3.iter()) {
@@ -178,6 +198,7 @@ impl From<RibbonItem> for OwnedRibbonItem {
     fn from(item: RibbonItem) -> Self {
         match item {
             RibbonItem::Tool(t) => OwnedRibbonItem::Tool(t.into()),
+            RibbonItem::LabeledTool(t) => OwnedRibbonItem::LabeledTool(t.into()),
             RibbonItem::LargeTool(t) => OwnedRibbonItem::LargeTool(t.into()),
             RibbonItem::Dropdown {
                 id,
@@ -193,6 +214,17 @@ impl From<RibbonItem> for OwnedRibbonItem {
                     .collect(),
                 default: default.to_string(),
             },
+            RibbonItem::LabeledDropdown { id, label, icon, items, default } => {
+                OwnedRibbonItem::LabeledDropdown {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                    icon: icon.into(),
+                    items: items.into_iter().map(|(a, b, i)| {
+                        (a.to_string(), b.to_string(), i.into())
+                    }).collect(),
+                    default: default.to_string(),
+                }
+            }
             RibbonItem::LargeDropdown {
                 id,
                 label,
@@ -208,6 +240,11 @@ impl From<RibbonItem> for OwnedRibbonItem {
                     .map(|(a, b, i)| (a.to_string(), b.to_string(), i.into()))
                     .collect(),
                 default: default.to_string(),
+            },
+            RibbonItem::ToolGrid { columns } => OwnedRibbonItem::ToolGrid {
+                columns: columns.into_iter().map(|column| {
+                    column.into_iter().map(Into::into).collect()
+                }).collect(),
             },
             RibbonItem::LayerComboGroup { row2, row3 } => OwnedRibbonItem::LayerComboGroup {
                 row2: row2.into_iter().map(Into::into).collect(),
@@ -238,6 +275,7 @@ impl OwnedRibbonItem {
     pub fn to_static(self) -> RibbonItem {
         match self {
             OwnedRibbonItem::Tool(t) => RibbonItem::Tool(t.to_static()),
+            OwnedRibbonItem::LabeledTool(t) => RibbonItem::LabeledTool(t.to_static()),
             OwnedRibbonItem::LargeTool(t) => RibbonItem::LargeTool(t.to_static()),
             OwnedRibbonItem::Dropdown {
                 id,
@@ -259,6 +297,19 @@ impl OwnedRibbonItem {
                     .collect(),
                 default: &*Box::leak(default.into_boxed_str()),
             },
+            OwnedRibbonItem::LabeledDropdown { id, label, icon, items, default } => {
+                RibbonItem::LabeledDropdown {
+                    id: &*Box::leak(id.into_boxed_str()),
+                    label: &*Box::leak(label.into_boxed_str()),
+                    icon: icon.to_static(),
+                    items: items.into_iter().map(|(a, b, i)| (
+                        &*Box::leak(a.into_boxed_str()),
+                        &*Box::leak(b.into_boxed_str()),
+                        i.to_static(),
+                    )).collect(),
+                    default: &*Box::leak(default.into_boxed_str()),
+                }
+            }
             OwnedRibbonItem::LargeDropdown {
                 id,
                 label,
@@ -280,6 +331,11 @@ impl OwnedRibbonItem {
                     })
                     .collect(),
                 default: &*Box::leak(default.into_boxed_str()),
+            },
+            OwnedRibbonItem::ToolGrid { columns } => RibbonItem::ToolGrid {
+                columns: columns.into_iter().map(|column| {
+                    column.into_iter().map(OwnedToolDef::to_static).collect()
+                }).collect(),
             },
             OwnedRibbonItem::LayerComboGroup { row2, row3 } => RibbonItem::LayerComboGroup {
                 row2: row2.into_iter().map(|t| t.to_static()).collect(),
@@ -310,6 +366,7 @@ impl From<&RibbonItem> for OwnedRibbonItem {
     fn from(item: &RibbonItem) -> Self {
         match item {
             RibbonItem::Tool(t) => OwnedRibbonItem::Tool(t.into()),
+            RibbonItem::LabeledTool(t) => OwnedRibbonItem::LabeledTool(t.into()),
             RibbonItem::LargeTool(t) => OwnedRibbonItem::LargeTool(t.into()),
             RibbonItem::Dropdown {
                 id,
@@ -325,6 +382,17 @@ impl From<&RibbonItem> for OwnedRibbonItem {
                     .collect(),
                 default: default.to_string(),
             },
+            RibbonItem::LabeledDropdown { id, label, icon, items, default } => {
+                OwnedRibbonItem::LabeledDropdown {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                    icon: icon.into(),
+                    items: items.iter().map(|(a, b, i)| {
+                        (a.to_string(), b.to_string(), i.into())
+                    }).collect(),
+                    default: default.to_string(),
+                }
+            }
             RibbonItem::LargeDropdown {
                 id,
                 label,
@@ -340,6 +408,11 @@ impl From<&RibbonItem> for OwnedRibbonItem {
                     .map(|(a, b, i)| (a.to_string(), b.to_string(), i.into()))
                     .collect(),
                 default: default.to_string(),
+            },
+            RibbonItem::ToolGrid { columns } => OwnedRibbonItem::ToolGrid {
+                columns: columns.iter().map(|column| {
+                    column.iter().map(Into::into).collect()
+                }).collect(),
             },
             RibbonItem::LayerComboGroup { row2, row3 } => OwnedRibbonItem::LayerComboGroup {
                 row2: row2.iter().map(Into::into).collect(),
@@ -517,5 +590,40 @@ mod tests {
         let ids = group.command_ids();
         assert!(ids.contains(&"LS_LABEL".to_string()), "got {ids:?}");
         assert!(ids.contains(&"LS_AUTOLABEL".to_string()), "got {ids:?}");
+    }
+
+    #[test]
+    fn command_ids_covers_labeled_tools_and_tool_grids() {
+        let tool = |id: &str| OwnedToolDef {
+            id: id.to_lowercase(),
+            label: id.to_string(),
+            icon: OwnedIconKind::Glyph("·".to_string()),
+            event: ModuleEvent::Command(id.to_string()),
+        };
+        let group = OwnedRibbonGroup {
+            title: "Constraints".to_string(),
+            tools: vec![
+                OwnedRibbonItem::LabeledTool(tool("SHOW_ALL")),
+                OwnedRibbonItem::LabeledDropdown {
+                    id: "visibility".to_string(),
+                    label: "Show/Hide".to_string(),
+                    icon: OwnedIconKind::Glyph("·".to_string()),
+                    items: vec![(
+                        "SHOW_SELECTED".to_string(),
+                        "Show".to_string(),
+                        OwnedIconKind::Glyph("·".to_string()),
+                    )],
+                    default: "SHOW_SELECTED".to_string(),
+                },
+                OwnedRibbonItem::ToolGrid {
+                    columns: vec![vec![tool("PARALLEL"), tool("PERPENDICULAR")]],
+                },
+            ],
+        };
+
+        let ids = group.command_ids();
+        assert_eq!(ids, ["SHOW_ALL", "SHOW_SELECTED", "PARALLEL", "PERPENDICULAR"]);
+        let round_trip: OwnedRibbonGroup = group.to_static().into();
+        assert_eq!(round_trip.command_ids(), ids);
     }
 }

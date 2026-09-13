@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE：已建立 __ocs_arg_created__ 個物件；__ocs_arg_failed__ 個來源物件無法旋轉。
     .revolve-no-selected-object-could-be-revolved = REVOLVE：無法使用指定選項旋轉任何選取的物件。
 
+    .auto-constrain = 自動約束
+    .show-all = 全部顯示
+    .hide-all = 全部隱藏
+    .delete-constraints = 刪除約束
+    .parameters-manager = 參數管理員
+    .geometric = 幾何
+    .dimensional = 標註
+    .show-hide = 顯示/隱藏
+
 errors =
     .save-warning = 儲存警告
     .unable-to-save-drawing = 無法儲存圖形

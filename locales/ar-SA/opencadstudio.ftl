@@ -1871,6 +1871,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: تم إنشاء __ocs_arg_created__ عنصر؛ تعذر تدوير __ocs_arg_failed__ مصدر.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: تعذر تدوير أي عنصر محدد بهذه الخيارات.
 
+    .auto-constrain = قيد تلقائي
+    .show-all = إظهار الكل
+    .hide-all = إخفاء الكل
+    .delete-constraints = حذف القيود
+    .parameters-manager = مدير المعلمات
+    .geometric = هندسي
+    .dimensional = بُعدي
+    .show-hide = إظهار/إخفاء
+
 errors =
     .save-warning = تحذير الحفظ
     .unable-to-save-drawing = تعذر حفظ الرسم

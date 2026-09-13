@@ -1858,6 +1858,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: __ocs_arg_created__ oggetti creati; impossibile rivoluzionare __ocs_arg_failed__ sorgenti.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: nessun oggetto selezionato può essere rivoluzionato con queste opzioni.
 
+    .auto-constrain = Vincolo automatico
+    .show-all = Mostra tutto
+    .hide-all = Nascondi tutto
+    .delete-constraints = Elimina vincoli
+    .parameters-manager = Gestione parametri
+    .geometric = Geometrici
+    .dimensional = Dimensionali
+    .show-hide = Mostra/Nascondi
+
 errors =
     .save-warning = Salva avviso
     .unable-to-save-drawing = Impossibile salvare il disegno

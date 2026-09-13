@@ -1862,6 +1862,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: создано объектов: __ocs_arg_created__; не удалось повернуть источников: __ocs_arg_failed__.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: ни один выбранный объект не удалось повернуть с этими параметрами.
 
+    .auto-constrain = Автоматические зависимости
+    .show-all = Показать все
+    .hide-all = Скрыть все
+    .delete-constraints = Удалить зависимости
+    .parameters-manager = Диспетчер параметров
+    .geometric = Геометрические
+    .dimensional = Размерные
+    .show-hide = Показать/Скрыть
+
 errors =
     .save-warning = Спасти предостережение
     .unable-to-save-drawing = Не удалось сохранить чертёж

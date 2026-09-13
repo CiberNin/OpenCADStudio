@@ -1843,6 +1843,15 @@ common =
     .dwgunits-convert-drawing-to = DWGUNITS  { common.convert }: { common.drawing } →
     .opened-plot-preview = { plot.preview } ✓
 
+    .auto-constrain = Otomatik Kısıtla
+    .show-all = Tümünü Göster
+    .hide-all = Tümünü Gizle
+    .delete-constraints = Kısıtlamaları Sil
+    .parameters-manager = Parametre Yöneticisi
+    .geometric = Geometrik
+    .dimensional = Boyutsal
+    .show-hide = Göster/Gizle
+
 errors =
     .save-warning = Kaydetme Uyarısı
     .unable-to-save-drawing = Çizim Kaydedilemiyor

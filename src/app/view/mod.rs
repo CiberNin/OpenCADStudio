@@ -839,6 +839,7 @@ bg={bg_ms:.1}ms n={view_count}"
                         set.constraints
                             .iter()
                             .filter(|c| c.enabled)
+                            .filter(|c| tab.scene.is_sketch_constraint_visible(scope, c.id))
                             .filter_map(|c| {
                                 let (anchor, outward) =
                                     crate::scene::sketch_constraints::glyph_placement(

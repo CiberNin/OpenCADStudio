@@ -1847,6 +1847,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: __ocs_arg_created__ ऑब्जेक्ट बने; __ocs_arg_failed__ स्रोत घुमाए नहीं जा सके।
     .revolve-no-selected-object-could-be-revolved = REVOLVE: इन विकल्पों से कोई चयनित ऑब्जेक्ट घुमाया नहीं जा सका।
 
+    .auto-constrain = स्वचालित बाधा
+    .show-all = सभी दिखाएँ
+    .hide-all = सभी छिपाएँ
+    .delete-constraints = बाधाएँ हटाएँ
+    .parameters-manager = पैरामीटर प्रबंधक
+    .geometric = ज्यामितीय
+    .dimensional = आयामी
+    .show-hide = दिखाएँ/छिपाएँ
+
 errors =
     .save-warning = चेतावनी सहेजें
     .unable-to-save-drawing = ड्रॉइंग सहेजी नहीं जा सकी

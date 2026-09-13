@@ -233,6 +233,40 @@ fn entity_plane_z(entity: &EntityType) -> Option<f64> {
         {
             ellipse.center.z
         }
+        EntityType::Spline(spline) if !spline.flags.closed && !spline.flags.periodic => {
+            let curve = crate::entities::spline::nurbs3(spline)?;
+            let first = *curve.control_points().first()?;
+            if !curve
+                .control_points()
+                .iter()
+                .all(|point| (point[2] - first[2]).abs() <= PLANE_EPS)
+            {
+                return None;
+            }
+            first[2]
+        }
+        EntityType::LwPolyline(polyline) if is_world_z(polyline.normal) => {
+            let points = super::dimension_assoc::source_points(entity);
+            let first = *points.first()?;
+            if !points
+                .iter()
+                .all(|point| (point.z - first.z).abs() <= PLANE_EPS)
+            {
+                return None;
+            }
+            first.z
+        }
+        EntityType::Polyline2D(polyline) if is_world_z(polyline.normal) => {
+            let points = super::dimension_assoc::source_points(entity);
+            let first = *points.first()?;
+            if !points
+                .iter()
+                .all(|point| (point.z - first.z).abs() <= PLANE_EPS)
+            {
+                return None;
+            }
+            first.z
+        }
         _ => return None,
     };
     z.is_finite().then_some(z)
@@ -737,6 +771,9 @@ fn build_constraint(
                 _ => Vec::new(),
             }
         }
+        // Smooth edits the endpoint controls through cadkernel's spatial
+        // NURBS operation after the ordinary 2D system has settled.
+        ConstraintKind::Smooth => Vec::new(),
         // A circle's radius is always normal to its own tangent, so
         // "line normal to circle/arc" reduces to "line passes through the
         // circle's center" — the same `PointOnLine` primitive
@@ -774,6 +811,85 @@ fn build_constraint(
             };
             let target = sys.add_param(resolved, true);
             vec![Rc::new(ArcLength::new(arc, target))]
+        }
+    }
+}
+
+fn smooth_target_jet(entity: &EntityType, marker: i32) -> Option<cadkernel::space::CurveJet> {
+    let parameter = match marker {
+        0 => 0.0,
+        1 => 1.0,
+        _ => return None,
+    };
+    let curve = crate::entities::curve::entity_curve(entity)?;
+    if curve.is_closed() {
+        return None;
+    }
+    let step = if marker == 0 { 1.0e-4 } else { -1.0e-4 };
+    let point = curve.point_at(parameter);
+    let tangent = curve.tangent_at(parameter);
+    let next = curve.point_at(parameter + step);
+    let third = curve.point_at(parameter + 2.0 * step);
+    Some(cadkernel::space::CurveJet {
+        point,
+        tangent,
+        curvature: cadkernel::space::curve::curvature_through(point, next, third),
+    })
+}
+
+fn apply_smooth_constraints(
+    document: &acadrust::CadDocument,
+    set: &SketchConstraintSet,
+    results: &mut Vec<(Handle, EntityType)>,
+) {
+    for constraint in set
+        .constraints
+        .iter()
+        .filter(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth)
+    {
+        let [source_ref, target_ref] = constraint.refs.as_slice() else {
+            continue;
+        };
+        let source = results
+            .iter()
+            .find(|(handle, _)| *handle == source_ref.entity)
+            .map(|(_, entity)| entity.clone())
+            .or_else(|| document.get_entity(source_ref.entity).cloned());
+        let target = results
+            .iter()
+            .find(|(handle, _)| *handle == target_ref.entity)
+            .map(|(_, entity)| entity.clone())
+            .or_else(|| document.get_entity(target_ref.entity).cloned());
+        let (Some(EntityType::Spline(mut spline)), Some(target)) = (source, target) else {
+            continue;
+        };
+        let endpoint = match source_ref.marker {
+            Some(0) => cadkernel::space::SplineEnd::Start,
+            Some(1) => cadkernel::space::SplineEnd::End,
+            _ => continue,
+        };
+        let Some(target_marker) = target_ref.marker else {
+            continue;
+        };
+        let Some(target_jet) = smooth_target_jet(&target, target_marker) else {
+            continue;
+        };
+        let Some(curve) = crate::entities::spline::nurbs3(&spline) else {
+            continue;
+        };
+        let Some(smoothed) = cadkernel::space::smooth_nurbs_endpoint(&curve, endpoint, target_jet)
+        else {
+            continue;
+        };
+        crate::entities::spline::replace_with_nurbs(&mut spline, &smoothed);
+        let updated = EntityType::Spline(spline);
+        if let Some((_, entity)) = results
+            .iter_mut()
+            .find(|(handle, _)| *handle == source_ref.entity)
+        {
+            *entity = updated;
+        } else {
+            results.push((source_ref.entity, updated));
         }
     }
 }
@@ -823,7 +939,11 @@ fn solve_scope(
         }
     }
 
-    if cache.is_empty() {
+    let has_smooth = set
+        .constraints
+        .iter()
+        .any(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth);
+    if cache.is_empty() && !has_smooth {
         return None;
     }
 
@@ -1065,6 +1185,7 @@ fn solve_scope(
             _ => {}
         }
     }
+    apply_smooth_constraints(document, set, &mut results);
     Some((results, dof, conflicts))
 }
 
@@ -1081,6 +1202,42 @@ impl Scene {
             return Err(
                 "Constraint references must be supported entities on the same world-XY plane.",
             );
+        }
+        if kind == ConstraintKind::Smooth {
+            let [source_ref, target_ref] = refs else {
+                return Err("Smooth requires one spline endpoint and one target endpoint.");
+            };
+            if source_ref.entity == target_ref.entity {
+                return Err("Smooth requires two different entities.");
+            }
+            let Some(EntityType::Spline(spline)) = self.document.get_entity(source_ref.entity)
+            else {
+                return Err("Smooth requires an open spline as its first reference.");
+            };
+            if spline.flags.closed || spline.flags.periodic {
+                return Err("Smooth requires an open spline.");
+            }
+            let endpoint = match source_ref.marker {
+                Some(0) => cadkernel::space::SplineEnd::Start,
+                Some(1) => cadkernel::space::SplineEnd::End,
+                _ => return Err("Smooth requires a spline endpoint."),
+            };
+            let Some(target_marker) = target_ref.marker else {
+                return Err("Smooth requires a target endpoint.");
+            };
+            let Some(target) = self.document.get_entity(target_ref.entity) else {
+                return Err("Smooth target does not exist.");
+            };
+            let Some(target_jet) = smooth_target_jet(target, target_marker) else {
+                return Err("The selected target does not support endpoint smoothing.");
+            };
+            let Some(curve) = crate::entities::spline::nurbs3(spline) else {
+                return Err("The selected spline cannot be evaluated.");
+            };
+            if cadkernel::space::smooth_nurbs_endpoint(&curve, endpoint, target_jet).is_none() {
+                return Err("The selected spline cannot satisfy curvature continuity.");
+            }
+            return Ok(());
         }
         let validation_target = match driving_param {
             Some(super::named_parameters::DrivingValue::Named(name))
@@ -1477,5 +1634,51 @@ mod tests {
             cross.abs() < 1e-6,
             "the previewed positions should be mutually parallel: dir_a={dir_a:?} dir_b={dir_b:?}"
         );
+    }
+
+    #[test]
+    fn smooth_constraint_recomputes_the_spline_after_its_target_moves() {
+        let mut scene = Scene::new();
+        let target = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(5.0, 0.0, 0.0),
+        )));
+        let mut spline = acadrust::entities::Spline::new();
+        spline.degree = 3;
+        spline.control_points = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 2.0, 0.0),
+            Vector3::new(3.0, 2.0, 0.0),
+            Vector3::new(5.0, 3.0, 0.0),
+        ];
+        spline.knots = cadkernel::space::clamped_uniform_knots(3, 4);
+        let spline = scene.add_entity(EntityType::Spline(spline));
+        scene
+            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .add(
+                ConstraintKind::Smooth,
+                vec![SketchRef::point(spline, 0), SketchRef::point(target, 0)],
+                None,
+            );
+
+        if let Some(EntityType::Line(line)) = scene.document.get_entity_mut(target) {
+            line.start.y = 1.0;
+            line.end.y = 1.0;
+        }
+        scene.bump_entities(&[(target, super::ChangeKind::Modified)]);
+
+        let EntityType::Spline(spline) = scene.document.get_entity(spline).unwrap() else {
+            panic!("expected spline");
+        };
+        let curve = crate::entities::spline::nurbs3(spline).unwrap();
+        let jet = cadkernel::space::CurveJet::from_nurbs(
+            &curve,
+            cadkernel::space::SplineEnd::Start,
+        )
+        .unwrap();
+        assert!((jet.point[0] - 0.0).abs() < 1e-9);
+        assert!((jet.point[1] - 1.0).abs() < 1e-9);
+        assert!(jet.tangent[1].abs() < 1e-9, "jet={jet:?}");
+        assert!(cadkernel::space::Vec3::from(jet.curvature).length() < 5e-3);
     }
 }

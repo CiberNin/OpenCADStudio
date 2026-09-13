@@ -1859,6 +1859,15 @@ common =
     .revolve-created-objects-failed-sources = REVOLVE: __ocs_arg_created__ object(en) gemaakt; __ocs_arg_failed__ bron(nen) konden niet worden gewenteld.
     .revolve-no-selected-object-could-be-revolved = REVOLVE: geen geselecteerd object kon met deze opties worden gewenteld.
 
+    .auto-constrain = Automatisch beperken
+    .show-all = Alles tonen
+    .hide-all = Alles verbergen
+    .delete-constraints = Beperkingen verwijderen
+    .parameters-manager = Parameterbeheer
+    .geometric = Geometrisch
+    .dimensional = Maatvoering
+    .show-hide = Tonen/Verbergen
+
 errors =
     .save-warning = Waarschuwing opslaan
     .unable-to-save-drawing = Kan tekening niet opslaan
