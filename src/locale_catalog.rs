@@ -1660,6 +1660,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "Material Details" => Some(("properties", "material-details")),
         "Max leader points:" => Some(("styles", "max-leader-points")),
         "Maximum Intensity" => Some(("properties", "maximum-intensity")),
+        "Measure" => Some(("properties", "measurement")),
         "Measure Geometry" => Some(("inquiry", "measure-geometry")),
         "Measurement" => Some(("properties", "measurement")),
         "Merge overlapping lines" => Some(("plot", "merge-overlapping-lines")),
