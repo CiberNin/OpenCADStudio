@@ -1175,6 +1175,7 @@ fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
     let i0 = seg;
     let i1 = (seg + 1) % n;
     if pline.vertices[i0].bulge.abs() >= 1.0e-9 {
+        move_arc_segment_parallel(pline, seg, offset);
         return;
     }
     let p0 = Vec2::new(pline.vertices[i0].location.x, pline.vertices[i0].location.y);
@@ -1227,6 +1228,89 @@ fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
     };
     pline.vertices[i0].location = acadrust::types::Vector2::new(new0.x, new0.y);
     pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+}
+
+fn move_arc_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
+    let n = pline.vertices.len();
+    let i0 = seg;
+    let i1 = (seg + 1) % n;
+    let p0 = Vec2::new(pline.vertices[i0].location.x, pline.vertices[i0].location.y);
+    let p1 = Vec2::new(pline.vertices[i1].location.x, pline.vertices[i1].location.y);
+    let bulge = pline.vertices[i0].bulge;
+    let Some(arc) = crate::entities::common::BulgeArc::from_bulge(p0.into(), p1.into(), bulge)
+    else {
+        return;
+    };
+    let center = Vec2::from(arc.center);
+    let radius = arc.radius + offset;
+    if radius <= Tolerance::default().linear() {
+        return;
+    }
+
+    let line_circle_near = |a: Vec2, direction: Vec2, near: Vec2| -> Option<Vec2> {
+        let aa = direction.dot(direction);
+        if aa <= Tolerance::default().linear().powi(2) {
+            return None;
+        }
+        let relative = a - center;
+        let bb = 2.0 * relative.dot(direction);
+        let cc = relative.dot(relative) - radius * radius;
+        let discriminant = bb * bb - 4.0 * aa * cc;
+        if discriminant < -Tolerance::default().linear() {
+            return None;
+        }
+        let root = discriminant.max(0.0).sqrt();
+        let first = a + direction * ((-bb - root) / (2.0 * aa));
+        let second = a + direction * ((-bb + root) / (2.0 * aa));
+        Some(if first.distance(near) <= second.distance(near) {
+            first
+        } else {
+            second
+        })
+    };
+
+    let new0 = if pline.is_closed || seg > 0 {
+        let previous = (i0 + n - 1) % n;
+        let a = Vec2::new(
+            pline.vertices[previous].location.x,
+            pline.vertices[previous].location.y,
+        );
+        let Some(point) = line_circle_near(a, p0 - a, p0) else {
+            return;
+        };
+        point
+    } else {
+        center + (p0 - center) * (radius / arc.radius)
+    };
+    let count = if pline.is_closed { n } else { n - 1 };
+    let new1 = if pline.is_closed || seg + 1 < count {
+        let next = (i1 + 1) % n;
+        let d = Vec2::new(
+            pline.vertices[next].location.x,
+            pline.vertices[next].location.y,
+        );
+        let Some(point) = line_circle_near(p1, d - p1, p1) else {
+            return;
+        };
+        point
+    } else {
+        center + (p1 - center) * (radius / arc.radius)
+    };
+
+    let start_angle = (new0.y - center.y).atan2(new0.x - center.x);
+    let end_angle = (new1.y - center.y).atan2(new1.x - center.x);
+    let sweep = if arc.sweep >= 0.0 {
+        (end_angle - start_angle).rem_euclid(TAU)
+    } else {
+        -(start_angle - end_angle).rem_euclid(TAU)
+    };
+    let new_bulge = (sweep * 0.25).tan();
+    if !new_bulge.is_finite() {
+        return;
+    }
+    pline.vertices[i0].location = acadrust::types::Vector2::new(new0.x, new0.y);
+    pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+    pline.vertices[i0].bulge = new_bulge.clamp(-1.0e6, 1.0e6);
 }
 
 fn apply_transform(pline: &mut LwPolyline, t: &EntityTransform) {
@@ -1307,12 +1391,10 @@ impl crate::entities::traits::Grippable for LwPolyline {
             }
         };
         let mut items = Vec::new();
-        if !is_arc {
-            items.push(GripMenuItem {
-                label: "Move Parallel",
-                action: GripMenuAction::MoveParallel,
-            });
-        }
+        items.push(GripMenuItem {
+            label: "Move Parallel",
+            action: GripMenuAction::MoveParallel,
+        });
         if is_rectangle(self) && seg < 4 {
             // Moving an edge changes the dimension perpendicular to it.
             items.push(GripMenuItem {
@@ -1352,8 +1434,7 @@ impl crate::entities::traits::Grippable for LwPolyline {
             } else {
                 n.saturating_sub(1)
             };
-            return (seg < count && self.vertices[seg].bulge.abs() < 1.0e-9)
-                .then_some("Parallel offset");
+            return (seg < count).then_some("Parallel offset");
         }
         (is_rectangle(self)
             && n == 4
@@ -1380,7 +1461,7 @@ impl crate::entities::traits::Grippable for LwPolyline {
             } else {
                 n.saturating_sub(1)
             };
-            if seg >= count || self.vertices[seg].bulge.abs() >= 1.0e-9 {
+            if seg >= count {
                 return None;
             }
             let plane = crate::entities::curve::lwpolyline_curve(self)?.plane;
@@ -1390,6 +1471,17 @@ impl crate::entities::traits::Grippable for LwPolyline {
                 self.vertices[(seg + 1) % n].location.x,
                 self.vertices[(seg + 1) % n].location.y,
             );
+            let bulge = self.vertices[seg].bulge;
+            if bulge.abs() >= 1.0e-9 {
+                let arc = crate::entities::common::BulgeArc::from_bulge(
+                    p0.into(),
+                    p1.into(),
+                    bulge,
+                )?;
+                let midpoint = Vec2::from(arc.sample(0.5));
+                let radial = (midpoint - Vec2::from(arc.center)).normalize()?;
+                return Some((point - midpoint).dot(radial));
+            }
             let direction = p1 - p0;
             let length = direction.length();
             if length <= Tolerance::default().linear() {
@@ -1689,6 +1781,15 @@ mod tests {
     }
 
     #[test]
+    fn arc_midpoint_offers_move_parallel_first() {
+        let mut pl = make_test_lwpolyline(2, 0.0);
+        pl.vertices[0].bulge = 0.5;
+        let menu = pl.grip_menu(2);
+        assert_eq!(menu[0].action, GripMenuAction::MoveParallel);
+        assert_eq!(menu[1].action, GripMenuAction::Stretch);
+    }
+
+    #[test]
     fn rectangle_corner_offers_resize_before_stretch() {
         let pl = make_test_rectangle();
         let corner = pl.grip_menu(0);
@@ -1752,6 +1853,30 @@ mod tests {
         assert_eq!(pl.vertices[1].location, Vector2::new(4.0, 4.0));
         assert_eq!(pl.vertices[2].location, Vector2::new(6.0, 4.0));
         assert_eq!(pl.vertices[3].location, Vector2::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn move_parallel_offsets_arc_concentrically() {
+        let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0)], false);
+        pl.vertices[0].bulge = 1.0;
+        let original = crate::entities::common::BulgeArc::from_bulge(
+            [0.0, 0.0],
+            [10.0, 0.0],
+            pl.vertices[0].bulge,
+        )
+        .unwrap();
+
+        move_segment_parallel(&mut pl, 0, 2.0);
+
+        let moved = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[0].location.x, pl.vertices[0].location.y],
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            pl.vertices[0].bulge,
+        )
+        .unwrap();
+        assert!(Vec2::from(moved.center).distance(original.center.into()) < 1.0e-9);
+        assert!((moved.radius - original.radius - 2.0).abs() < 1.0e-9);
+        assert_eq!(moved.sweep.signum(), original.sweep.signum());
     }
 
     #[test]
