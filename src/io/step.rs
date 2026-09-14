@@ -57,7 +57,7 @@ pub fn build_step(meshes: &[&MeshModel]) -> Option<String> {
             let nx = ab[1] * ac[2] - ab[2] * ac[1];
             let ny = ab[2] * ac[0] - ab[0] * ac[2];
             let nz = ab[0] * ac[1] - ab[1] * ac[0];
-            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            let len = nx.hypot(ny).hypot(nz);
             let n = if len == 0.0 && i0 < normals.len() {
                 normals[i0]
             } else {

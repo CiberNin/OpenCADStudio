@@ -292,15 +292,15 @@ impl OpenCADStudio {
                     let mut plot_table_options = vec!["None".to_string()];
                     plot_table_options.extend(crate::io::plot_style::available_ctb_names());
                     let visual_style = match tab.visual_style.as_str() {
-                        "Wireframe 2D" => t!("2D Wireframe").into_owned(),
-                        "Wireframe 3D" => t!("3D Wireframe").into_owned(),
+                        "Wireframe 2D" => "2D Wireframe".to_string(),
+                        "Wireframe 3D" => "3D Wireframe".to_string(),
                         value => value.to_string(),
                     };
                     let visual_style_options = crate::modules::view::visual_style::VISUAL_STYLES
                         .iter()
                         .map(|style| match style.label {
-                            "Wireframe 2D" => t!("2D Wireframe").into_owned(),
-                            "Wireframe 3D" => t!("3D Wireframe").into_owned(),
+                            "Wireframe 2D" => "2D Wireframe".to_string(),
+                            "Wireframe 3D" => "3D Wireframe".to_string(),
                             value => value.to_string(),
                         })
                         .collect();

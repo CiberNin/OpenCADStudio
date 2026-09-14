@@ -48,7 +48,7 @@ pub fn build_stl(meshes: &[&MeshModel]) -> Option<Vec<u8>> {
             let nx = ab[1] * ac[2] - ab[2] * ac[1];
             let ny = ab[2] * ac[0] - ab[0] * ac[2];
             let nz = ab[0] * ac[1] - ab[1] * ac[0];
-            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            let len = nx.hypot(ny).hypot(nz);
             let normal = if len == 0.0 && i0 < mesh.normals.len() {
                 mesh.normals[i0]
             } else {
@@ -154,6 +154,16 @@ mod tests {
         let mesh = triangle(
             vec![[0.0, 0.0, 0.0], [1e-4, 0.0, 0.0], [0.0, 1e-4, 0.0]],
             vec![leaning; 3],
+        );
+        let stl = build_stl(&[&mesh]).expect("stl");
+        assert_eq!(first_facet_normal(&stl), [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_facet_whose_squared_cross_product_underflows_keeps_its_own_normal() {
+        let mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1.0e-12, 0.0, 0.0], [0.0, 1.0e-12, 0.0]],
+            vec![[0.0, 1.0, 0.0]; 3],
         );
         let stl = build_stl(&[&mesh]).expect("stl");
         assert_eq!(first_facet_normal(&stl), [0.0, 0.0, 1.0]);

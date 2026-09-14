@@ -521,4 +521,22 @@ mod tests {
         assert_eq!(helix.spline.control_points.len(), 2);
         assert_eq!(helix.spline.control_points[0], helix.spline.control_points[1]);
     }
+
+    #[test]
+    fn final_point_uses_its_distance_from_the_center_as_height() {
+        let mut command = HelixCommand::new();
+        command.step = Step::Final;
+        command.center = DVec3::ZERO;
+        command.base_radius = 2.0;
+        command.top_radius = 2.0;
+        command.turns = 2.0;
+
+        let CmdResult::CommitAndExit(EntityType::Helix(helix)) =
+            command.on_point(DVec3::new(3.0, 4.0, 0.0))
+        else {
+            panic!("expected helix");
+        };
+
+        assert_eq!(helix.turn_height * helix.turns, 5.0);
+    }
 }
