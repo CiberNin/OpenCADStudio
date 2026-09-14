@@ -3450,6 +3450,93 @@ fn apply_dimension_breaks(
     *lines = output;
 }
 
+fn dimension_jog_point(dimension: &Dimension) -> Option<Vec3> {
+    if !matches!(dimension, Dimension::Linear(_) | Dimension::Aligned(_)) {
+        return None;
+    }
+    dimension
+        .base()
+        .common
+        .extended_data
+        .get_record("ACAD_DSTYLE_DIMJAG_POSITION")
+        .and_then(|record| {
+            record.values.iter().rev().find_map(|value| match value {
+                acadrust::xdata::XDataValue::Point3D(point) => Some(vec3_local(*point)),
+                _ => None,
+            })
+        })
+}
+
+fn apply_dimension_jog(lines: &mut Vec<[f32; 3]>, requested: Vec3, size: f32, angle: f32) {
+    if lines.len() < 2 {
+        return;
+    }
+    let mut best: Option<(usize, Vec3, f32)> = None;
+    for (index, segment) in lines.windows(2).enumerate() {
+        if segment[0][0].is_nan() || segment[1][0].is_nan() {
+            continue;
+        }
+        let first = Vec3::from_array(segment[0]);
+        let second = Vec3::from_array(segment[1]);
+        let delta = second - first;
+        let length_squared = delta.length_squared();
+        if length_squared <= 1.0e-12 {
+            continue;
+        }
+        let parameter = ((requested - first).dot(delta) / length_squared).clamp(0.0, 1.0);
+        let point = first + delta * parameter;
+        let distance = point.distance_squared(requested);
+        if best.is_none_or(|(_, _, current)| distance < current) {
+            best = Some((index, point, distance));
+        }
+    }
+    let Some((target, center, _)) = best else {
+        return;
+    };
+    let first = Vec3::from_array(lines[target]);
+    let second = Vec3::from_array(lines[target + 1]);
+    let Some(direction) = (second - first).try_normalize() else {
+        return;
+    };
+    let perpendicular = Vec3::new(-direction.y, direction.x, 0.0);
+    let half = size.max(1.0e-3).min(first.distance(second) * 0.2);
+    let amplitude = (half * (angle * 0.5).tan().abs()).clamp(half * 0.35, half * 1.5);
+    let jog_start = center - direction * half;
+    let jog_end = center + direction * half;
+    let jog = [
+        jog_start,
+        center - direction * half * 0.25 + perpendicular * amplitude,
+        center + direction * half * 0.25 - perpendicular * amplitude,
+        jog_end,
+    ];
+
+    let mut output = Vec::with_capacity(lines.len() + 4);
+    output.extend_from_slice(&lines[..target]);
+    if !output.is_empty() && !output.last().is_some_and(|point| point[0].is_nan()) {
+        output.push([f32::NAN; 3]);
+    }
+    if first.distance_squared(jog_start) > 1.0e-12 {
+        output.push(first.to_array());
+        output.push(jog_start.to_array());
+        output.push([f32::NAN; 3]);
+    }
+    output.extend(jog.into_iter().map(|point| point.to_array()));
+    if jog_end.distance_squared(second) > 1.0e-12 {
+        output.push([f32::NAN; 3]);
+        output.push(jog_end.to_array());
+        output.push(second.to_array());
+    }
+    if target + 2 < lines.len() {
+        if !output.last().is_some_and(|point| point[0].is_nan())
+            && !lines[target + 2][0].is_nan()
+        {
+            output.push([f32::NAN; 3]);
+        }
+        output.extend_from_slice(&lines[target + 2..]);
+    }
+    *lines = output;
+}
+
 pub trait DimensionTess {
     fn tessellate(
         &self,
@@ -3783,12 +3870,19 @@ fn tessellate_dimension_inner(
         // DIMUPT governs interactive creation-time text placement; saved
         // geometry already carries the resulting position.
         let _ = s.dimupt;
-        let _ = (s.dimarcsym, s.dimjogang);
+        let _ = s.dimarcsym;
         // DIMUNIT is the obsolete pre-R2000 linear unit format; DIMLUNIT
         // supersedes it. Read but not honoured.
         let _ = s.dimunit;
     }
+    if let Some(point) = dimension_jog_point(dim) {
+        let jog_angle = style
+            .map(|style| style.dimjogang as f32)
+            .unwrap_or(std::f32::consts::FRAC_PI_4);
+        apply_dimension_jog(&mut geom.dim_lines, point, dim_txt as f32 * 0.6, jog_angle);
+    }
     apply_dimension_breaks(document, handle, &mut geom.dim_lines);
+    apply_dimension_breaks(document, handle, &mut geom.ext_lines);
     // Dimension entity fields that the render path doesn't yet use but are
     // preserved on save:
     //   - base.insertion_point: legacy anchor reference; render uses
@@ -7228,6 +7322,11 @@ pub(crate) fn baked_large_radial_geometry(
         document,
         dimension.base().common.handle,
         &mut geometry.dim_lines,
+    );
+    apply_dimension_breaks(
+        document,
+        dimension.base().common.handle,
+        &mut geometry.ext_lines,
     );
     Some(geometry)
 }

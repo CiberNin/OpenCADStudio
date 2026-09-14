@@ -644,6 +644,44 @@ pub fn active_object_context_for_scale(
     default.or(first)
 }
 
+/// Reset every alternate annotation-scale representation to the placement of
+/// the representation displayed at `scale_handle`. The leaf identity, scale
+/// handle and default marker stay intact; only the context payload is copied.
+pub fn reset_annotation_context_positions(
+    doc: &mut CadDocument,
+    entity: Handle,
+    scale_handle: Option<Handle>,
+) -> bool {
+    let Some(source) = active_object_context_for_scale(doc, entity, scale_handle) else {
+        return false;
+    };
+    let source_handle = source.handle;
+    let source_kind = source.kind.clone();
+    let targets: Vec<Handle> = annotation_scales_dict(doc, entity)
+        .and_then(|collection| as_dict(doc, collection))
+        .map(|collection| {
+            collection
+                .entries
+                .iter()
+                .map(|(_, handle)| *handle)
+                .filter(|handle| *handle != source_handle)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut changed = false;
+    for handle in targets {
+        let Some(ObjectType::ObjectContextData(context)) = doc.objects.get_mut(&handle) else {
+            continue;
+        };
+        if context.kind != source_kind {
+            context.kind = source_kind.clone();
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn effective_annotation_scale_for(
     doc: &CadDocument,
     entity: &EntityType,

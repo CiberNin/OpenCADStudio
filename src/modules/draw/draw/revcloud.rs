@@ -9,7 +9,7 @@ use cadkernel::space::{PlanarCurve, Plane, Vec3};
 use glam::DVec3;
 use rustc_hash::FxHashMap;
 
-use crate::command::{CadCommand, CmdOption, CmdResult, WorkingPlane};
+use crate::command::{CadCommand, CmdOption, CmdResult, InputKind, WorkingPlane};
 use crate::entities::curve::{curve_points, entity_curve, ocs_plane};
 use crate::entities::lwpolyline::{is_revision_cloud, revision_cloud_from_curve};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -664,6 +664,17 @@ impl CadCommand for RevCloudCommand {
 
     fn wants_text_input(&self) -> bool {
         true
+    }
+
+    fn input_kind(&self) -> InputKind {
+        match self.stage {
+            Stage::ArcLength | Stage::Style | Stage::Reverse(_) => InputKind::SingleToken,
+            Stage::Create
+            | Stage::Object
+            | Stage::ModifySelect
+            | Stage::ModifyDraw(_)
+            | Stage::ModifyErase(_) => InputKind::Point,
+        }
     }
 
     fn point_step_accepts_keywords(&self) -> bool {

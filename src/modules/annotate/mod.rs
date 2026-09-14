@@ -1,6 +1,7 @@
 // Annotate module — dimension, text, leader, table, and markup tools.
 
 pub mod aligned_dim;
+pub mod annotation_scale;
 pub mod arc_length_dim;
 pub mod angular_dim;
 pub mod data_extract;
@@ -205,29 +206,33 @@ impl CadModule for AnnotateModule {
                 RibbonGroup {
                     title: "Annotation Scaling",
                     tools: vec![
-                        RibbonItem::Tool(crate::modules::ToolDef {
-                            id: "ANNOSCALE",
-                            label: "Scale List",
-                            icon: crate::modules::IconKind::Svg(include_bytes!(
-                                "../../../assets/icons/scale_list.svg"
-                            )),
-                            event: crate::modules::ModuleEvent::Command("ANNOSCALE".to_string()),
-                        }),
-                        RibbonItem::Tool(crate::modules::ToolDef {
-                            id: "OBJECTSCALE",
-                            label: "Add Scale",
+                        RibbonItem::LabeledDropdown {
+                            id: "ANNOTATION_CURRENT_SCALE",
+                            label: "Add Current Scale",
                             icon: crate::modules::IconKind::Svg(include_bytes!(
                                 "../../../assets/icons/add_scale.svg"
                             )),
-                            // The quick "mark annotative at the current scale"
-                            // action; bare OBJECTSCALE opens the manage dialog.
-                            event: crate::modules::ModuleEvent::Command(
-                                "OBJECTSCALE ADD".to_string(),
-                            ),
-                        }),
+                            items: vec![
+                                (
+                                    "OBJECTSCALE ADD",
+                                    "Add Current Scale",
+                                    crate::modules::IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/add_scale.svg"
+                                    )),
+                                ),
+                                (
+                                    "OBJECTSCALE DELETE",
+                                    "Delete Current Scale",
+                                    crate::modules::IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/add_scale.svg"
+                                    )),
+                                ),
+                            ],
+                            default: "OBJECTSCALE ADD",
+                        },
                         RibbonItem::Tool(crate::modules::ToolDef {
                             id: "SCALELISTEDIT",
-                            label: "Scale Edit",
+                            label: "Scale List",
                             icon: crate::modules::IconKind::Svg(include_bytes!(
                                 "../../../assets/icons/scale_list.svg"
                             )),
@@ -236,13 +241,23 @@ impl CadModule for AnnotateModule {
                             ),
                         }),
                         RibbonItem::Tool(crate::modules::ToolDef {
-                            id: "SYNCPVIEWPORTS",
-                            label: "Sync Scales",
+                            id: "OBJECTSCALE",
+                            label: "Add/Delete Scales",
+                            icon: crate::modules::IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/add_scale.svg"
+                            )),
+                            event: crate::modules::ModuleEvent::Command(
+                                "OBJECTSCALE".to_string(),
+                            ),
+                        }),
+                        RibbonItem::Tool(crate::modules::ToolDef {
+                            id: "ANNORESET",
+                            label: "Sync Scale Positions",
                             icon: crate::modules::IconKind::Svg(include_bytes!(
                                 "../../../assets/icons/sync.svg"
                             )),
                             event: crate::modules::ModuleEvent::Command(
-                                "SYNCPVIEWPORTS".to_string(),
+                                "ANNORESET".to_string(),
                             ),
                         }),
                     ],

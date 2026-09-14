@@ -1314,6 +1314,14 @@ impl Default for LoftOptions {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum DimensionEditOperation {
+    Home,
+    NewText(String),
+    Rotate(f64),
+    Oblique(f64),
+}
+
 /// Returned by every `CadCommand` method to tell main.rs what to do.
 #[allow(dead_code)]
 pub enum CmdResult {
@@ -1412,6 +1420,8 @@ pub enum CmdResult {
     BatchCopy(Vec<Handle>, Vec<EntityTransform>),
     /// Erase `handle` and replace with new entities; command stays active.
     ReplaceEntity(Handle, Vec<EntityType>),
+    /// Update one entity in place, preserve its handle, and end the command.
+    UpdateEntityAndFinish { handle: Handle, entity: EntityType },
     /// Replace / delete multiple entities and add new ones; command ends.
     /// Each pair: (handle_to_erase, replacement_entities) — empty vec = delete only.
     ReplaceMany(Vec<(Handle, Vec<EntityType>)>, Vec<EntityType>),
@@ -1592,6 +1602,11 @@ pub enum CmdResult {
     QuickPrint(Vec<Handle>),
     /// Replace the text content of a Text/MText entity in-place.
     DdeditEntity { handle: Handle, new_text: String },
+    /// Apply one DIMEDIT operation to every selected dimension.
+    EditDimensions {
+        handles: Vec<Handle>,
+        operation: DimensionEditOperation,
+    },
     /// Open the in-place editor (plain box or rich MText editor, per type) for
     /// a text-bearing entity picked by a command such as DDEDIT.
     EditTextEntity { handle: Handle },

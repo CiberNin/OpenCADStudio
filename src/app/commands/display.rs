@@ -1041,55 +1041,110 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::PlotDialogOpen));
             }
 
-            // ── Recognized commands whose full implementation is pending ─────────
-            // These verbs are surfaced by the ribbon / menus but their feature is
-            // still being built. Acknowledge them with an honest status so the
-            // button responds instead of reporting an unknown command; each is
-            // replaced by its real handler as the feature lands.
-            // OBJECTSCALE ADD — add the active scale representation to every
-            // selected object that supports per-scale context data.
-            "OBJECTSCALE ADD" => {
-                let handles: Vec<acadrust::Handle> = self.tabs[i]
+            // Add or remove the current representation on the selected
+            // annotative objects. With no preselection, gather one through the
+            // regular selection engine before applying the action.
+            action @ ("OBJECTSCALE ADD" | "OBJECTSCALE DELETE") => {
+                let selected: Vec<acadrust::Handle> = self.tabs[i]
                     .scene
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
                     .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
-                if handles.is_empty() {
+                if selected.is_empty() {
+                    let action = if action.ends_with("ADD") {
+                        "OBJECTSCALE ADD"
+                    } else {
+                        "OBJECTSCALE DELETE"
+                    };
+                    let command = crate::modules::annotate::annotation_scale::AnnotationScaleSelectionCommand::new(
+                        "OBJECTSCALE",
+                        action,
+                    );
                     self.command_line
-                        .push_error(crate::t!("OBJECTSCALE: select objects first.").as_ref());
+                        .push_info(&crate::command::CadCommand::prompt(&command));
+                    self.tabs[i].active_cmd = Some(Box::new(command));
                     return Some(Task::none());
                 }
-                self.push_undo_snapshot(i, "OBJECTSCALE");
                 let Some(scale) = self.tabs[i].scene.creation_annotation_scale_handle() else {
                     self.command_line
                         .push_error(crate::t!("OBJECTSCALE: the active annotation scale is unavailable.").as_ref());
                     return Some(Task::none());
                 };
-                let mut n = 0usize;
-                for h in &handles {
-                    if crate::scene::annotative::create_annotation_context(
-                        &mut self.tabs[i].scene.document,
-                        *h,
-                        scale,
-                    ) {
-                        crate::scene::annotative::set_entity_annotative(
-                            &mut self.tabs[i].scene.document,
-                            *h,
-                            true,
+
+                let adding = action.ends_with("ADD");
+                let handles: Vec<_> = selected
+                    .into_iter()
+                    .filter(|handle| {
+                        let memberships = crate::scene::annotative::object_scale_memberships(
+                            &self.tabs[i].scene.document,
+                            *handle,
                         );
-                        n += 1;
+                        let member = memberships.iter().any(|(_, current)| *current == scale);
+                        if adding {
+                            !member
+                                && self.tabs[i]
+                                    .scene
+                                    .document
+                                    .get_entity(*handle)
+                                    .is_some_and(crate::scene::annotative::supports_annotation_context)
+                        } else {
+                            member
+                        }
+                    })
+                    .collect();
+                if handles.is_empty() {
+                    self.command_line.push_info(
+                        if adding {
+                            crate::t!("OBJECTSCALE: the selected objects already have the current scale, or do not support annotation scales.")
+                        } else {
+                            crate::t!("OBJECTSCALE: the selected objects do not have the current scale.")
+                        }
+                        .as_ref(),
+                    );
+                    return Some(Task::none());
+                }
+
+                self.push_undo_snapshot(i, "OBJECTSCALE");
+                let mut changed = Vec::new();
+                for handle in handles {
+                    let ok = if adding {
+                        let created = crate::scene::annotative::create_annotation_context(
+                            &mut self.tabs[i].scene.document,
+                            handle,
+                            scale,
+                        );
+                        if created {
+                            crate::scene::annotative::set_entity_annotative(
+                                &mut self.tabs[i].scene.document,
+                                handle,
+                                true,
+                            );
+                        }
+                        created
+                    } else {
+                        crate::scene::annotative::remove_annotation_context_for_scale(
+                            &mut self.tabs[i].scene.document,
+                            handle,
+                            scale,
+                        )
+                    };
+                    if ok {
+                        changed.push(handle);
                     }
                 }
-                let changes: Vec<_> = handles
-                    .into_iter()
+                let changes: Vec<_> = changed
+                    .iter()
+                    .copied()
                     .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect();
                 self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(crate::tf!(
-                    "OBJECTSCALE: added the active scale to {n} object(s)."
+                    "OBJECTSCALE: {} the current scale on {} object(s).",
+                    if adding { "added" } else { "removed" },
+                    changed.len()
                 ).as_ref());
                 return Some(Task::none());
             }
@@ -1457,6 +1512,75 @@ impl OpenCADStudio {
             // moved to the explicit `OBJECTSCALE ADD` keyword above.
             "OBJECTSCALE" => {
                 return Some(Task::done(Message::AnnoObjectScaleOpen));
+            }
+
+            // Reset every alternate scale representation to the position of
+            // the representation visible at the current annotation scale.
+            "ANNORESET" => {
+                let handles: Vec<acadrust::Handle> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .iter()
+                    .map(|(handle, _)| *handle)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                    .collect();
+                if handles.is_empty() {
+                    let command = crate::modules::annotate::annotation_scale::AnnotationScaleSelectionCommand::new(
+                        "ANNORESET",
+                        "ANNORESET",
+                    );
+                    self.command_line
+                        .push_info(&crate::command::CadCommand::prompt(&command));
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                    return Some(Task::none());
+                }
+                let scale = self.tabs[i].scene.creation_annotation_scale_handle();
+                let candidates: Vec<_> = handles
+                    .into_iter()
+                    .filter(|handle| {
+                        crate::scene::annotative::object_scale_memberships(
+                            &self.tabs[i].scene.document,
+                            *handle,
+                        )
+                        .len()
+                            > 1
+                    })
+                    .collect();
+                if candidates.is_empty() {
+                    self.command_line.push_info(
+                        crate::t!("ANNORESET: no selected object has alternate scale representations.")
+                            .as_ref(),
+                    );
+                    return Some(Task::none());
+                }
+                self.push_undo_snapshot(i, "ANNORESET");
+                let mut changed = Vec::new();
+                for handle in candidates {
+                    if crate::scene::annotative::reset_annotation_context_positions(
+                        &mut self.tabs[i].scene.document,
+                        handle,
+                        scale,
+                    ) {
+                        changed.push(handle);
+                    }
+                }
+                if !changed.is_empty() {
+                    let changes: Vec<_> = changed
+                        .iter()
+                        .copied()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                }
+                self.command_line.push_output(
+                    crate::tf!(
+                        "ANNORESET: synchronized {} object(s) from the current scale.",
+                        changed.len()
+                    )
+                    .as_ref(),
+                );
+                return Some(Task::none());
             }
 
             // DATALINK <path.csv> — create a persistent linked table.

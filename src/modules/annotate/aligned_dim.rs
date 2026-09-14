@@ -6,7 +6,7 @@ use acadrust::EntityType;
 use glam::DVec3;
 
 use crate::command::{
-    CadCommand, CmdResult, DimensionAssociationInput, InputKind, WorkingPlane,
+    CadCommand, CmdOption, CmdResult, DimensionAssociationInput, InputKind, WorkingPlane,
 };
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
@@ -164,9 +164,22 @@ impl CadCommand for AlignedDimensionCommand {
     fn input_kind(&self) -> InputKind {
         if self.awaiting_text {
             InputKind::FreeText
-        } else {
+        } else if self.awaiting_angle {
             InputKind::SingleToken
+        } else {
+            InputKind::Point
         }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        if !matches!(self.step, Step::DimLine { .. }) || self.awaiting_text || self.awaiting_angle {
+            return Vec::new();
+        }
+        vec![
+            CmdOption::new("MText", "MTEXT"),
+            CmdOption::new("Text", "TEXT"),
+            CmdOption::new("Angle", "ANGLE"),
+        ]
     }
 
     fn point_step_accepts_keywords(&self) -> bool {
