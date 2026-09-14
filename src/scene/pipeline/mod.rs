@@ -201,6 +201,7 @@ pub struct Pipeline {
     /// geometry passes render at this size; the blit UV is scaled by
     /// `depth_texture_size / alloc_size` so it samples only the filled region.
     depth_texture_size: Size<u32>,
+    pub(in crate::scene) viewport: Option<crate::scene::view::render::PhysicalViewport>,
     /// Actual allocated size of the depth / MSAA / resolve textures. Rounded
     /// up from the requested size to a coarse grid so a divider drag (which
     /// changes the pane size a few pixels every frame) doesn't recreate these
@@ -2321,6 +2322,7 @@ impl Pipeline {
             wipeout_bgl1,
             image_bgl1,
             depth_texture_size: Size::new(1, 1),
+            viewport: None,
             // (0, 0) forces the first `ensure_depth_texture` to allocate at the
             // real rounded size — the constructor textures above are placeholders.
             alloc_size: Size::new(0, 0),
@@ -3967,8 +3969,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         );
     }
 
-    /// Render the geometry passes at `vp_size` (the full viewport size — the
-    /// MSAA / resolve textures are this size) and blit the resulting resolve
+    /// Render geometry at its fractional pixel rectangle and blit the resolve
     /// to `surface_dest` on the swap-chain. The UV crop is read from the
     /// blit uniform buffer (written by `upload_blit_uv` during `prepare`)
     /// so a viewport that hangs off the canvas still composites the correct
@@ -3977,19 +3978,14 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
-        vp_size: Size<u32>,
+        raster: Rectangle,
         surface_dest: Rectangle<u32>,
+        surface_clip: Rectangle<u32>,
         bg_color: [f32; 4],
         mesh_wireframe: bool,
         hidden_line: bool,
         show_3d_edges: bool,
     ) {
-        let vp = Rectangle::<u32> {
-            x: 0,
-            y: 0,
-            width: vp_size.width,
-            height: vp_size.height,
-        };
         let msaa = &self.msaa_view;
         let [r, g, b, a] = bg_color;
         let clear_color = if self.clip_boundary.is_some() || self.skip_background {
@@ -4101,8 +4097,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // MSAA texture is clip-bounds-sized, so viewport starts at (0, 0).
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             // Stamp the viewport clip boundary into the just-cleared stencil
             // (interior → 1) before any content draws, so every pass below can
             // clip to the shape with reference 1.
@@ -4155,7 +4150,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             pass.set_pipeline(&self.image_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
@@ -4192,7 +4187,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
             // Four draw paths share this pass:
@@ -4491,7 +4486,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+                pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_stencil_reference(stencil_ref);
                 if !fill.chunks_3d.is_empty() {
@@ -4562,7 +4557,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             pass.set_pipeline(&self.wire_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
@@ -4605,7 +4600,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             pass.set_pipeline(&self.wire_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             // In a filled-with-edges mode the mesh outline edges frame the shaded
@@ -4756,7 +4751,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+                pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
                 pass.set_pipeline(&self.text_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_stencil_reference(stencil_ref);
@@ -4809,7 +4804,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             pass.set_pipeline(&self.wipeout_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
@@ -4859,7 +4854,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
             if !self.gpu_selected_wires.is_empty() {
@@ -5002,6 +4997,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 1.0,
             );
             pass.set_pipeline(&self.blit_pipeline);
+            pass.set_scissor_rect(surface_clip.x, surface_clip.y, surface_clip.width, surface_clip.height);
             pass.set_bind_group(0, &self.blit_bind_group, &[]);
             pass.draw(0..6, 0..1);
         }
