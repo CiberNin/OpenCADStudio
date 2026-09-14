@@ -265,7 +265,7 @@ impl OpenCADStudio {
                         .or_else(|| active_model_vport.map(|viewport| viewport.ucsicon_lower))
                         .unwrap_or(self.show_ucs_icon);
                     let ucs_icon_at_origin = active_entity_viewport
-                        .map(|viewport| viewport.ucs_icon_at_origin)
+                        .map(|viewport| viewport.status.ucs_icon_at_origin)
                         .or_else(|| active_model_vport.map(|viewport| viewport.ucsicon_origin))
                         .unwrap_or(self.ucs_icon_at_origin);
                     let ucs_per_viewport = active_entity_viewport

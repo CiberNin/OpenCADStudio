@@ -3112,7 +3112,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 .and_then(|handle| self.tabs[i].scene.document.get_entity(handle))
                                 .and_then(|entity| match entity {
                                     acadrust::EntityType::Viewport(viewport) => {
-                                        Some(viewport.ucs_icon_at_origin)
+                                        Some(viewport.status.ucs_icon_at_origin)
                                     }
                                     _ => None,
                                 })
@@ -3137,7 +3137,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     if let Some(acadrust::EntityType::Viewport(viewport)) =
                                         self.tabs[i].scene.document.get_entity_mut(handle)
                                     {
-                                        viewport.ucs_icon_at_origin = next;
+                                        viewport.status.ucs_icon_at_origin = next;
                                     }
                                 } else if let Some(viewport) = self.tabs[i]
                                     .scene
