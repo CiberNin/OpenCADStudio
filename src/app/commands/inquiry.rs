@@ -1,6 +1,100 @@
 use super::*;
 
 impl OpenCADStudio {
+    /// ALIGNLEFT/ALIGNHCENTER/ALIGNRIGHT/ALIGNTOP/ALIGNVCENTER/ALIGNBOTTOM:
+    /// nudges each selected object (or complete group — see
+    /// `Scene::selected_object_units`) so its bounding-box edge/center lines
+    /// up with the extreme edge/center of the whole selection. Distinct from
+    /// the point-picking `AlignCommand` (`ALIGN`/`ALIGN3D`): this is a
+    /// one-shot bounds alignment with no point prompts, closer to a
+    /// word processor's "align objects" toolbar than AutoCAD's 3-point ALIGN.
+    fn align_selected_bounds(&mut self, i: usize, command: &str) {
+        use crate::command::EntityTransform;
+        use glam::DVec3;
+
+        let handles: Vec<_> = self.tabs[i]
+            .scene
+            .selected_handles_in_order()
+            .into_iter()
+            .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+            .collect();
+        if handles.len() < 2 {
+            self.command_line
+                .push_info(crate::t!("Select at least two unlocked objects to align.").as_ref());
+            return;
+        }
+
+        let bounds: Vec<_> = self.tabs[i]
+            .scene
+            .selected_object_units(&handles)
+            .into_iter()
+            .filter_map(|unit| {
+                let mut min_x = f64::INFINITY;
+                let mut min_y = f64::INFINITY;
+                let mut max_x = f64::NEG_INFINITY;
+                let mut max_y = f64::NEG_INFINITY;
+                for handle in &unit {
+                    let entity = self.tabs[i].scene.document.get_entity(*handle)?;
+                    let bb = entity.as_entity().bounding_box();
+                    min_x = min_x.min(bb.min.x);
+                    min_y = min_y.min(bb.min.y);
+                    max_x = max_x.max(bb.max.x);
+                    max_y = max_y.max(bb.max.y);
+                }
+                [min_x, min_y, max_x, max_y]
+                    .iter()
+                    .all(|value| value.is_finite())
+                    .then_some((unit, min_x, min_y, max_x, max_y))
+            })
+            .collect();
+        if bounds.len() < 2 {
+            self.command_line
+                .push_info(crate::t!("The selected objects do not provide usable bounds.").as_ref());
+            return;
+        }
+
+        let min_x = bounds.iter().map(|(_, x, _, _, _)| *x).fold(f64::INFINITY, f64::min);
+        let min_y = bounds.iter().map(|(_, _, y, _, _)| *y).fold(f64::INFINITY, f64::min);
+        let max_x = bounds.iter().map(|(_, _, _, x, _)| *x).fold(f64::NEG_INFINITY, f64::max);
+        let max_y = bounds.iter().map(|(_, _, _, _, y)| *y).fold(f64::NEG_INFINITY, f64::max);
+        let center_x = (min_x + max_x) * 0.5;
+        let center_y = (min_y + max_y) * 0.5;
+
+        let label = match command {
+            "ALIGNLEFT" => "Align Left",
+            "ALIGNHCENTER" => "Align Horizontal Centers",
+            "ALIGNRIGHT" => "Align Right",
+            "ALIGNTOP" => "Align Top",
+            "ALIGNVCENTER" => "Align Vertical Centers",
+            "ALIGNBOTTOM" => "Align Bottom",
+            _ => command,
+        };
+        let pending = self.begin_undo(i, label, handles.len(), true);
+        for (unit, unit_min_x, unit_min_y, unit_max_x, unit_max_y) in &bounds {
+            let (dx, dy) = match command {
+                "ALIGNLEFT" => (min_x - unit_min_x, 0.0),
+                "ALIGNHCENTER" => (center_x - (unit_min_x + unit_max_x) * 0.5, 0.0),
+                "ALIGNRIGHT" => (max_x - unit_max_x, 0.0),
+                "ALIGNTOP" => (0.0, max_y - unit_max_y),
+                "ALIGNVCENTER" => (0.0, center_y - (unit_min_y + unit_max_y) * 0.5),
+                "ALIGNBOTTOM" => (0.0, min_y - unit_min_y),
+                _ => (0.0, 0.0),
+            };
+            self.tabs[i].scene.transform_entities(
+                unit,
+                &EntityTransform::Translate(DVec3::new(dx, dy, 0.0)),
+            );
+        }
+        self.tabs[i].dirty = true;
+        self.refresh_properties();
+        if let Some(pending) = pending {
+            self.commit_undo_delta(i, pending);
+        }
+        self.command_line.push_output(
+            crate::tf!("{command}: aligned {} object(s).", bounds.len()).as_ref(),
+        );
+    }
+
     pub(super) fn dispatch_inquiry(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             "3DORBIT" => {
@@ -978,6 +1072,11 @@ impl OpenCADStudio {
 
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
+            }
+
+            "ALIGNLEFT" | "ALIGNHCENTER" | "ALIGNRIGHT" | "ALIGNTOP" | "ALIGNVCENTER"
+            | "ALIGNBOTTOM" => {
+                self.align_selected_bounds(i, cmd);
             }
 
             "LENGTHEN" => {
@@ -2209,5 +2308,99 @@ mod flatten_tests {
             ],
             [0.0; 4]
         );
+    }
+}
+
+#[cfg(test)]
+mod align_selected_bounds_tests {
+    use super::*;
+    use acadrust::entities::{EntityType, Line};
+    use acadrust::types::Vector3;
+
+    fn add_line(app: &mut OpenCADStudio, x1: f64, y1: f64, x2: f64, y2: f64) -> acadrust::Handle {
+        app.tabs[app.active_tab]
+            .scene
+            .add_entity(EntityType::Line(Line::from_points(
+                Vector3::new(x1, y1, 0.0),
+                Vector3::new(x2, y2, 0.0),
+            )))
+    }
+
+    fn line_start_x(app: &OpenCADStudio, handle: acadrust::Handle) -> f64 {
+        match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(EntityType::Line(l)) => l.start.x.min(l.end.x),
+            other => panic!("expected a Line, got {other:?}"),
+        }
+    }
+
+    fn line_max_y(app: &OpenCADStudio, handle: acadrust::Handle) -> f64 {
+        match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(EntityType::Line(l)) => l.start.y.max(l.end.y),
+            other => panic!("expected a Line, got {other:?}"),
+        }
+    }
+
+    /// A single selected object has no "other object" to align to — refuse
+    /// with an informational message rather than silently moving nothing
+    /// (or panicking on the empty-bounds case).
+    #[test]
+    fn refuses_with_fewer_than_two_selected_objects() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let a = add_line(&mut app, 0.0, 0.0, 2.0, 1.0);
+        app.tabs[app.active_tab].scene.select_entities(&[a]);
+        let i = app.active_tab;
+
+        app.dispatch_inquiry("ALIGNLEFT", i);
+        assert_eq!(line_start_x(&app, a), 0.0, "the lone object must not move");
+    }
+
+    /// ALIGNLEFT moves every selected object's left edge to the leftmost
+    /// edge already present in the selection; ALIGNTOP does the same for
+    /// the topmost edge. Both are undoable as one step.
+    #[test]
+    fn aligns_left_and_top_edges_and_is_undoable() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let left = add_line(&mut app, 0.0, 0.0, 1.0, 1.0); // leftmost & topmost already
+        let right = add_line(&mut app, 5.0, -3.0, 8.0, -2.0); // further right and lower
+        app.tabs[app.active_tab].scene.select_entities(&[left, right]);
+        let i = app.active_tab;
+
+        app.dispatch_inquiry("ALIGNLEFT", i);
+        assert_eq!(line_start_x(&app, left), 0.0, "the already-leftmost object must not move");
+        assert_eq!(line_start_x(&app, right), 0.0, "the other object's left edge should meet it");
+
+        app.dispatch_inquiry("ALIGNTOP", i);
+        assert_eq!(line_max_y(&app, left), 1.0, "the already-topmost object must not move");
+        assert_eq!(line_max_y(&app, right), 1.0, "the other object's top edge should meet it");
+
+        app.undo_steps(1); // undo ALIGNTOP
+        assert_eq!(line_max_y(&app, right), -2.0, "undo should restore the pre-ALIGNTOP position");
+        app.undo_steps(1); // undo ALIGNLEFT
+        assert_eq!(line_start_x(&app, right), 5.0, "undo should restore the original geometry");
+    }
+
+    /// A complete, fully-selected group (`Scene::selected_object_units`)
+    /// moves as one rigid unit instead of each member line sliding to meet
+    /// the *other* members of its own group.
+    #[test]
+    fn a_complete_group_aligns_as_one_rigid_unit() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let a = add_line(&mut app, 5.0, 0.0, 6.0, 1.0);
+        let b = add_line(&mut app, 7.0, 0.0, 8.0, 1.0);
+        let other = add_line(&mut app, 0.0, 0.0, 1.0, 1.0);
+        app.tabs[app.active_tab].scene.create_group("pair".to_string(), vec![a, b]);
+        app.tabs[app.active_tab].scene.select_entities(&[a, b, other]);
+        let i = app.active_tab;
+
+        app.dispatch_inquiry("ALIGNLEFT", i);
+        // The group's own left edge (a's, at x=5) moves to meet `other`'s
+        // left edge (x=0): a shifts by -5, and b — sharing the same
+        // transform — must shift by exactly the same amount, not collapse
+        // onto `a`.
+        assert_eq!(line_start_x(&app, a), 0.0);
+        assert_eq!(line_start_x(&app, b), 2.0, "b must keep its offset from a, not collapse onto it");
     }
 }
