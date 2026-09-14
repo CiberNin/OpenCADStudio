@@ -1870,7 +1870,7 @@ impl Scene {
                 .map(|point| to_xy(point[0], point[1]))
                 .collect();
             rings.push(ring);
-            local_rings.push(local_ring);
+            local_rings.push((local_ring, path));
             ring_sources.push(path.boundary_handles.clone());
         }
 
@@ -1883,7 +1883,8 @@ impl Scene {
         let mut local_boundary = Vec::new();
         let mut boundary_exterior = Vec::new();
         let mut boundary_sources = Vec::new();
-        for (((ring, local_ring), sources), depth) in rings
+        let mut spline_paths = Vec::new();
+        for (((ring, (local_ring, path)), sources), depth) in rings
             .into_iter()
             .zip(local_rings)
             .zip(ring_sources)
@@ -1901,12 +1902,14 @@ impl Scene {
                 boundary.push([f64::NAN, f64::NAN]);
                 local_boundary.push([f32::NAN, f32::NAN]);
             }
+            let range = boundary.len()..boundary.len() + ring.len();
             boundary.extend(ring);
-            local_boundary.extend(
-                local_ring
-                    .into_iter()
-                    .map(|[x, y]| [x as f32, y as f32]),
-            );
+            local_boundary.extend(local_ring.iter().map(|&[x, y]| [x as f32, y as f32]));
+            if path.edges.iter().any(|edge| {
+                matches!(edge, acadrust::entities::BoundaryEdge::Spline(_))
+            }) {
+                spline_paths.push((path, local_ring, range));
+            }
             boundary_exterior.push(depth == 0);
             boundary_sources.push(sources);
         }
@@ -2095,6 +2098,24 @@ impl Scene {
                 }
             }
         }
+        let project = |point: [f64; 2]| {
+            let [x, y] = to_xy(point[0], point[1]);
+            [(x - world_origin[0]) as f32 as f64, (y - world_origin[1]) as f32 as f64]
+        };
+        for (path, ring, range) in spline_paths.into_iter().rev() {
+            if range.end > boundary.len() {
+                continue;
+            }
+            let curves = || path.edges.iter().filter_map(crate::entities::hatch::edge_curve).collect();
+            if let Some(refined) = super::hatch_boundary::refine(&ring, curves, &project) {
+                if boundary.len() - range.len() + refined.len() > MAX_HATCH_MODEL_VERTS {
+                    continue;
+                }
+                boundary.splice(range.clone(), refined.iter().map(|p| to_xy(p[0], p[1])));
+                local_boundary.splice(range, refined.into_iter().map(|[x, y]| [x as f32, y as f32]));
+            }
+        }
+
         let boundary_f32: Vec<[f32; 2]> = boundary
             .iter()
             .map(|&[x, y]| {
