@@ -21,7 +21,6 @@ use crate::plugin::all_ribbon_modules;
 use crate::ui::properties::{linetype_display_name, lw_options, LinetypeItem};
 
 mod widgets;
-mod annotation_panel;
 mod draw_panel;
 mod modify_panel;
 use widgets::{StyleContext, *};
