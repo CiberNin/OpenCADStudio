@@ -2993,6 +2993,245 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             self.tabs[i].dirty = true;
                             self.refresh_properties();
                         }
+                        "view_plot_style_table" => {
+                            let next = if value.eq_ignore_ascii_case("None") {
+                                String::new()
+                            } else {
+                                value.clone()
+                            };
+                            let layout_name = self.tabs[i].scene.current_layout.clone();
+                            let current = self.tabs[i]
+                                .scene
+                                .document
+                                .objects
+                                .values()
+                                .find_map(|object| {
+                                    let acadrust::objects::ObjectType::Layout(layout) = object
+                                    else {
+                                        return None;
+                                    };
+                                    layout
+                                        .name
+                                        .eq_ignore_ascii_case(&layout_name)
+                                        .then(|| layout.plot_style_sheet.clone())
+                                })
+                                .unwrap_or_else(|| {
+                                    self.tabs[i].scene.document.header.stylesheet.clone()
+                                });
+                            if current != next {
+                                self.push_undo_snapshot(i, "PLOTSTYLE");
+                                for object in self.tabs[i].scene.document.objects.values_mut() {
+                                    if let acadrust::objects::ObjectType::Layout(layout) = object {
+                                        if layout.name.eq_ignore_ascii_case(&layout_name) {
+                                            layout.plot_style_sheet = next.clone();
+                                            layout.plot_flags.plot_plot_styles = !next.is_empty();
+                                            layout.plot_flags.show_plot_styles = !next.is_empty();
+                                        }
+                                    }
+                                }
+                                self.tabs[i].scene.document.header.stylesheet = next;
+                                self.tabs[i].dirty = true;
+                            }
+                            self.refresh_properties();
+                        }
+                        "view_annotation_scale" => {
+                            let current = self.tabs[i]
+                                .scene
+                                .document
+                                .header
+                                .current_annotation_scale
+                                .clone();
+                            if !current.eq_ignore_ascii_case(&value) {
+                                self.push_undo_snapshot(i, "CANNOSCALE");
+                                if self.tabs[i].scene.set_annotation_scale_named(&value).is_some() {
+                                    self.tabs[i].dirty = true;
+                                } else {
+                                    self.discard_last_undo_entry(i);
+                                }
+                            }
+                            self.refresh_properties();
+                        }
+                        "view_ucs_icon_on" => {
+                            let next = value.eq_ignore_ascii_case("Yes");
+                            let active_viewport = self.tabs[i].scene.active_viewport;
+                            let current = active_viewport
+                                .and_then(|handle| self.tabs[i].scene.document.get_entity(handle))
+                                .and_then(|entity| match entity {
+                                    acadrust::EntityType::Viewport(viewport) => {
+                                        Some(viewport.ucs_icon_visible)
+                                    }
+                                    _ => None,
+                                })
+                                .or_else(|| {
+                                    self.tabs[i]
+                                        .scene
+                                        .document
+                                        .vports
+                                        .iter()
+                                        .find(|viewport| {
+                                            viewport
+                                                .name
+                                                .trim_start_matches('*')
+                                                .eq_ignore_ascii_case("active")
+                                        })
+                                        .map(|viewport| viewport.ucsicon_lower)
+                                })
+                                .unwrap_or(self.show_ucs_icon);
+                            if current != next {
+                                self.push_undo_snapshot(i, "UCSICON");
+                                if let Some(handle) = active_viewport {
+                                    if let Some(acadrust::EntityType::Viewport(viewport)) =
+                                        self.tabs[i].scene.document.get_entity_mut(handle)
+                                    {
+                                        viewport.ucs_icon_visible = next;
+                                    }
+                                } else if let Some(viewport) = self.tabs[i]
+                                    .scene
+                                    .document
+                                    .vports
+                                    .iter_mut()
+                                    .find(|viewport| {
+                                        viewport
+                                            .name
+                                            .trim_start_matches('*')
+                                            .eq_ignore_ascii_case("active")
+                                    })
+                                {
+                                    viewport.ucsicon_lower = next;
+                                }
+                                self.show_ucs_icon = next;
+                                self.persist_settings_if_changed();
+                                self.tabs[i].dirty = true;
+                            }
+                            self.refresh_properties();
+                        }
+                        "view_ucs_icon_at_origin" => {
+                            let next = value.eq_ignore_ascii_case("Yes");
+                            let active_viewport = self.tabs[i].scene.active_viewport;
+                            let current = active_viewport
+                                .and_then(|handle| self.tabs[i].scene.document.get_entity(handle))
+                                .and_then(|entity| match entity {
+                                    acadrust::EntityType::Viewport(viewport) => {
+                                        Some(viewport.status.ucs_icon_at_origin)
+                                    }
+                                    _ => None,
+                                })
+                                .or_else(|| {
+                                    self.tabs[i]
+                                        .scene
+                                        .document
+                                        .vports
+                                        .iter()
+                                        .find(|viewport| {
+                                            viewport
+                                                .name
+                                                .trim_start_matches('*')
+                                                .eq_ignore_ascii_case("active")
+                                        })
+                                        .map(|viewport| viewport.ucsicon_origin)
+                                })
+                                .unwrap_or(self.ucs_icon_at_origin);
+                            if current != next {
+                                self.push_undo_snapshot(i, "UCSICON");
+                                if let Some(handle) = active_viewport {
+                                    if let Some(acadrust::EntityType::Viewport(viewport)) =
+                                        self.tabs[i].scene.document.get_entity_mut(handle)
+                                    {
+                                        viewport.status.ucs_icon_at_origin = next;
+                                    }
+                                } else if let Some(viewport) = self.tabs[i]
+                                    .scene
+                                    .document
+                                    .vports
+                                    .iter_mut()
+                                    .find(|viewport| {
+                                        viewport
+                                            .name
+                                            .trim_start_matches('*')
+                                            .eq_ignore_ascii_case("active")
+                                    })
+                                {
+                                    viewport.ucsicon_origin = next;
+                                }
+                                self.ucs_icon_at_origin = next;
+                                self.persist_settings_if_changed();
+                                self.tabs[i].dirty = true;
+                            }
+                            self.refresh_properties();
+                        }
+                        "view_ucs_per_viewport" => {
+                            let next = value.eq_ignore_ascii_case("Yes");
+                            let active_viewport = self.tabs[i].scene.active_viewport;
+                            let current = active_viewport
+                                .and_then(|handle| self.tabs[i].scene.document.get_entity(handle))
+                                .and_then(|entity| match entity {
+                                    acadrust::EntityType::Viewport(viewport) => {
+                                        Some(viewport.ucs_per_viewport)
+                                    }
+                                    _ => None,
+                                })
+                                .or_else(|| {
+                                    self.tabs[i]
+                                        .scene
+                                        .document
+                                        .vports
+                                        .iter()
+                                        .find(|viewport| {
+                                            viewport
+                                                .name
+                                                .trim_start_matches('*')
+                                                .eq_ignore_ascii_case("active")
+                                        })
+                                        .map(|viewport| viewport.ucs_per_viewport)
+                                })
+                                .unwrap_or(true);
+                            if current != next {
+                                self.push_undo_snapshot(i, "UCSVP");
+                                if let Some(handle) = active_viewport {
+                                    if let Some(acadrust::EntityType::Viewport(viewport)) =
+                                        self.tabs[i].scene.document.get_entity_mut(handle)
+                                    {
+                                        viewport.ucs_per_viewport = next;
+                                    }
+                                } else if let Some(viewport) = self.tabs[i]
+                                    .scene
+                                    .document
+                                    .vports
+                                    .iter_mut()
+                                    .find(|viewport| {
+                                        viewport
+                                            .name
+                                            .trim_start_matches('*')
+                                            .eq_ignore_ascii_case("active")
+                                    })
+                                {
+                                    viewport.ucs_per_viewport = next;
+                                }
+                                self.tabs[i].dirty = true;
+                            }
+                            self.refresh_properties();
+                        }
+                        "view_visual_style" => {
+                            use acadrust::entities::ViewportRenderMode as Mode;
+                            let mode = match value.as_str() {
+                                "2D Wireframe" | "Wireframe 2D" => Some(Mode::Wireframe2D),
+                                "3D Wireframe" | "Wireframe 3D" => Some(Mode::Wireframe3D),
+                                "Hidden Line" => Some(Mode::HiddenLine),
+                                "Flat Shaded" => Some(Mode::FlatShaded),
+                                "Gouraud Shaded" => Some(Mode::GouraudShaded),
+                                "Flat Shaded + Edges" => Some(Mode::FlatShadedWithEdges),
+                                "Gouraud Shaded + Edges" => {
+                                    Some(Mode::GouraudShadedWithEdges)
+                                }
+                                _ => None,
+                            };
+                            if let Some(mode) = mode {
+                                let task = self.on_set_render_mode(mode);
+                                self.refresh_properties();
+                                return task;
+                            }
+                            self.refresh_properties();
+                        }
                         _ => {}
                     }
                 }
