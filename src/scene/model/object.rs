@@ -80,6 +80,11 @@ pub enum PropValue {
     },
     /// The trailing "+ Add parameter" row in the Parameters section.
     ParamAddRow,
+    /// The Parameters section's leading header row (no-selection page only):
+    /// a global on/off toggle for whether any constraint pill in the
+    /// viewport shows its driven value/parameter-name text. Mirrors
+    /// `App::show_constraint_values`.
+    ParamsVisibilityToggle(bool),
 }
 
 /// A single property row in the Properties panel.

@@ -471,6 +471,42 @@ impl OpenCADStudio {
                                 },
                             ],
                         },
+                        // Document-wide named-parameter table embedded here
+                        // instead of only the separate PARAMETERS modal —
+                        // see `PropValue::ParamRow`'s doc comment. Belongs
+                        // on the no-selection (drawing-level) page, not a
+                        // per-entity one: a parameter isn't owned by any
+                        // one entity.
+                        PropSection {
+                            title: t!("Parameters").into_owned(),
+                            props: {
+                                let mut props: Vec<Property> = vec![Property {
+                                    label: String::new(),
+                                    field: "show_named_parameters",
+                                    value: PropValue::ParamsVisibilityToggle(self.show_constraint_values),
+                                }];
+                                props.extend(scene
+                                    .named_parameters()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, p)| Property {
+                                        label: String::new(),
+                                        field: "named_parameter",
+                                        value: PropValue::ParamRow {
+                                            index,
+                                            name: p.name.clone(),
+                                            formula: p.source.clone(),
+                                            resolved: scene.named_parameters().resolve(&p.name).map_err(|e| e.to_string()),
+                                        },
+                                    }));
+                                props.push(Property {
+                                    label: String::new(),
+                                    field: "named_parameter_add",
+                                    value: PropValue::ParamAddRow,
+                                });
+                                props
+                            },
+                        },
                     ];
                     ui::PropertiesPanel {
                         title: t!("No selection").into_owned(),
@@ -3231,6 +3267,9 @@ fn make_sections_read_only(
             PropValue::EntityLink { handles, .. } => format!("{} entity link(s)", handles.len()),
             PropValue::ParamRow { name, formula, .. } => format!("{name} = {formula}"),
             PropValue::ParamAddRow => String::new(),
+            PropValue::ParamsVisibilityToggle(value) => {
+                if *value { t!("Shown") } else { t!("Hidden") }.into_owned()
+            }
         };
         property.field = "locked_read_only";
         property.value = PropValue::ReadOnly(text);

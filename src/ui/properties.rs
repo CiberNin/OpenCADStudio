@@ -872,6 +872,7 @@ impl PropertiesPanel {
                 self.render_param_row(*index, name, formula, resolved)
             }
             PropValue::ParamAddRow => render_param_add_row(),
+            PropValue::ParamsVisibilityToggle(value) => render_params_visibility_toggle_row(*value),
         }
     }
 
@@ -1971,6 +1972,43 @@ fn render_param_add_row<'a>() -> Element<'a, Message> {
         .padding([4, 8])
         .width(Length::Fill);
     container(btn).width(Length::Fill).into()
+}
+
+// ── Parameters section: leading global visibility toggle ───────────────────
+
+/// The Parameters section's leading header row (no-selection page): a
+/// global on/off toggle for whether any constraint pill in the viewport
+/// shows its driven value/parameter-name text — lives next to the
+/// named-parameter table it governs.
+fn render_params_visibility_toggle_row<'a>(value: bool) -> Element<'a, Message> {
+    let btn_label = if value { t!("Shown").into_owned() } else { t!("Hidden").into_owned() };
+    let btn = button(
+        row![
+            crate::ui::icons::semantic(crate::ui::icons::layer_visible(value), 13.0),
+            text(btn_label).size(FONT_SZ),
+        ]
+        .spacing(6)
+        .align_y(iced::Center),
+    )
+    .on_press(Message::ShowConstraintValuesChanged(!value))
+    .style(move |theme: &Theme, status| {
+        let palette = theme.palette();
+        let pair = match status {
+            button::Status::Hovered | button::Status::Pressed => palette.background.weak,
+            _ => palette.background.base,
+        };
+        button::Style {
+            background: Some(Background::Color(pair.color)),
+            border: Border { color: palette.background.neutral.color, width: 1.0, radius: 2.0.into() },
+            text_color: pair.text,
+            ..Default::default()
+        }
+    })
+    .padding([4, 8])
+    .width(Length::Fill);
+    container(row![text(t!("Show values").into_owned()).size(FONT_SZ).width(Length::Fill), btn].align_y(iced::Center))
+        .width(Length::Fill)
+        .into()
 }
 
 /// Build a label | widget property row.

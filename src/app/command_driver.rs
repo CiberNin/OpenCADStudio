@@ -7676,6 +7676,74 @@ mod sketch_constraint_undo_tests {
     }
 }
 
+/// The `PropParamInput`/`PropParamCommit`/`PropParamDelete`/`PropParamAddNew`
+/// handlers, `PropValue::ParamRow`/`ParamAddRow`/`ParamsVisibilityToggle`,
+/// and their render functions already existed — nothing built the
+/// Properties panel's "Parameters" section that would ever construct or
+/// route to them, so the whole inline add/rename/redefine/delete workflow
+/// was unreachable. These tests exercise it end to end now that the section
+/// is wired up in `refresh_properties`.
+#[cfg(test)]
+mod properties_panel_parameters_tests {
+    use super::*;
+
+    /// Finds a `PropValue::ParamRow`'s name across every rendered Properties
+    /// panel section — the panel is a rebuilt-on-demand snapshot
+    /// (`refresh_properties`), not a live view, so this only sees whatever
+    /// it was last rebuilt with.
+    fn param_row_names(app: &OpenCADStudio) -> Vec<String> {
+        app.tabs[app.active_tab]
+            .properties
+            .sections
+            .iter()
+            .flat_map(|s| &s.props)
+            .filter_map(|p| match &p.value {
+                crate::scene::model::object::PropValue::ParamRow { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn no_selection_page_shows_every_named_parameter() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.tabs[app.active_tab].scene.named_parameters_mut().set("hole_dia", "12");
+        app.refresh_properties();
+        assert_eq!(param_row_names(&app), vec!["hole_dia".to_string()]);
+    }
+
+    #[test]
+    fn add_rename_redefine_and_delete_a_parameter_through_the_panel() {
+        use crate::ui::window::named_parameters::ParamField;
+
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+
+        // Add: the first row is auto-named "param1", and the panel reflects
+        // it immediately (on_prop_param_add_new refreshes internally).
+        let _ = app.update(Message::PropParamAddNew);
+        assert_eq!(param_row_names(&app), vec!["param1".to_string()]);
+        let index = app.tabs[app.active_tab].scene.named_parameters().iter().position(|p| p.name == "param1").unwrap();
+
+        // Rename param1 -> hole_dia (commit-on-submit, not per keystroke).
+        let _ = app.update(Message::PropParamInput { index, field: ParamField::Name, value: "hole_dia".to_string() });
+        assert_eq!(param_row_names(&app), vec!["param1".to_string()], "typing alone must not commit");
+        let _ = app.update(Message::PropParamCommit { index, field: ParamField::Name });
+        assert_eq!(param_row_names(&app), vec!["hole_dia".to_string()]);
+
+        // Redefine its formula.
+        let _ = app.update(Message::PropParamInput { index, field: ParamField::Formula, value: "8".to_string() });
+        let _ = app.update(Message::PropParamCommit { index, field: ParamField::Formula });
+        assert_eq!(app.tabs[app.active_tab].scene.named_parameters().resolve("hole_dia"), Ok(8.0));
+
+        // Delete: gone from both the table and the panel.
+        let _ = app.update(Message::PropParamDelete(index));
+        assert!(!app.tabs[app.active_tab].scene.named_parameters().contains("hole_dia"));
+        assert!(param_row_names(&app).is_empty());
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod delobj_tests {
     use super::*;
