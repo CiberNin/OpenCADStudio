@@ -201,6 +201,97 @@ impl Default for Snapper {
     }
 }
 
+/// Inline stack-allocated collection for up to 16 in-range `WireModel` references,
+/// falling back to heap if an aperture contains more than 16 wires.
+/// Avoids heap allocations entirely on the interactive drafting and cursor hover paths.
+struct InRangeWires<'a> {
+    stack: [Option<&'a WireModel>; 16],
+    heap: Vec<&'a WireModel>,
+    count: usize,
+}
+
+impl<'a> InRangeWires<'a> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            stack: [None; 16],
+            heap: Vec::new(),
+            count: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, wire: &'a WireModel) {
+        if self.count < 16 {
+            self.stack[self.count] = Some(wire);
+        } else {
+            if self.heap.is_empty() {
+                self.heap.reserve(16);
+                for slot in &self.stack {
+                    if let Some(w) = slot {
+                        self.heap.push(*w);
+                    }
+                }
+            }
+            self.heap.push(wire);
+        }
+        self.count += 1;
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.count
+    }
+
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    #[inline(always)]
+    fn get(&self, idx: usize) -> Option<&'a WireModel> {
+        if idx >= self.count {
+            None
+        } else if self.count <= 16 {
+            self.stack[idx]
+        } else {
+            self.heap.get(idx).copied()
+        }
+    }
+
+    #[inline(always)]
+    fn iter(&self) -> InRangeWiresIter<'a, '_> {
+        InRangeWiresIter {
+            wires: self,
+            index: 0,
+        }
+    }
+}
+
+struct InRangeWiresIter<'a, 'b> {
+    wires: &'b InRangeWires<'a>,
+    index: usize,
+}
+
+impl<'a, 'b> Iterator for InRangeWiresIter<'a, 'b> {
+    type Item = &'a WireModel;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.wires.get(self.index)?;
+        self.index += 1;
+        Some(item)
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.wires.count.saturating_sub(self.index);
+        (remaining, Some(remaining))
+    }
+}
+
+impl<'a, 'b> ExactSizeIterator for InRangeWiresIter<'a, 'b> {}
+
 impl Snapper {
     /// True when snap is globally on AND at least one mode is configured.
     pub fn is_active(&self) -> bool {
@@ -1071,16 +1162,25 @@ impl Snapper {
         // cursor cell held ~1k wires / ~240k points → 15 s pre-gate.)
         const MAX_PAIRWISE_POINTS: usize = 3_000;
         let mut in_range_pts = 0usize;
-        if wires.segments().is_none() {
-            for w in wires.iter().filter(|w| wire_in_range(w)) {
-                in_range_pts += w.points.len();
-                if in_range_pts > MAX_PAIRWISE_POINTS {
-                    break;
+        let mut in_range_wires = InRangeWires::new();
+        let unindexed = wires.segments().is_none();
+        if unindexed {
+            for w in wires.iter() {
+                if wire_in_range(w) {
+                    in_range_pts += w.points.len();
+                    in_range_wires.push(w);
                 }
             }
         }
         let allow_unindexed_pairwise = in_range_pts <= MAX_PAIRWISE_POINTS;
         let local_segments = indexed_segments(wires);
+
+        // Early out: if no unindexed wires overlap the cursor aperture and
+        // no persistent tracking points exist, discrete/continuous object snaps
+        // cannot hit anything. Avoid running all subsequent pass setups and loops.
+        if unindexed && in_range_wires.is_empty() && self.tracking_points.is_empty() {
+            return best;
+        }
 
         let mut try_pt = |world: glam::DVec3, snap_type: SnapType| {
             let screen = world_to_screen(world, view_rot, eye, bounds);
@@ -1138,7 +1238,7 @@ impl Snapper {
                 try_snap_hint(world, hint);
             }
         } else {
-            for wire in wires.iter() {
+            for wire in in_range_wires.iter() {
                 for &(world, hint) in &wire.snap_pts {
                     try_snap_hint(world, hint);
                 }
@@ -1177,10 +1277,7 @@ impl Snapper {
                     }
                 }
             } else {
-                for wire in wires.iter() {
-                    if !wire_in_range(wire) {
-                        continue;
-                    }
+                for wire in in_range_wires.iter() {
                     if !wire.key_vertices.is_empty() {
                         for &point in &wire.key_vertices {
                             try_pt(DVec3::from_array(point), SnapType::Endpoint);
@@ -1226,7 +1323,7 @@ impl Snapper {
                     }
                 }
             } else {
-                for wire in wires.iter().filter(|wire| wire_in_range(wire)) {
+                for wire in in_range_wires.iter() {
                     for segment in wire.key_vertices.windows(2) {
                         let a = DVec3::from_array(segment[0]);
                         let b = DVec3::from_array(segment[1]);
@@ -1248,10 +1345,7 @@ impl Snapper {
                     );
                 }
             } else {
-                for wire in wires.iter() {
-                    if !wire_in_range(wire) {
-                        continue;
-                    }
+                for wire in in_range_wires.iter() {
                     for i in 0..wire.points.len().saturating_sub(1) {
                         let p =
                             nearest_on_segment(cursor_world, wp_f64(wire, i), wp_f64(wire, i + 1));
@@ -1272,10 +1366,7 @@ impl Snapper {
                         }
                     }
                 } else {
-                    for wire in wires.iter() {
-                        if !wire_in_range(wire) {
-                            continue;
-                        }
+                    for wire in in_range_wires.iter() {
                         for i in 0..wire.points.len().saturating_sub(1) {
                             if let Some(foot) = perp_foot(q, wp_f64(wire, i), wp_f64(wire, i + 1)) {
                                 try_pt(foot, SnapType::Perpendicular);
@@ -1301,7 +1392,7 @@ impl Snapper {
                     }
                 }
             } else {
-                for wire in wires.iter().filter(|wire| wire_in_range(wire)) {
+                for wire in in_range_wires.iter() {
                     for index in 0..wire.points.len().saturating_sub(1) {
                         if let Some(point) = ray_segment_intersect_3d(
                             origin,
@@ -1432,21 +1523,15 @@ impl Snapper {
                         }
                     }
                 }
-            } else {
-                for i in 0..wires.len() {
-                    let Some(wire_i) = wires.get(i) else {
+            } else if in_range_wires.len() >= 2 {
+                for i in 0..in_range_wires.len() {
+                    let Some(wire_i) = in_range_wires.get(i) else {
                         continue;
                     };
-                    if !wire_in_range(wire_i) {
-                        continue;
-                    }
-                    for j in (i + 1)..wires.len() {
-                        let Some(wire_j) = wires.get(j) else {
+                    for j in (i + 1)..in_range_wires.len() {
+                        let Some(wire_j) = in_range_wires.get(j) else {
                             continue;
                         };
-                        if !wire_in_range(wire_j) {
-                            continue;
-                        }
                         // Curved pairs are solved exactly (bug #1052); see
                         // `exact_curve_intersections`'s doc comment.
                         if let Some(pts) = exact_curve_intersections(wire_i, wire_j) {
@@ -1609,35 +1694,26 @@ impl Snapper {
                         }
                     }
                 }
-            } else {
-                let screen_pts: Vec<Option<Vec<Point>>> = wires
+            } else if in_range_wires.len() >= 2 {
+                let screen_pts: Vec<Vec<Point>> = in_range_wires
                     .iter()
                     .map(|w| {
-                        if !wire_in_range(w) {
-                            return None;
-                        }
-                        Some(
-                            (0..w.points.len())
-                                .map(|i| world_to_screen(wp_f64(w, i), view_rot, eye, bounds))
-                                .collect::<Vec<_>>(),
-                        )
+                        (0..w.points.len())
+                            .map(|i| world_to_screen(wp_f64(w, i), view_rot, eye, bounds))
+                            .collect()
                     })
                     .collect();
 
-                for i in 0..wires.len() {
-                    let Some(ref si) = screen_pts[i] else {
+                for i in 0..in_range_wires.len() {
+                    let Some(wire_i) = in_range_wires.get(i) else {
                         continue;
                     };
-                    let Some(wire_i) = wires.get(i) else {
-                        continue;
-                    };
-                    for j in (i + 1)..wires.len() {
-                        let Some(ref sj) = screen_pts[j] else {
+                    let si = &screen_pts[i];
+                    for j in (i + 1)..in_range_wires.len() {
+                        let Some(wire_j) = in_range_wires.get(j) else {
                             continue;
                         };
-                        let Some(wire_j) = wires.get(j) else {
-                            continue;
-                        };
+                        let sj = &screen_pts[j];
                         for ai in 0..wire_i.points.len().saturating_sub(1) {
                             let sa0 = si[ai];
                             let sa1 = si[ai + 1];
@@ -1663,7 +1739,7 @@ impl Snapper {
         // Operates directly on tangent_geoms geometry — independent of the
         // wire.points rendering structure so polyline segments work correctly.
         if self.is_on(SnapType::Tangent) {
-            for wire in wires.iter() {
+            let mut eval_tangent = |wire: &WireModel| {
                 for tg in &wire.tangent_geoms {
                     let (world_pt, d2) = match tg {
                         TangentGeom::Line { p1, p2 } => {
@@ -1874,6 +1950,18 @@ impl Snapper {
                         });
                     }
                 }
+            };
+
+            if unindexed {
+                for wire in in_range_wires.iter() {
+                    eval_tangent(wire);
+                }
+            } else {
+                for wire in wires.iter() {
+                    if wire_in_range(wire) {
+                        eval_tangent(wire);
+                    }
+                }
             }
         }
 
@@ -1953,7 +2041,7 @@ impl Snapper {
                     }
                 }
             } else {
-                for wire in wires.iter().filter(|wire| wire_in_range(wire)) {
+                for wire in in_range_wires.iter() {
                     let mut curve_d2 = f32::INFINITY;
                     for index in 0..wire.points.len().saturating_sub(1) {
                         let nearest = nearest_on_segment(
@@ -3454,6 +3542,146 @@ mod ext_tests {
         let points = exact_curve_intersections(&line, &circle).unwrap();
         assert_eq!(points.len(), 2);
         assert!(points.iter().all(|point| (point.x - origin).abs() == 3.0 && point.y == origin));
+    }
+
+    #[test]
+    fn test_unindexed_snap_endpoint_and_midpoint_accuracy() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enabled = [SnapType::Endpoint, SnapType::Midpoint].into_iter().collect();
+
+        let line = WireModel {
+            points: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            key_vertices: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            aabb: [0.0, 0.0, 100.0, 100.0],
+            tangent_geoms: vec![TangentGeom::Line { p1: [0.0, 0.0, 0.0], p2: [100.0, 100.0, 0.0] }],
+            ..Default::default()
+        };
+        let wires = vec![line];
+
+        let view_rot = Mat4::IDENTITY;
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        // Test Endpoint snap near (0, 0) with eye at (0, 0, 500)
+        let eye_origin = DVec3::new(0.0, 0.0, 500.0);
+        let cursor_world = DVec3::new(0.01, 0.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye_origin, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye_origin, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to endpoint");
+        assert_eq!(res.snap_type, SnapType::Endpoint);
+        assert_eq!(res.world, DVec3::new(0.0, 0.0, 0.0));
+
+        // Test Midpoint snap near (50, 50) with eye at (50, 50, 500)
+        let eye_mid = DVec3::new(50.0, 50.0, 500.0);
+        let cursor_world = DVec3::new(50.01, 50.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye_mid, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye_mid, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to midpoint");
+        assert_eq!(res.snap_type, SnapType::Midpoint);
+        assert_eq!(res.world, DVec3::new(50.0, 50.0, 0.0));
+    }
+
+    #[test]
+    fn test_unindexed_snap_empty_space_early_out() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enable_all();
+
+        let line = WireModel {
+            points: vec![[0.0, 0.0, 0.0], [10.0, 10.0, 0.0]],
+            key_vertices: vec![[0.0, 0.0, 0.0], [10.0, 10.0, 0.0]],
+            aabb: [0.0, 0.0, 10.0, 10.0],
+            ..Default::default()
+        };
+        let wires = vec![line];
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(500.0, 500.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        // Cursor in far whitespace (5000, 5000)
+        let cursor_world = DVec3::new(5000.0, 5000.0, 0.0);
+        let cursor_screen = Point::new(500.0, 500.0);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        );
+        assert!(res.is_none(), "whitespace cursor must return None");
+    }
+
+    #[test]
+    fn test_unindexed_snap_intersection_pair() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enabled = [SnapType::Intersection].into_iter().collect();
+
+        let line1 = WireModel {
+            points: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            key_vertices: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            aabb: [0.0, 0.0, 100.0, 100.0],
+            ..Default::default()
+        };
+        let line2 = WireModel {
+            points: vec![[0.0, 100.0, 0.0], [100.0, 0.0, 0.0]],
+            key_vertices: vec![[0.0, 100.0, 0.0], [100.0, 0.0, 0.0]],
+            aabb: [0.0, 0.0, 100.0, 100.0],
+            ..Default::default()
+        };
+        let wires = vec![line1, line2];
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(50.0, 50.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        // Cursor near intersection (50, 50)
+        let cursor_world = DVec3::new(50.01, 50.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to intersection");
+        assert_eq!(res.snap_type, SnapType::Intersection);
+        assert!((res.world - DVec3::new(50.0, 50.0, 0.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn test_unindexed_snap_dense_cluster_fallback() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enabled = [SnapType::Endpoint].into_iter().collect();
+
+        // Generate 25 lines passing through (0, 0) to force > 16 wires in aperture
+        let mut wires = Vec::new();
+        for i in 0..25 {
+            let angle = (i as f64) * 0.1;
+            let p1 = [0.0f32, 0.0, 0.0];
+            let p2 = [(angle.cos() * 50.0) as f32, (angle.sin() * 50.0) as f32, 0.0];
+            let p1_f64 = [0.0f64, 0.0, 0.0];
+            let p2_f64 = [angle.cos() * 50.0, angle.sin() * 50.0, 0.0];
+            wires.push(WireModel {
+                points: vec![p1, p2],
+                key_vertices: vec![p1_f64, p2_f64],
+                aabb: [p1[0].min(p2[0]), p1[1].min(p2[1]), p1[0].max(p2[0]), p1[1].max(p2[1])],
+                ..Default::default()
+            });
+        }
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(0.0, 0.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        let cursor_world = DVec3::new(0.01, 0.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to endpoint even with > 16 wires in aperture");
+        assert_eq!(res.snap_type, SnapType::Endpoint);
+        assert_eq!(res.world, DVec3::ZERO);
     }
 
 }
