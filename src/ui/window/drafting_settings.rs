@@ -1,22 +1,107 @@
 use crate::app::settings::IsoPlane;
 use crate::app::Message;
-use crate::snap::{Snapper, ALL_SNAP_MODES};
+use crate::snap::{SnapType, ALL_SNAP_MODES};
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, Space};
-use iced::{Element, Fill};
+use iced::{Background, Border, Element, Fill, Length, Theme};
+use std::borrow::Cow;
+
+/// Active tab in the Drafting Settings dialog.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum DraftingSettingsTab {
+    #[default]
+    SnapAndGrid,
+    PolarTracking,
+    ObjectSnap,
+    ObjectSnap3D,
+    DynamicInput,
+    QuickProperties,
+    SelectionCycling,
+}
+
+/// Working buffer of drafting settings edited in the dialog.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DraftingSettingsState {
+    pub active_tab: DraftingSettingsTab,
+    // Snap and Grid
+    pub snap_on: bool,
+    pub grid_on: bool,
+    pub isometric: bool,
+    pub iso_plane: IsoPlane,
+    pub snap_angle_deg: f32,
+    // Polar Tracking
+    pub polar_on: bool,
+    pub ortho_on: bool,
+    pub polar_increment_deg: f32,
+    // Object Snap
+    pub osnap_on: bool,
+    pub otrack_on: bool,
+    pub snap_modes: rustc_hash::FxHashSet<SnapType>,
+    // 3D Object Snap
+    pub osnap3d_on: bool,
+    // Dynamic Input
+    pub dyn_input_on: bool,
+    // Quick Properties
+    pub quick_props_on: bool,
+    // Selection Cycling
+    pub selection_cycling_on: bool,
+}
+
+impl DraftingSettingsState {
+    /// Check whether settings were modified compared to the saved snapshot.
+    /// Excludes `active_tab` so tab navigation does not mark the dialog dirty.
+    pub fn is_dirty(&self, saved: &Self) -> bool {
+        self.snap_on != saved.snap_on
+            || self.grid_on != saved.grid_on
+            || self.isometric != saved.isometric
+            || self.iso_plane != saved.iso_plane
+            || (self.snap_angle_deg - saved.snap_angle_deg).abs() > 0.001
+            || self.polar_on != saved.polar_on
+            || self.ortho_on != saved.ortho_on
+            || (self.polar_increment_deg - saved.polar_increment_deg).abs() > 0.001
+            || self.osnap_on != saved.osnap_on
+            || self.otrack_on != saved.otrack_on
+            || self.snap_modes != saved.snap_modes
+            || self.osnap3d_on != saved.osnap3d_on
+            || self.dyn_input_on != saved.dyn_input_on
+            || self.quick_props_on != saved.quick_props_on
+            || self.selection_cycling_on != saved.selection_cycling_on
+    }
+}
+
+/// Helper for grouped sub-panels with a light border and header title.
+fn group<'a>(title: impl Into<String>, body: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(
+        column![
+            text(title.into()).size(11).style(|theme: &Theme| text::Style {
+                color: Some(theme.palette().background.strongest.text.scale_alpha(0.75)),
+            }),
+            body.into(),
+        ]
+        .spacing(6),
+    )
+    .padding([8, 10])
+    .width(Fill)
+    .style(|theme: &Theme| container::Style {
+        border: Border {
+            width: 1.0,
+            radius: 4.0.into(),
+            color: theme.palette().background.strong.color,
+        },
+        ..Default::default()
+    })
+    .into()
+}
 
 pub fn view_window<'a>(
-    snapper: &'a Snapper,
-    grid: bool,
-    grid_snap: bool,
-    ortho: bool,
-    polar: bool,
-    otrack: bool,
-    isometric: bool,
-    iso_plane: IsoPlane,
-    snap_angle_deg: f32,
+    state: &'a DraftingSettingsState,
+    dirty: bool,
+    close_confirm: bool,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
-    let toggle = |value: bool, label: std::borrow::Cow<'a, str>, message: Message| {
+    let toggle = |value: bool, label: Cow<'a, str>, message: Message| {
         row![
             checkbox(value).on_toggle(move |_| message.clone()).size(15),
             text(label).size(12),
@@ -25,111 +110,569 @@ pub fn view_window<'a>(
         .align_y(iced::Center)
     };
 
-    let drafting_modes = column![
-        text(crate::t!("Drafting modes")).size(15),
-        Space::new().height(8),
-        toggle(grid, crate::t!("Grid display"), Message::ToggleGrid),
-        toggle(grid_snap, crate::t!("Grid snap"), Message::ToggleGridSnap),
-        toggle(ortho, crate::t!("Ortho"), Message::ToggleOrtho),
-        toggle(polar, crate::t!("Polar tracking"), Message::TogglePolar),
-        toggle(otrack, crate::t!("Object snap tracking"), Message::ToggleOTrack),
-    ]
-    .spacing(6);
+    // ── Tab Bar ──────────────────────────────────────────────────────────
+    let tab_button = |tab: DraftingSettingsTab, label: Cow<'a, str>| {
+        let is_active = state.active_tab == tab;
+        button(text(label).size(11.5))
+            .on_press(Message::DraftingSettingsTabChanged(tab))
+            .style(if is_active {
+                button::primary
+            } else {
+                button::secondary
+            })
+            .padding([5, 9])
+    };
 
-    let mut planes = row![].spacing(5);
-    for plane in IsoPlane::ALL {
-        planes = planes.push(
-            button(text(crate::t!(plane.label())).size(11))
-                .on_press(Message::SetIsoPlane(plane))
-                .style(if isometric && iso_plane == plane {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .padding([5, 12]),
+    let tab_bar = row![
+        tab_button(DraftingSettingsTab::SnapAndGrid, crate::t!("Snap and Grid")),
+        tab_button(DraftingSettingsTab::PolarTracking, crate::t!("Polar Tracking")),
+        tab_button(DraftingSettingsTab::ObjectSnap, crate::t!("Object Snap")),
+        tab_button(DraftingSettingsTab::ObjectSnap3D, crate::t!("3D Object Snap")),
+        tab_button(DraftingSettingsTab::DynamicInput, crate::t!("Dynamic Input")),
+        tab_button(DraftingSettingsTab::QuickProperties, crate::t!("Quick Properties")),
+        tab_button(DraftingSettingsTab::SelectionCycling, crate::t!("Selection Cycling")),
+    ]
+    .spacing(4)
+    .wrap();
+
+    // ── Tab 1: Snap and Grid ─────────────────────────────────────────────
+    let snap_and_grid_view = {
+        // Left Column: Snap settings
+        let snap_on_toggle = toggle(
+            state.snap_on,
+            crate::t!("Snap On (F9)"),
+            Message::DraftingSettingsToggleSnap,
         );
-    }
-    let isometric_controls = column![
-        text(crate::t!("Isometric drafting")).size(15),
-        Space::new().height(8),
-        toggle(
-            isometric,
-            crate::t!("Enable isometric drafting"),
-            Message::ToggleIsometricDrafting,
-        ),
-        planes,
-        text(crate::t!("F5 cycles Left, Top, and Right.")).size(11),
-        Space::new().height(6),
-        row![
-            text(crate::t!("Rotation: %{angle}°", angle = snap_angle_deg)).size(11),
-            button(text(crate::t!("Reset rotation")).size(10))
-                .on_press(Message::ResetDraftingRotation)
-                .style(button::secondary)
-                .padding([4, 10]),
+
+        let snap_spacing_group = group(
+            crate::t!("Snap spacing"),
+            column![
+                row![
+                    text(crate::t!("Snap X spacing:")).size(11).width(120),
+                    text("10.00").size(11),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                row![
+                    text(crate::t!("Snap Y spacing:")).size(11).width(120),
+                    text("10.00").size(11),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Equal X and Y spacing")).size(11),
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        let mut iso_planes = row![].spacing(4);
+        for plane in IsoPlane::ALL {
+            iso_planes = iso_planes.push(
+                button(text(crate::t!(plane.label())).size(11))
+                    .on_press(Message::DraftingSettingsSetIsoPlane(plane))
+                    .style(if state.isometric && state.iso_plane == plane {
+                        button::primary
+                    } else {
+                        button::secondary
+                    })
+                    .padding([4, 10]),
+            );
+        }
+
+        let snap_type_group = group(
+            crate::t!("Snap type"),
+            column![
+                toggle(
+                    state.isometric,
+                    crate::t!("Enable isometric drafting"),
+                    Message::DraftingSettingsToggleIsometric,
+                ),
+                iso_planes,
+                text(crate::t!("F5 cycles Left, Top, and Right.")).size(10.5),
+                Space::new().height(4),
+                row![
+                    text(crate::t!("Rotation: %{angle}°", angle = state.snap_angle_deg)).size(11),
+                    button(text(crate::t!("Reset rotation")).size(10))
+                        .on_press(Message::DraftingSettingsResetRotation)
+                        .style(button::secondary)
+                        .padding([3, 8]),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        let left_col = column![snap_on_toggle, snap_spacing_group, snap_type_group]
+            .spacing(10)
+            .width(Fill);
+
+        // Right Column: Grid settings
+        let grid_on_toggle = toggle(
+            state.grid_on,
+            crate::t!("Grid On (F7)"),
+            Message::DraftingSettingsToggleGrid,
+        );
+
+        let grid_spacing_group = group(
+            crate::t!("Grid spacing"),
+            column![
+                row![
+                    text(crate::t!("Grid X spacing:")).size(11).width(120),
+                    text("10.00").size(11),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                row![
+                    text(crate::t!("Grid Y spacing:")).size(11).width(120),
+                    text("10.00").size(11),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                row![
+                    text(crate::t!("Major line every:")).size(11).width(120),
+                    text("5").size(11),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        let grid_behavior_group = group(
+            crate::t!("Grid behavior"),
+            column![
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Adaptive grid")).size(11),
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Display grid beyond Limits")).size(11),
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        let right_col = column![grid_on_toggle, grid_spacing_group, grid_behavior_group]
+            .spacing(10)
+            .width(Fill);
+
+        row![left_col, right_col].spacing(16).width(Fill)
+    };
+
+    // ── Tab 2: Polar Tracking ────────────────────────────────────────────
+    let polar_tracking_view = {
+        let polar_on_toggle = toggle(
+            state.polar_on,
+            crate::t!("Polar Tracking On (F10)"),
+            Message::DraftingSettingsTogglePolar,
+        );
+
+        let ortho_on_toggle = toggle(
+            state.ortho_on,
+            crate::t!("Ortho mode (F8)"),
+            Message::DraftingSettingsToggleOrtho,
+        );
+
+        let polar_angle_group = group(
+            crate::t!("Polar Angle Settings"),
+            column![
+                row![
+                    text(crate::t!("Increment angle:")).size(11).width(130),
+                    text(format!("{:.1}°", state.polar_increment_deg)).size(11),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                text(crate::t!(
+                    "Polar Tracking guides cursor movement along specified angles. Ortho mode constrains movement to orthogonal axes."
+                ))
+                .size(10.5)
+                .style(|theme: &Theme| text::Style {
+                    color: Some(theme.palette().background.strongest.text.scale_alpha(0.7)),
+                }),
+            ]
+            .spacing(6),
+        );
+
+        column![
+            polar_on_toggle,
+            ortho_on_toggle,
+            Space::new().height(4),
+            polar_angle_group,
         ]
         .spacing(10)
-        .align_y(iced::Center),
-    ]
-    .spacing(7);
+        .width(Fill)
+    };
 
-    let mut snap_modes = column![
-        text(crate::t!("Object snap modes")).size(15),
-        Space::new().height(8),
-        toggle(
-            snapper.snap_enabled,
-            crate::t!("Enable object snap"),
-            Message::ToggleSnapEnabled,
-        ),
-        row![
-            button(text(crate::t!("Select All")).size(10))
-                .on_press(Message::SnapSelectAll)
+    // ── Tab 3: Object Snap ───────────────────────────────────────────────
+    let object_snap_view = {
+        let osnap_on_toggle = toggle(
+            state.osnap_on,
+            crate::t!("Object Snap On (F3)"),
+            Message::DraftingSettingsToggleOsnap,
+        );
+
+        let otrack_on_toggle = toggle(
+            state.otrack_on,
+            crate::t!("Object Snap Tracking On (F11)"),
+            Message::DraftingSettingsToggleOtrack,
+        );
+
+        let action_buttons = row![
+            button(text(crate::t!("Select All")).size(10.5))
+                .on_press(Message::DraftingSettingsSnapSelectAll)
                 .style(button::secondary)
                 .padding([4, 10]),
-            button(text(crate::t!("Clear All")).size(10))
-                .on_press(Message::SnapClearAll)
+            button(text(crate::t!("Clear All")).size(10.5))
+                .on_press(Message::DraftingSettingsSnapClearAll)
                 .style(button::secondary)
                 .padding([4, 10]),
         ]
-        .spacing(6),
-    ]
-    .spacing(5);
-    for &(snap_type, _, label) in ALL_SNAP_MODES {
-        snap_modes = snap_modes.push(
-            row![
-                checkbox(snapper.is_on(snap_type))
-                    .on_toggle(move |_| Message::ToggleSnap(snap_type))
-                    .size(14),
-                text(crate::t!(label)).size(11),
-            ]
-            .spacing(7)
-            .align_y(iced::Center),
-        );
-    }
+        .spacing(8);
 
-    let close = button(text(crate::tr!("action", "close")).size(12))
-        .on_press(Message::CloseModal)
-        .padding([6, 18])
-        .style(button::secondary);
-    let content = column![
-        drafting_modes,
-        Space::new().height(20),
-        isometric_controls,
-        Space::new().height(20),
-        snap_modes,
+        // Two columns of snap modes:
+        let total = ALL_SNAP_MODES.len();
+        let mid = (total + 1) / 2;
+        let (first_half, second_half) = ALL_SNAP_MODES.split_at(mid);
+
+        let mut col1 = column![].spacing(6).width(Fill);
+        for &(snap_type, _, label) in first_half {
+            let is_checked = state.snap_modes.contains(&snap_type);
+            col1 = col1.push(
+                row![
+                    checkbox(is_checked)
+                        .on_toggle(move |_| Message::DraftingSettingsToggleSnapMode(snap_type))
+                        .size(14),
+                    text(crate::t!(label)).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            );
+        }
+
+        let mut col2 = column![].spacing(6).width(Fill);
+        for &(snap_type, _, label) in second_half {
+            let is_checked = state.snap_modes.contains(&snap_type);
+            col2 = col2.push(
+                row![
+                    checkbox(is_checked)
+                        .on_toggle(move |_| Message::DraftingSettingsToggleSnapMode(snap_type))
+                        .size(14),
+                    text(crate::t!(label)).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            );
+        }
+
+        let snap_modes_group = group(
+            crate::t!("Object Snap modes"),
+            row![col1, col2].spacing(20).width(Fill),
+        );
+
+        column![
+            row![osnap_on_toggle, Space::new().width(24), otrack_on_toggle]
+                .align_y(iced::Center),
+            action_buttons,
+            Space::new().height(4),
+            snap_modes_group,
+        ]
+        .spacing(10)
+        .width(Fill)
+    };
+
+    // ── Tab 4: 3D Object Snap ────────────────────────────────────────────
+    let object_snap_3d_view = {
+        let osnap3d_toggle = toggle(
+            state.osnap3d_on,
+            crate::t!("3D Object Snap On (F4)"),
+            Message::DraftingSettingsToggle3dOsnap,
+        );
+
+        let placeholder_group = group(
+            crate::t!("3D Object Snap modes"),
+            column![
+                row![checkbox(false).size(14), text(crate::t!("Vertex")).size(11)]
+                    .spacing(7)
+                    .align_y(iced::Center),
+                row![
+                    checkbox(false).size(14),
+                    text(crate::t!("Midpoint on edge")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+                row![
+                    checkbox(false).size(14),
+                    text(crate::t!("Center of face")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+                row![checkbox(false).size(14), text(crate::t!("Knot")).size(11)]
+                    .spacing(7)
+                    .align_y(iced::Center),
+                row![
+                    checkbox(false).size(14),
+                    text(crate::t!("Perpendicular to face")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+                row![
+                    checkbox(false).size(14),
+                    text(crate::t!("Nearest to face")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        column![osnap3d_toggle, Space::new().height(4), placeholder_group]
+            .spacing(10)
+            .width(Fill)
+    };
+
+    // ── Tab 5: Dynamic Input ─────────────────────────────────────────────
+    let dynamic_input_view = {
+        let dyn_input_toggle = toggle(
+            state.dyn_input_on,
+            crate::t!("Enable Pointer Input (F12)"),
+            Message::DraftingSettingsToggleDynInput,
+        );
+
+        let pointer_group = group(
+            crate::t!("Pointer Input"),
+            column![
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Display coordinate input near crosshairs")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Enable dimension input fields")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        let prompt_group = group(
+            crate::t!("Dynamic Prompts"),
+            column![
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Show command prompting and command input near crosshairs"))
+                        .size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        column![
+            dyn_input_toggle,
+            Space::new().height(4),
+            pointer_group,
+            prompt_group,
+        ]
+        .spacing(10)
+        .width(Fill)
+    };
+
+    // ── Tab 6: Quick Properties ──────────────────────────────────────────
+    let quick_properties_view = {
+        let quick_props_toggle = toggle(
+            state.quick_props_on,
+            crate::t!("Display Quick Properties palette on selection"),
+            Message::DraftingSettingsToggleQuickProps,
+        );
+
+        let palette_group = group(
+            crate::t!("Palette Location"),
+            column![
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Cursor-dependent position")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+                row![
+                    checkbox(false).size(14),
+                    text(crate::t!("Static quadrant location")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        column![
+            quick_props_toggle,
+            Space::new().height(4),
+            palette_group,
+        ]
+        .spacing(10)
+        .width(Fill)
+    };
+
+    // ── Tab 7: Selection Cycling ─────────────────────────────────────────
+    let selection_cycling_view = {
+        let sel_cycling_toggle = toggle(
+            state.selection_cycling_on,
+            crate::t!("Allow selection cycling"),
+            Message::DraftingSettingsToggleSelCycling,
+        );
+
+        let cycling_group = group(
+            crate::t!("Display Selection Cycling List Box"),
+            column![
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Show cycling badge when objects overlap")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+                row![
+                    checkbox(true).size(14),
+                    text(crate::t!("Display selection candidate list box on click")).size(11),
+                ]
+                .spacing(7)
+                .align_y(iced::Center),
+            ]
+            .spacing(6),
+        );
+
+        column![
+            sel_cycling_toggle,
+            Space::new().height(4),
+            cycling_group,
+        ]
+        .spacing(10)
+        .width(Fill)
+    };
+
+    // ── Active Tab Content ───────────────────────────────────────────────
+    let tab_content: Element<'a, Message> = match state.active_tab {
+        DraftingSettingsTab::SnapAndGrid => snap_and_grid_view.into(),
+        DraftingSettingsTab::PolarTracking => polar_tracking_view.into(),
+        DraftingSettingsTab::ObjectSnap => object_snap_view.into(),
+        DraftingSettingsTab::ObjectSnap3D => object_snap_3d_view.into(),
+        DraftingSettingsTab::DynamicInput => dynamic_input_view.into(),
+        DraftingSettingsTab::QuickProperties => quick_properties_view.into(),
+        DraftingSettingsTab::SelectionCycling => selection_cycling_view.into(),
+    };
+
+    // ── Bottom Action Buttons ────────────────────────────────────────────
+    let ok_button = button(text(crate::t!("OK")).size(12))
+        .on_press(Message::DraftingSettingsOk)
+        .style(button::primary)
+        .padding([6, 18]);
+
+    let apply_button = button(text(crate::t!("Apply")).size(12))
+        .on_press_maybe(if dirty {
+            Some(Message::DraftingSettingsApply)
+        } else {
+            None
+        })
+        .style(if dirty {
+            button::secondary
+        } else {
+            button::text
+        })
+        .padding([6, 18]);
+
+    let close_button = button(text(crate::t!("Close")).size(12))
+        .on_press(Message::DraftingSettingsClose)
+        .style(button::secondary)
+        .padding([6, 18]);
+
+    let action_row = row![
+        Space::new().width(Fill),
+        ok_button,
+        apply_button,
+        close_button,
     ]
-    .width(sizing.width);
+    .spacing(8)
+    .align_y(iced::Center);
+
+    // ── Body Layout ──────────────────────────────────────────────────────
     let body = column![
-        scrollable(content).spacing(8).height(sizing.height),
+        tab_bar,
+        Space::new().height(10),
+        scrollable(tab_content).spacing(6).height(Fill),
         Space::new().height(12),
-        row![Space::new().width(Fill), close],
+        action_row,
     ]
     .width(sizing.width)
     .height(sizing.height);
 
-    container(body)
+    let main_content = container(body)
         .style(container::rounded_box)
-        .padding([16, 18])
+        .padding([14, 16])
         .width(sizing.width)
-        .height(sizing.height)
-        .into()
+        .height(sizing.height);
+
+    // ── Unsaved Changes Guard ────────────────────────────────────────────
+    if !close_confirm {
+        return main_content.into();
+    }
+
+    let shield = iced::widget::mouse_area(
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(
+                    theme
+                        .palette()
+                        .background
+                        .strongest
+                        .color
+                        .scale_alpha(0.55),
+                )),
+                ..Default::default()
+            }),
+    )
+    .on_press(Message::DraftingSettingsCloseKeep);
+
+    let warning_panel = container(
+        column![
+            text(crate::t!("Unsaved changes will be discarded.")).size(13.5),
+            Space::new().height(12),
+            row![
+                button(text(crate::t!("Discard && close")).size(12))
+                    .on_press(Message::DraftingSettingsCloseDiscard)
+                    .padding([5, 14])
+                    .style(button::danger),
+                button(text(crate::t!("Keep editing")).size(12))
+                    .on_press(Message::DraftingSettingsCloseKeep)
+                    .padding([5, 14])
+                    .style(button::secondary),
+            ]
+            .spacing(10),
+        ]
+        .spacing(0),
+    )
+    .padding([18, 22])
+    .style(container::rounded_box);
+
+    iced::widget::stack![
+        main_content,
+        shield,
+        container(warning_panel).center_x(Fill).center_y(Fill)
+    ]
+    .into()
 }
+

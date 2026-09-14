@@ -10,6 +10,7 @@ pub use automation::{export_headless, serve};
 mod command_driver;
 pub(crate) mod commands;
 mod document;
+mod drafting_settings;
 pub(crate) mod expr_eval;
 mod find_replace;
 pub(crate) mod helpers;
@@ -414,6 +415,9 @@ pub(super) struct OpenCADStudio {
     win_size: (f32, f32),
     snapper: Snapper,
     snap_popup_open: bool,
+    drafting_settings_state: Option<crate::ui::window::drafting_settings::DraftingSettingsState>,
+    drafting_settings_saved: Option<crate::ui::window::drafting_settings::DraftingSettingsState>,
+    drafting_settings_close_confirm: bool,
     scale_popup_open: bool,
     /// True while the polar-tracking angle picker is open.
     polar_popup_open: bool,
@@ -2609,6 +2613,29 @@ pub enum Message {
     SnapSelectAll,
     /// Disable all snap modes.
     SnapClearAll,
+    // ── Drafting Settings Dialog ──────────────────────────────────────────
+    DraftingSettingsTabChanged(crate::ui::window::drafting_settings::DraftingSettingsTab),
+    DraftingSettingsToggleGrid,
+    DraftingSettingsToggleSnap,
+    DraftingSettingsToggleIsometric,
+    DraftingSettingsSetIsoPlane(crate::app::settings::IsoPlane),
+    DraftingSettingsResetRotation,
+    DraftingSettingsTogglePolar,
+    DraftingSettingsToggleOrtho,
+    DraftingSettingsToggleOsnap,
+    DraftingSettingsToggleOtrack,
+    DraftingSettingsToggleSnapMode(crate::snap::SnapType),
+    DraftingSettingsSnapSelectAll,
+    DraftingSettingsSnapClearAll,
+    DraftingSettingsToggle3dOsnap,
+    DraftingSettingsToggleDynInput,
+    DraftingSettingsToggleQuickProps,
+    DraftingSettingsToggleSelCycling,
+    DraftingSettingsApply,
+    DraftingSettingsOk,
+    DraftingSettingsClose,
+    DraftingSettingsCloseDiscard,
+    DraftingSettingsCloseKeep,
     /// Toggle a ribbon dropdown open/closed.
     ToggleRibbonDropdown(String),
     /// Toggle a collapsed ribbon panel's flyout open/closed (by panel title).
@@ -3509,6 +3536,9 @@ impl OpenCADStudio {
             win_size: (1280.0, 720.0),
             snapper: Snapper::default(),
             snap_popup_open: false,
+            drafting_settings_state: None,
+            drafting_settings_saved: None,
+            drafting_settings_close_confirm: false,
             scale_popup_open: false,
             polar_popup_open: false,
             polar_custom_input: String::new(),

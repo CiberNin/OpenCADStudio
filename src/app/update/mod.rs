@@ -171,6 +171,9 @@ impl OpenCADStudio {
         }
         if self.active_modal == Some(DraftingSettings) {
             self.snap_popup_open = false;
+            self.drafting_settings_close_confirm = false;
+            self.drafting_settings_state = None;
+            self.drafting_settings_saved = None;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_modal == Some(FileInUse) {
@@ -4025,9 +4028,17 @@ impl OpenCADStudio {
             }
             Message::ToggleSnapPopup => {
                 if self.active_modal == Some(super::ModalKind::DraftingSettings) {
+                    if !self.drafting_settings_close_confirm && self.drafting_settings_dirty() {
+                        self.drafting_settings_close_confirm = true;
+                        return Task::none();
+                    }
                     self.close_active_modal();
                     self.snap_popup_open = false;
                 } else {
+                    let st = crate::ui::window::drafting_settings::DraftingSettingsState::from_app(self);
+                    self.drafting_settings_saved = Some(st.clone());
+                    self.drafting_settings_state = Some(st);
+                    self.drafting_settings_close_confirm = false;
                     self.active_modal = Some(super::ModalKind::DraftingSettings);
                     self.snap_popup_open = true;
                 }
@@ -4046,6 +4057,147 @@ impl OpenCADStudio {
             }
             Message::SnapClearAll => {
                 self.snapper.disable_all();
+                Task::none()
+            }
+
+            // ── Drafting Settings Dialog ──────────────────────────────────
+            Message::DraftingSettingsTabChanged(tab) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.active_tab = tab;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleGrid => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.grid_on = !state.grid_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleSnap => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.snap_on = !state.snap_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleIsometric => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.isometric = !state.isometric;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsSetIsoPlane(plane) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.isometric = true;
+                    state.iso_plane = plane;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsResetRotation => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.snap_angle_deg = 0.0;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsTogglePolar => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.polar_on = !state.polar_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleOrtho => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.ortho_on = !state.ortho_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleOsnap => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.osnap_on = !state.osnap_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleOtrack => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.otrack_on = !state.otrack_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleSnapMode(snap_type) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    if !state.snap_modes.remove(&snap_type) {
+                        state.snap_modes.insert(snap_type);
+                    }
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsSnapSelectAll => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    for &(snap_type, _, _) in crate::snap::ALL_SNAP_MODES {
+                        state.snap_modes.insert(snap_type);
+                    }
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsSnapClearAll => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.snap_modes.clear();
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggle3dOsnap => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.osnap3d_on = !state.osnap3d_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleDynInput => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.dyn_input_on = !state.dyn_input_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleQuickProps => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.quick_props_on = !state.quick_props_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleSelCycling => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.selection_cycling_on = !state.selection_cycling_on;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsApply => {
+                self.apply_drafting_settings();
+                self.drafting_settings_saved = self.drafting_settings_state.clone();
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+            Message::DraftingSettingsOk => {
+                self.apply_drafting_settings();
+                self.drafting_settings_saved = self.drafting_settings_state.clone();
+                self.drafting_settings_close_confirm = false;
+                self.persist_settings_if_changed();
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::DraftingSettingsClose => {
+                if !self.drafting_settings_close_confirm && self.drafting_settings_dirty() {
+                    self.drafting_settings_close_confirm = true;
+                    return Task::none();
+                }
+                self.drafting_settings_close_confirm = false;
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::DraftingSettingsCloseDiscard => {
+                self.drafting_settings_close_confirm = false;
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::DraftingSettingsCloseKeep => {
+                self.drafting_settings_close_confirm = false;
                 Task::none()
             }
 
@@ -6608,6 +6760,14 @@ impl OpenCADStudio {
                     return Task::none();
                 }
                 self.shortcut_close_confirm = false;
+                if self.active_modal == Some(super::ModalKind::DraftingSettings)
+                    && !self.drafting_settings_close_confirm
+                    && self.drafting_settings_dirty()
+                {
+                    self.drafting_settings_close_confirm = true;
+                    return Task::none();
+                }
+                self.drafting_settings_close_confirm = false;
                 let resume_open_queue = self.active_modal == Some(super::ModalKind::Recovery);
                 self.close_active_modal();
                 if resume_open_queue {
