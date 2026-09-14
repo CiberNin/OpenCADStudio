@@ -3431,6 +3431,26 @@ fn tessellate_dimension_inner(
             return wires;
         }
     }
+    if let Some((local, normal)) = linear_dimension_in_ocs(dim) {
+        let mut wires = tessellate_dimension_inner(
+            document,
+            handle,
+            &local,
+            selected,
+            entity_color,
+            line_weight_px,
+            anno_scale,
+            selected_set,
+            active_viewport,
+            bg_color,
+            None,
+            world_per_pixel,
+        );
+        for wire in &mut wires {
+            map_wire_ocs_to_wcs(wire, normal);
+        }
+        return wires;
+    }
     let name = handle.value().to_string();
     // (Baked-block fast path moved up into scene::tessellate_entity so the
     // recursive call goes through the LOD ladder, not the kernel path.)
@@ -5223,6 +5243,50 @@ pub(crate) fn large_radial_dimension_in_ocs(
     local.base.text_middle_point = on_plane(dimension.base.text_middle_point);
     local.base.insertion_point = on_plane(dimension.base.insertion_point);
     local.base.normal = Vector3::UNIT_Z;
+    Some((local, normal))
+}
+
+/// A linear or aligned dimension in a plane off world Z, moved into its own
+/// OCS. Their builders read the offset and extension directions in XY, so
+/// they draw it there and the result is mapped back onto the plane. `None`
+/// for a dimension in world XY or of another kind.
+pub(crate) fn linear_dimension_in_ocs(dimension: &Dimension) -> Option<(Dimension, Vector3)> {
+    let length = dimension.base().normal.length();
+    if !length.is_finite() || length <= 1.0e-12 {
+        return None;
+    }
+    let normal = dimension.base().normal / length;
+    if (normal - Vector3::UNIT_Z).length() <= 1.0e-12 {
+        return None;
+    }
+    let normal_tuple = (normal.x, normal.y, normal.z);
+    let to_ocs = |point: Vector3| {
+        let point = crate::scene::view::transform::wcs_point_to_ocs(
+            (point.x, point.y, point.z),
+            normal_tuple,
+        );
+        Vector3::new(point.0, point.1, point.2)
+    };
+    let mut local = dimension.clone();
+    match &mut local {
+        Dimension::Linear(d) => {
+            d.first_point = to_ocs(d.first_point);
+            d.second_point = to_ocs(d.second_point);
+            d.definition_point = to_ocs(d.definition_point);
+            d.base.definition_point = d.definition_point;
+            d.base.text_middle_point = to_ocs(d.base.text_middle_point);
+            d.base.normal = Vector3::UNIT_Z;
+        }
+        Dimension::Aligned(d) => {
+            d.first_point = to_ocs(d.first_point);
+            d.second_point = to_ocs(d.second_point);
+            d.definition_point = to_ocs(d.definition_point);
+            d.base.definition_point = d.definition_point;
+            d.base.text_middle_point = to_ocs(d.base.text_middle_point);
+            d.base.normal = Vector3::UNIT_Z;
+        }
+        _ => return None,
+    }
     Some((local, normal))
 }
 
@@ -7686,5 +7750,80 @@ mod linear_transform_tests {
             "definition point",
         );
         assert_measures_ten(&dim);
+    }
+
+    /// Every stroke point the dimension draws, with its low residual added.
+    fn stroke_points(dim: &Dimension) -> Vec<DVec3> {
+        let document = CadDocument::new();
+        let wires = dim.tessellate(
+            &document,
+            Handle::new(0x40),
+            false,
+            [1.0; 4],
+            1.0,
+            1.0,
+            &rustc_hash::FxHashSet::default(),
+            None,
+            [0.0, 0.0, 0.0, 1.0],
+            None,
+            None,
+        );
+        let mut points = Vec::new();
+        for wire in &wires {
+            for (index, high) in wire.points.iter().enumerate() {
+                if !high[0].is_finite() {
+                    continue;
+                }
+                let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
+                points.push(DVec3::new(
+                    high[0] as f64 + low[0] as f64,
+                    high[1] as f64 + low[1] as f64,
+                    high[2] as f64 + low[2] as f64,
+                ));
+            }
+        }
+        points
+    }
+
+    /// Turned 90° about X into the XZ plane, the dimension has to draw the
+    /// same strokes turned with it.
+    fn assert_draws_turned_with_its_plane(flat: Dimension) {
+        let turn = glam::DQuat::from_axis_angle(DVec3::X, FRAC_PI_2);
+        let expected: Vec<DVec3> = stroke_points(&flat).into_iter().map(|p| turn * p).collect();
+        assert!(!expected.is_empty(), "the dimension draws no strokes");
+        let mut turned = flat;
+        apply_transform(
+            &mut turned,
+            &EntityTransform::Rotate {
+                center: DVec3::ZERO,
+                axis: DVec3::X,
+                angle_rad: FRAC_PI_2,
+            },
+        );
+        let drawn = stroke_points(&turned);
+        assert_eq!(drawn.len(), expected.len(), "stroke point count");
+        for (index, (got, want)) in drawn.iter().zip(&expected).enumerate() {
+            assert!(
+                got.abs_diff_eq(*want, 1e-3),
+                "point {index}: expected {want:?}, got {got:?}"
+            );
+        }
+    }
+
+    /// A linear dimension in a working plane off world Z draws in that plane.
+    /// Its offset used to be read in world XY only, so once it ran along Z the
+    /// dimension line fell onto the measured points and the extension lines
+    /// stuck out along world Y.
+    #[test]
+    fn a_linear_dimension_off_world_z_draws_in_its_own_plane() {
+        assert_draws_turned_with_its_plane(horizontal());
+    }
+
+    /// An aligned dimension draws through the same builder and plane.
+    #[test]
+    fn an_aligned_dimension_off_world_z_draws_in_its_own_plane() {
+        let mut d = DimensionAligned::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(6.0, 8.0, 0.0));
+        d.definition_point = Vector3::new(2.0, 11.0, 0.0);
+        assert_draws_turned_with_its_plane(Dimension::Aligned(d));
     }
 }
