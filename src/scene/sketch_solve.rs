@@ -5,11 +5,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use acadrust::entities::EntityType;
-use acadrust::types::Handle;
+use acadrust::types::{Handle, Vector3};
 
 use cadkernel_constraints::constraints::angle_distance::L2LAngle;
 use cadkernel_constraints::constraints::circle_arc::{
     ArcLength, C2LDistance, P2CDistance, TangentCircumf,
+};
+use cadkernel_constraints::constraints::conic::{
+    EqualMajorAxesConic, PointOnEllipse, TangentEllipseLine,
 };
 use cadkernel_constraints::constraints::curve_generic::CurveValue;
 use cadkernel_constraints::constraints::point_line::{
@@ -18,7 +21,8 @@ use cadkernel_constraints::constraints::point_line::{
 };
 use cadkernel_constraints::constraints::Constraint;
 use cadkernel_constraints::geo::{
-    Arc as GArc, Circle as GCircle, Ellipse as GEllipse, Line as GLine, Point as GPoint,
+    Arc as GArc, Circle as GCircle, Conic as GConic, Ellipse as GEllipse, Line as GLine,
+    Point as GPoint,
 };
 use cadkernel_constraints::solvers::dogleg::solve_dl;
 use cadkernel_constraints::system::System;
@@ -31,22 +35,22 @@ use super::{ChangeKind, Scene};
 
 /// One referenced entity's geometry, registered into an `cadkernel_constraints::System`'s
 /// parameter store.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum EntityGeom {
+    Point(GPoint),
     Line(GLine),
+    Polyline {
+        points: Rc<Vec<GPoint>>,
+        straight: Rc<Vec<bool>>,
+        closed: bool,
+    },
     Circle(GCircle),
     /// Full `geo::Arc` — center/radius (via `.circle`), `start_angle`/
     /// `end_angle`, and real `start`/`end` points kept consistent with
     /// those by the arc-rules `CurveValue` constraints `solve_scope` adds
     /// for every registered arc. See this module's doc comment.
     Arc(GArc),
-    /// Center-and-shape support only — see `register_entity`'s `Ellipse`
-    /// arm for the acadrust-to-`cadkernel_constraints` parametrization conversion, the
-    /// ellipse-rules `Difference` constraints `solve_scope` adds for every
-    /// registered ellipse to keep `focus1` translating rigidly with
-    /// `center` (this module's doc comment), and that same doc comment for
-    /// what isn't wired up yet (major/minor axis dimensional constraints,
-    /// `PointOnEllipse`-based Coincident/Tangent).
+    /// See `register_entity` for the entity-to-kernel parametrization.
     Ellipse(GEllipse),
 }
 
@@ -57,8 +61,12 @@ impl EntityGeom {
     /// read side).
     fn point_for_marker(&self, marker: i32) -> Option<GPoint> {
         match (self, marker) {
+            (EntityGeom::Point(point), 0) => Some(*point),
             (EntityGeom::Line(l), 0) => Some(l.p1),
             (EntityGeom::Line(l), 1) => Some(l.p2),
+            (EntityGeom::Polyline { points, .. }, marker) if marker >= 0 => {
+                points.get(marker as usize).copied()
+            }
             (EntityGeom::Circle(c), -3) => Some(c.center),
             (EntityGeom::Arc(a), 0) => Some(a.start),
             (EntityGeom::Arc(a), 1) => Some(a.end),
@@ -66,6 +74,29 @@ impl EntityGeom {
             (EntityGeom::Ellipse(e), -3) => Some(e.center),
             _ => None,
         }
+    }
+
+    fn line_segment(&self, index: usize) -> Option<GLine> {
+        let EntityGeom::Polyline {
+            points,
+            straight,
+            closed,
+        } = self
+        else {
+            return None;
+        };
+        if !straight.get(index).copied().unwrap_or(false) {
+            return None;
+        }
+        let p1 = *points.get(index)?;
+        let p2 = if index + 1 < points.len() {
+            points[index + 1]
+        } else if *closed {
+            *points.first()?
+        } else {
+            return None;
+        };
+        Some(GLine { p1, p2 })
     }
 }
 
@@ -76,15 +107,22 @@ impl EntityGeom {
 enum CircleOrLine {
     Circle(GCircle),
     Line(GLine),
+    Ellipse(GEllipse),
     Other,
 }
 
-fn as_circle_or_line(g: EntityGeom) -> CircleOrLine {
+fn as_circle_or_line(g: EntityGeom, reference: SketchRef) -> CircleOrLine {
     match g {
         EntityGeom::Circle(c) => CircleOrLine::Circle(c),
         EntityGeom::Arc(a) => CircleOrLine::Circle(a.circle),
         EntityGeom::Line(l) => CircleOrLine::Line(l),
-        EntityGeom::Ellipse(_) => CircleOrLine::Other,
+        EntityGeom::Ellipse(ellipse) => CircleOrLine::Ellipse(ellipse),
+        EntityGeom::Point(_) => CircleOrLine::Other,
+        EntityGeom::Polyline { .. } => reference
+            .segment_index()
+            .and_then(|index| g.line_segment(index))
+            .map(CircleOrLine::Line)
+            .unwrap_or(CircleOrLine::Other),
     }
 }
 
@@ -103,7 +141,72 @@ fn register_entity(
     sys: &mut System,
     handle: Handle,
 ) -> Option<EntityGeom> {
-    match document.get_entity(handle)? {
+    let entity = document.get_entity(handle)?;
+    match entity {
+        EntityType::Point(point) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(point.location.x, false),
+            sys.add_param(point.location.y, false),
+        ))),
+        EntityType::Insert(insert) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(insert.insert_point.x, false),
+            sys.add_param(insert.insert_point.y, false),
+        ))),
+        EntityType::Text(text) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(text.insertion_point.x, false),
+            sys.add_param(text.insertion_point.y, false),
+        ))),
+        EntityType::MText(text) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(text.insertion_point.x, false),
+            sys.add_param(text.insertion_point.y, false),
+        ))),
+        EntityType::AttributeDefinition(attribute) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(attribute.insertion_point.x, false),
+            sys.add_param(attribute.insertion_point.y, false),
+        ))),
+        EntityType::AttributeEntity(attribute) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(attribute.insertion_point.x, false),
+            sys.add_param(attribute.insertion_point.y, false),
+        ))),
+        EntityType::Table(table) => Some(EntityGeom::Point(GPoint::new(
+            sys.add_param(table.insertion_point.x, false),
+            sys.add_param(table.insertion_point.y, false),
+        ))),
+        EntityType::LwPolyline(polyline) => Some(EntityGeom::Polyline {
+            points: Rc::new(
+                super::dimension_assoc::source_points(entity)
+                    .into_iter()
+                    .map(|point| {
+                        GPoint::new(sys.add_param(point.x, false), sys.add_param(point.y, false))
+                    })
+                    .collect(),
+            ),
+            straight: Rc::new(
+                polyline
+                    .vertices
+                    .iter()
+                    .map(|vertex| vertex.bulge.abs() <= 1e-9)
+                    .collect(),
+            ),
+            closed: polyline.is_closed,
+        }),
+        EntityType::Polyline2D(polyline) => Some(EntityGeom::Polyline {
+            points: Rc::new(
+                super::dimension_assoc::source_points(entity)
+                    .into_iter()
+                    .map(|point| {
+                        GPoint::new(sys.add_param(point.x, false), sys.add_param(point.y, false))
+                    })
+                    .collect(),
+            ),
+            straight: Rc::new(
+                polyline
+                    .vertices
+                    .iter()
+                    .map(|vertex| vertex.bulge.abs() <= 1e-9)
+                    .collect(),
+            ),
+            closed: polyline.is_closed(),
+        }),
         EntityType::Line(l) => {
             let p1 = GPoint::new(
                 sys.add_param(l.start.x, false),
@@ -202,11 +305,11 @@ fn resolve_ref(
     cache: &mut HashMap<Handle, EntityGeom>,
     r: SketchRef,
 ) -> Option<EntityGeom> {
-    if let Some(&geometry) = cache.get(&r.entity) {
-        return Some(geometry);
+    if let Some(geometry) = cache.get(&r.entity) {
+        return Some(geometry.clone());
     }
     let geometry = register_entity(document, sys, r.entity)?;
-    cache.insert(r.entity, geometry);
+    cache.insert(r.entity, geometry.clone());
     Some(geometry)
 }
 
@@ -221,6 +324,17 @@ fn is_world_z(normal: acadrust::types::Vector3) -> bool {
 /// Returns the world-XY plane elevation supported by the current 2D bridge.
 fn entity_plane_z(entity: &EntityType) -> Option<f64> {
     let z = match entity {
+        EntityType::Point(point) if is_world_z(point.normal) => point.location.z,
+        EntityType::Insert(insert) if is_world_z(insert.normal) => insert.insert_point.z,
+        EntityType::Text(text) if is_world_z(text.normal) => text.insertion_point.z,
+        EntityType::MText(text) if is_world_z(text.normal) => text.insertion_point.z,
+        EntityType::AttributeDefinition(attribute) if is_world_z(attribute.normal) => {
+            attribute.insertion_point.z
+        }
+        EntityType::AttributeEntity(attribute) if is_world_z(attribute.normal) => {
+            attribute.insertion_point.z
+        }
+        EntityType::Table(table) if is_world_z(table.normal) => table.insertion_point.z,
         EntityType::Line(line)
             if is_world_z(line.normal) && (line.start.z - line.end.z).abs() <= PLANE_EPS =>
         {
@@ -330,11 +444,13 @@ fn build_constraint(
         return Vec::new();
     }
 
-    let whole_line = |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| match resolve_ref(
-        document, sys, cache, r,
-    )? {
-        EntityGeom::Line(l) => Some(l),
-        EntityGeom::Circle(_) | EntityGeom::Arc(_) | EntityGeom::Ellipse(_) => None,
+    let whole_line = |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| {
+        let geometry = resolve_ref(document, sys, cache, r)?;
+        match geometry {
+            EntityGeom::Line(line) => Some(line),
+            EntityGeom::Polyline { .. } => geometry.line_segment(r.segment_index()?),
+            _ => None,
+        }
     };
     let whole_circle =
         |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| match resolve_ref(
@@ -342,7 +458,10 @@ fn build_constraint(
         )? {
             EntityGeom::Circle(circ) => Some(circ),
             EntityGeom::Arc(a) => Some(a.circle),
-            EntityGeom::Line(_) | EntityGeom::Ellipse(_) => None,
+            EntityGeom::Point(_)
+            | EntityGeom::Line(_)
+            | EntityGeom::Polyline { .. }
+            | EntityGeom::Ellipse(_) => None,
         };
     let point_ref = |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| {
         let marker = r.marker?;
@@ -371,24 +490,30 @@ fn build_constraint(
         ConstraintKind::Coincident | ConstraintKind::Concentric | ConstraintKind::CenterPoint => {
             point_pair_equal(sys, cache, &c.refs)
         }
-        ConstraintKind::Horizontal => {
-            let Some(r) = c.refs.first() else {
-                return Vec::new();
-            };
-            let Some(l) = whole_line(sys, cache, *r) else {
-                return Vec::new();
-            };
-            vec![Rc::new(Equal::new(l.p1.y, l.p2.y, 1.0))]
-        }
-        ConstraintKind::Vertical => {
-            let Some(r) = c.refs.first() else {
-                return Vec::new();
-            };
-            let Some(l) = whole_line(sys, cache, *r) else {
-                return Vec::new();
-            };
-            vec![Rc::new(Equal::new(l.p1.x, l.p2.x, 1.0))]
-        }
+        ConstraintKind::Horizontal => match c.refs.as_slice() {
+            [r] => whole_line(sys, cache, *r)
+                .map(|line| {
+                    vec![Rc::new(Equal::new(line.p1.y, line.p2.y, 1.0)) as Rc<dyn Constraint>]
+                })
+                .unwrap_or_default(),
+            [a, b] => match (point_ref(sys, cache, *a), point_ref(sys, cache, *b)) {
+                (Some(a), Some(b)) => vec![Rc::new(Equal::new(a.y, b.y, 1.0))],
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        },
+        ConstraintKind::Vertical => match c.refs.as_slice() {
+            [r] => whole_line(sys, cache, *r)
+                .map(|line| {
+                    vec![Rc::new(Equal::new(line.p1.x, line.p2.x, 1.0)) as Rc<dyn Constraint>]
+                })
+                .unwrap_or_default(),
+            [a, b] => match (point_ref(sys, cache, *a), point_ref(sys, cache, *b)) {
+                (Some(a), Some(b)) => vec![Rc::new(Equal::new(a.x, b.x, 1.0))],
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        },
         ConstraintKind::Parallel => {
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
@@ -421,6 +546,15 @@ fn build_constraint(
             };
             if let (Some(la), Some(lb)) = (whole_line(sys, cache, *a), whole_line(sys, cache, *b)) {
                 return vec![Rc::new(EqualLineLength::new(lb, la))];
+            }
+            if let (Some(EntityGeom::Ellipse(a)), Some(EntityGeom::Ellipse(b))) = (
+                resolve_ref(document, sys, cache, *a),
+                resolve_ref(document, sys, cache, *b),
+            ) {
+                return vec![Rc::new(EqualMajorAxesConic::new(
+                    GConic::Ellipse(a),
+                    GConic::Ellipse(b),
+                ))];
             }
             let (Some(ca), Some(cb)) = (whole_circle(sys, cache, *a), whole_circle(sys, cache, *b))
             else {
@@ -507,10 +641,15 @@ fn build_constraint(
                     let zero = sys.add_param(0.0, true);
                     vec![Rc::new(P2CDistance::new(a.circle, p, zero))]
                 }
-                // `PointOnEllipse` (`cadkernel_constraints::constraints::conic`) isn't
-                // wired up yet — deliberately deferred alongside
-                // ellipse-tangency, same as this module's doc comment.
-                EntityGeom::Ellipse(_) => Vec::new(),
+                EntityGeom::Ellipse(ellipse) => {
+                    vec![Rc::new(PointOnEllipse::new(p, ellipse))]
+                }
+                EntityGeom::Polyline { .. } => b
+                    .segment_index()
+                    .and_then(|index| geom.line_segment(index))
+                    .map(|line| vec![Rc::new(PointOnLine::new(p, line)) as Rc<dyn Constraint>])
+                    .unwrap_or_default(),
+                EntityGeom::Point(_) => Vec::new(),
             }
         }
         ConstraintKind::Symmetric => {
@@ -534,10 +673,73 @@ fn build_constraint(
             let Some(r) = c.refs.first() else {
                 return Vec::new();
             };
+            if r.segment_index().is_some() {
+                let Some(line) = whole_line(sys, cache, *r) else {
+                    return Vec::new();
+                };
+                let (x1, y1, x2, y2) = {
+                    let store = sys.store();
+                    (
+                        store.get(line.p1.x),
+                        store.get(line.p1.y),
+                        store.get(line.p2.x),
+                        store.get(line.p2.y),
+                    )
+                };
+                return vec![
+                    Rc::new(Equal::new(line.p1.x, sys.add_param(x1, true), 1.0)),
+                    Rc::new(Equal::new(line.p1.y, sys.add_param(y1, true), 1.0)),
+                    Rc::new(Equal::new(line.p2.x, sys.add_param(x2, true), 1.0)),
+                    Rc::new(Equal::new(line.p2.y, sys.add_param(y2, true), 1.0)),
+                ];
+            }
+            if r.marker.is_some() {
+                let Some(point) = point_ref(sys, cache, *r) else {
+                    return Vec::new();
+                };
+                let (x, y) = {
+                    let store = sys.store();
+                    (store.get(point.x), store.get(point.y))
+                };
+                return vec![
+                    Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0)),
+                    Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0)),
+                ];
+            }
             let Some(geom) = resolve_ref(document, sys, cache, *r) else {
                 return Vec::new();
             };
             match geom {
+                EntityGeom::Point(point) => {
+                    let (x, y) = {
+                        let store = sys.store();
+                        (store.get(point.x), store.get(point.y))
+                    };
+                    vec![
+                        Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0)),
+                        Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0)),
+                    ]
+                }
+                EntityGeom::Polyline { points, .. } => {
+                    let values: Vec<_> = points
+                        .iter()
+                        .map(|point| {
+                            let store = sys.store();
+                            (point, store.get(point.x), store.get(point.y))
+                        })
+                        .collect();
+                    values
+                        .into_iter()
+                        .flat_map(|(point, x, y)| {
+                            [
+                                Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0))
+                                    as Rc<dyn Constraint>,
+                                Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0))
+                                    as Rc<dyn Constraint>,
+                            ]
+                        })
+                        .collect()
+                }
                 EntityGeom::Line(l) => {
                     let (x1, y1, x2, y2) = {
                         let store = sys.store();
@@ -724,7 +926,7 @@ fn build_constraint(
             // for tangency math — normalize both refs down first so the
             // match below doesn't need every Circle/Arc combination
             // written out separately.
-            match (as_circle_or_line(ga), as_circle_or_line(gb)) {
+            match (as_circle_or_line(ga, *a), as_circle_or_line(gb, *b)) {
                 (CircleOrLine::Circle(c1), CircleOrLine::Circle(c2)) => {
                     let store = sys.store();
                     let (x1, y1, r1) = (
@@ -765,9 +967,10 @@ fn build_constraint(
                     let zero = sys.add_param(0.0, true);
                     vec![Rc::new(C2LDistance::new(circ, line, zero, ccw, false))]
                 }
-                // Line-Line tangency has no meaning; either side being an
-                // Ellipse falls here too (`PointOnEllipse`/tangency isn't
-                // wired up yet).
+                (CircleOrLine::Ellipse(ellipse), CircleOrLine::Line(line))
+                | (CircleOrLine::Line(line), CircleOrLine::Ellipse(ellipse)) => {
+                    vec![Rc::new(TangentEllipseLine::new(line, ellipse))]
+                }
                 _ => Vec::new(),
             }
         }
@@ -788,7 +991,7 @@ fn build_constraint(
             ) else {
                 return Vec::new();
             };
-            match (as_circle_or_line(ga), as_circle_or_line(gb)) {
+            match (as_circle_or_line(ga, *a), as_circle_or_line(gb, *b)) {
                 (CircleOrLine::Circle(circ), CircleOrLine::Line(line))
                 | (CircleOrLine::Line(line), CircleOrLine::Circle(circ)) => {
                     vec![Rc::new(PointOnLine::new(circ.center, line))]
@@ -1031,7 +1234,9 @@ fn solve_scope(
     let total_free: usize = cache
         .values()
         .map(|g| match g {
+            EntityGeom::Point(_) => 2,
             EntityGeom::Line(_) => 4,
+            EntityGeom::Polyline { points, .. } => points.len() * 2,
             EntityGeom::Circle(_) => 3,
             // Raw param count (center×2, rad, start×2, end×2, both
             // angles) — same "raw, not netted against its own
@@ -1077,6 +1282,98 @@ fn solve_scope(
             continue;
         };
         match (entity, geom) {
+            (EntityType::Point(point), EntityGeom::Point(geometry)) => {
+                let x = store.get(geometry.x);
+                let y = store.get(geometry.y);
+                if (x - point.location.x).abs() > MOVE_EPS
+                    || (y - point.location.y).abs() > MOVE_EPS
+                {
+                    let mut updated = point.clone();
+                    updated.location.x = x;
+                    updated.location.y = y;
+                    results.push((handle, EntityType::Point(updated)));
+                }
+            }
+            (EntityType::Insert(insert), EntityGeom::Point(geometry)) => {
+                let mut updated = insert.clone();
+                let next = Vector3::new(
+                    store.get(geometry.x),
+                    store.get(geometry.y),
+                    insert.insert_point.z,
+                );
+                if (next - insert.insert_point).length() > MOVE_EPS {
+                    updated.insert_point = next;
+                    results.push((handle, EntityType::Insert(updated)));
+                }
+            }
+            (EntityType::Text(text), EntityGeom::Point(geometry)) => {
+                let mut updated = text.clone();
+                let next = Vector3::new(
+                    store.get(geometry.x),
+                    store.get(geometry.y),
+                    text.insertion_point.z,
+                );
+                let delta = next - text.insertion_point;
+                if delta.length() > MOVE_EPS {
+                    updated.insertion_point = next;
+                    if let Some(alignment) = &mut updated.alignment_point {
+                        *alignment = *alignment + delta;
+                    }
+                    results.push((handle, EntityType::Text(updated)));
+                }
+            }
+            (EntityType::MText(text), EntityGeom::Point(geometry)) => {
+                let mut updated = text.clone();
+                let next = Vector3::new(
+                    store.get(geometry.x),
+                    store.get(geometry.y),
+                    text.insertion_point.z,
+                );
+                if (next - text.insertion_point).length() > MOVE_EPS {
+                    updated.insertion_point = next;
+                    results.push((handle, EntityType::MText(updated)));
+                }
+            }
+            (EntityType::AttributeDefinition(attribute), EntityGeom::Point(geometry)) => {
+                let mut updated = attribute.clone();
+                let next = Vector3::new(
+                    store.get(geometry.x),
+                    store.get(geometry.y),
+                    attribute.insertion_point.z,
+                );
+                let delta = next - attribute.insertion_point;
+                if delta.length() > MOVE_EPS {
+                    updated.insertion_point = next;
+                    updated.alignment_point = updated.alignment_point + delta;
+                    results.push((handle, EntityType::AttributeDefinition(updated)));
+                }
+            }
+            (EntityType::AttributeEntity(attribute), EntityGeom::Point(geometry)) => {
+                let mut updated = attribute.clone();
+                let next = Vector3::new(
+                    store.get(geometry.x),
+                    store.get(geometry.y),
+                    attribute.insertion_point.z,
+                );
+                let delta = next - attribute.insertion_point;
+                if delta.length() > MOVE_EPS {
+                    updated.insertion_point = next;
+                    updated.alignment_point = updated.alignment_point + delta;
+                    results.push((handle, EntityType::AttributeEntity(updated)));
+                }
+            }
+            (EntityType::Table(table), EntityGeom::Point(geometry)) => {
+                let mut updated = table.clone();
+                let next = Vector3::new(
+                    store.get(geometry.x),
+                    store.get(geometry.y),
+                    table.insertion_point.z,
+                );
+                if (next - table.insertion_point).length() > MOVE_EPS {
+                    updated.insertion_point = next;
+                    results.push((handle, EntityType::Table(updated)));
+                }
+            }
             (EntityType::Line(l), EntityGeom::Line(g)) => {
                 let (x1, y1, x2, y2) = (
                     store.get(g.p1.x),
@@ -1095,6 +1392,42 @@ fn solve_scope(
                     updated.end.x = x2;
                     updated.end.y = y2;
                     results.push((handle, EntityType::Line(updated)));
+                }
+            }
+            (EntityType::LwPolyline(polyline), EntityGeom::Polyline { points, .. }) => {
+                let mut updated = polyline.clone();
+                let mut changed = false;
+                for (vertex, point) in updated.vertices.iter_mut().zip(points.iter()) {
+                    let x = store.get(point.x);
+                    let y = store.get(point.y);
+                    if (x - vertex.location.x).abs() > MOVE_EPS
+                        || (y - vertex.location.y).abs() > MOVE_EPS
+                    {
+                        vertex.location.x = x;
+                        vertex.location.y = y;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    results.push((handle, EntityType::LwPolyline(updated)));
+                }
+            }
+            (EntityType::Polyline2D(polyline), EntityGeom::Polyline { points, .. }) => {
+                let mut updated = polyline.clone();
+                let mut changed = false;
+                for (vertex, point) in updated.vertices.iter_mut().zip(points.iter()) {
+                    let x = store.get(point.x);
+                    let y = store.get(point.y);
+                    if (x - vertex.location.x).abs() > MOVE_EPS
+                        || (y - vertex.location.y).abs() > MOVE_EPS
+                    {
+                        vertex.location.x = x;
+                        vertex.location.y = y;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    results.push((handle, EntityType::Polyline2D(updated)));
                 }
             }
             (EntityType::Circle(c), EntityGeom::Circle(g)) => {
@@ -1671,11 +2004,9 @@ mod tests {
             panic!("expected spline");
         };
         let curve = crate::entities::spline::nurbs3(spline).unwrap();
-        let jet = cadkernel::space::CurveJet::from_nurbs(
-            &curve,
-            cadkernel::space::SplineEnd::Start,
-        )
-        .unwrap();
+        let jet =
+            cadkernel::space::CurveJet::from_nurbs(&curve, cadkernel::space::SplineEnd::Start)
+                .unwrap();
         assert!((jet.point[0] - 0.0).abs() < 1e-9);
         assert!((jet.point[1] - 1.0).abs() < 1e-9);
         assert!(jet.tangent[1].abs() < 1e-9, "jet={jet:?}");

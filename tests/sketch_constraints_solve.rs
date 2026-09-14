@@ -128,6 +128,77 @@ fn horizontal_constraint_levels_the_line_when_an_endpoint_moves() {
 }
 
 #[test]
+fn horizontal_constraint_levels_a_polyline_segment() {
+    let mut scene = Scene::new();
+    let polyline = scene.add_entity(EntityType::LwPolyline(
+        acadrust::entities::LwPolyline::from_points(vec![
+            acadrust::types::Vector2::new(0.0, 0.0),
+            acadrust::types::Vector2::new(5.0, 2.0),
+            acadrust::types::Vector2::new(10.0, 7.0),
+        ]),
+    ));
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Horizontal,
+            vec![SketchRef::segment(polyline, 1)],
+            None,
+        );
+
+    scene.bump_entities(&[(polyline, ChangeKind::Modified)]);
+    let EntityType::LwPolyline(polyline) = scene.document.get_entity(polyline).unwrap() else {
+        panic!("expected a lightweight polyline");
+    };
+    assert!(
+        (polyline.vertices[1].location.y - polyline.vertices[2].location.y).abs() < 1e-6,
+        "the selected segment should be horizontal"
+    );
+}
+
+#[test]
+fn horizontal_constraint_does_not_flatten_a_polyline_arc_segment() {
+    let mut source = acadrust::entities::LwPolyline::new();
+    source.add_point_with_bulge(acadrust::types::Vector2::new(0.0, 0.0), 0.5);
+    source.add_point(acadrust::types::Vector2::new(5.0, 2.0));
+    let mut scene = Scene::new();
+    let polyline = scene.add_entity(EntityType::LwPolyline(source));
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Horizontal,
+            vec![SketchRef::segment(polyline, 0)],
+            None,
+        );
+
+    scene.bump_entities(&[(polyline, ChangeKind::Modified)]);
+    let EntityType::LwPolyline(polyline) = scene.document.get_entity(polyline).unwrap() else {
+        panic!("expected a lightweight polyline");
+    };
+    assert_eq!(polyline.vertices[0].location.y, 0.0);
+    assert_eq!(polyline.vertices[1].location.y, 2.0);
+    assert_eq!(polyline.vertices[0].bulge, 0.5);
+}
+
+#[test]
+fn horizontal_constraint_aligns_two_selected_points() {
+    let mut scene = Scene::new();
+    let a = add_line(&mut scene, 0.0, 1.0, 4.0, 3.0);
+    let b = add_line(&mut scene, 8.0, 7.0, 12.0, 9.0);
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Horizontal,
+            vec![SketchRef::point(a, 0), SketchRef::point(b, 0)],
+            None,
+        );
+
+    scene.bump_entities(&[(b, ChangeKind::Modified)]);
+    let (a_start, _) = line_endpoints(&scene, a);
+    let (b_start, _) = line_endpoints(&scene, b);
+    assert!((a_start.y - b_start.y).abs() < 1e-6);
+}
+
+#[test]
 fn parallel_constraint_rotates_the_other_line_when_one_moves() {
     let mut scene = Scene::new();
     let a = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
@@ -656,6 +727,55 @@ fn midpoint_constraint_pulls_a_point_onto_a_lines_midpoint() {
 }
 
 #[test]
+fn midpoint_constraint_supports_a_point_entity() {
+    let mut scene = Scene::new();
+    let base = add_line(&mut scene, 0.0, 0.0, 10.0, 6.0);
+    let point = scene.add_entity(EntityType::Point(acadrust::entities::Point::at(
+        Vector3::new(20.0, 20.0, 0.0),
+    )));
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Midpoint,
+            vec![SketchRef::point(point, 0), SketchRef::whole(base)],
+            None,
+        );
+
+    scene.bump_entities(&[(base, ChangeKind::Modified)]);
+    let (start, end) = line_endpoints(&scene, base);
+    let EntityType::Point(point) = scene.document.get_entity(point).unwrap() else {
+        panic!("expected a point");
+    };
+    assert!((point.location.x - (start.x + end.x) / 2.0).abs() < 1e-6);
+    assert!((point.location.y - (start.y + end.y) / 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn coincident_constraint_supports_a_block_insertion_point() {
+    let mut scene = Scene::new();
+    let line = add_line(&mut scene, 0.0, 0.0, 10.0, 4.0);
+    let insert = scene.add_entity(EntityType::Insert(acadrust::entities::Insert::new(
+        "fixture",
+        Vector3::new(30.0, 20.0, 0.0),
+    )));
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Coincident,
+            vec![SketchRef::point(line, 1), SketchRef::point(insert, 0)],
+            None,
+        );
+
+    scene.bump_entities(&[(line, ChangeKind::Modified)]);
+    let (_, end) = line_endpoints(&scene, line);
+    let EntityType::Insert(insert) = scene.document.get_entity(insert).unwrap() else {
+        panic!("expected a block reference");
+    };
+    assert!((insert.insert_point.x - end.x).abs() < 1e-6);
+    assert!((insert.insert_point.y - end.y).abs() < 1e-6);
+}
+
+#[test]
 fn fixed_constraint_holds_an_entity_in_place_despite_a_connected_edit() {
     let mut scene = Scene::new();
     let fixed_line = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
@@ -720,6 +840,92 @@ fn point_on_curve_constraint_pulls_a_point_onto_a_circles_circumference() {
     assert!(
         (dist - radius).abs() < 1e-5,
         "point should land on the circumference: dist={dist} radius={radius}"
+    );
+}
+
+#[test]
+fn point_on_curve_constraint_pulls_a_point_onto_an_ellipse() {
+    let mut scene = Scene::new();
+    let ellipse = add_ellipse(&mut scene, 0.0, 0.0, (5.0, 0.0), 0.6);
+    let marker = add_line(&mut scene, 12.0, 8.0, 13.0, 8.0);
+
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::PointOnCurve,
+            vec![SketchRef::point(marker, 0), SketchRef::whole(ellipse)],
+            None,
+        );
+    scene.bump_entities(&[(marker, ChangeKind::Modified)]);
+
+    let (center, major, ratio) = ellipse_geom(&scene, ellipse);
+    let (point, _) = line_endpoints(&scene, marker);
+    let a = major.length();
+    let b = a * ratio;
+    let u = major / a;
+    let v = Vector3::new(-u.y, u.x, 0.0);
+    let offset = point - center;
+    let equation = (offset.dot(&u) / a).powi(2) + (offset.dot(&v) / b).powi(2);
+    assert!(
+        (equation - 1.0).abs() < 1e-5,
+        "point should satisfy the solved ellipse equation: {equation}"
+    );
+}
+
+#[test]
+fn tangent_constraint_solves_an_ellipse_and_line() {
+    let mut scene = Scene::new();
+    let ellipse = add_ellipse(&mut scene, 0.0, 0.0, (5.0, 0.0), 0.6);
+    let line = add_line(&mut scene, -8.0, 8.0, 8.0, 8.0);
+
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Tangent,
+            vec![SketchRef::whole(ellipse), SketchRef::whole(line)],
+            None,
+        );
+    scene.bump_entities(&[(line, ChangeKind::Modified)]);
+
+    let (center, major, ratio) = ellipse_geom(&scene, ellipse);
+    let (start, end) = line_endpoints(&scene, line);
+    let direction = (end - start).normalize();
+    let normal = Vector3::new(-direction.y, direction.x, 0.0);
+    let unit_major = major.normalize();
+    let unit_minor = Vector3::new(-unit_major.y, unit_major.x, 0.0);
+    let a = major.length();
+    let b = a * ratio;
+    let support =
+        ((a * normal.dot(&unit_major)).powi(2) + (b * normal.dot(&unit_minor)).powi(2)).sqrt();
+    let distance = (center - start).dot(&normal).abs();
+    assert!(
+        (distance - support).abs() < 1e-5,
+        "line should be tangent to the solved ellipse: distance={distance} support={support}"
+    );
+}
+
+#[test]
+fn equal_constraint_matches_ellipse_major_axes() {
+    let mut scene = Scene::new();
+    let a = add_ellipse(&mut scene, 0.0, 0.0, (5.0, 0.0), 0.6);
+    let b = add_ellipse(&mut scene, 20.0, 0.0, (2.0, 0.0), 0.5);
+
+    scene
+        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .add(
+            ConstraintKind::Equal,
+            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            None,
+        );
+    scene.bump_entities(&[(b, ChangeKind::Modified)]);
+
+    let (_, major_a, _) = ellipse_geom(&scene, a);
+    let (_, major_b, _) = ellipse_geom(&scene, b);
+    assert!(
+        (major_a.length() - major_b.length()).abs() < 1e-5,
+        "ellipse major radii should match: {} vs {}",
+        major_a.length(),
+        major_b.length()
     );
 }
 

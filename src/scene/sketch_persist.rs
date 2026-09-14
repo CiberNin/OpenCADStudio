@@ -140,26 +140,28 @@ impl Scene {
             .map(|record| record.handle)
             .collect();
         for owner in owners {
-            let Some(record) = self.document.xrecord(owner, XRECORD_KEY) else {
-                continue;
-            };
-            // Concatenate every Chunk entry in order, not just the first —
-            // a set materialized past `MAX_CHUNK_BYTES` spans more than one
-            // same-code `310` entry (see that constant's doc comment).
-            let mut bytes = Vec::new();
-            for entry in &record.entries {
-                if let acadrust::objects::XRecordValue::Chunk(chunk) = &entry.value {
-                    if bytes.len().saturating_add(chunk.len()) > MAX_RECORD_BYTES {
-                        bytes.clear();
-                        break;
+            if let Some(record) = self.document.xrecord(owner, XRECORD_KEY) {
+                let mut bytes = Vec::new();
+                for entry in &record.entries {
+                    if let acadrust::objects::XRecordValue::Chunk(chunk) = &entry.value {
+                        if bytes.len().saturating_add(chunk.len()) > MAX_RECORD_BYTES {
+                            bytes.clear();
+                            break;
+                        }
+                        bytes.extend_from_slice(chunk);
                     }
-                    bytes.extend_from_slice(chunk);
                 }
-            }
-            if bytes.is_empty() {
+                if let Some(set) = decode(&bytes) {
+                    self.sketch_constraints.push(set);
+                }
                 continue;
             }
-            if let Some(set) = decode(&bytes) {
+
+            if let Some(set) = super::dwg_native_constraints::native_constraint_set(
+                &self.document,
+                owner,
+                &mut self.named_parameters,
+            ) {
                 self.sketch_constraints.push(set);
             }
         }

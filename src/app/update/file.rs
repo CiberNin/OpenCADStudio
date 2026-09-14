@@ -1446,11 +1446,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].scene.material_base_dir =
                     path.parent().map(std::path::Path::to_path_buf);
                 self.tabs[i].scene.document = doc;
-                // Load persisted constraints after installing the document.
-                self.tabs[i].scene.load_sketch_constraints_from_document();
-                // named_parameters_design.md stage 2: same load-time hook,
-                // for the document-wide parameter table.
+                // Load parameters first so imported dimensional constraints
+                // can resolve their named driving values.
                 self.tabs[i].scene.load_named_parameters_from_document();
+                self.tabs[i].scene.load_sketch_constraints_from_document();
                 self.tabs[i].active_layer = self.tabs[i]
                     .scene
                     .document

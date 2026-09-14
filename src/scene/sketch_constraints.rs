@@ -27,6 +27,8 @@ pub struct SketchRef {
     pub marker: Option<i32>,
 }
 
+const POLYLINE_SEGMENT_MARKER_BASE: i32 = -1_000_000;
+
 impl SketchRef {
     pub fn whole(entity: Handle) -> Self {
         Self {
@@ -50,6 +52,20 @@ impl SketchRef {
             entity,
             marker: Some(-3),
         }
+    }
+
+    /// Select one straight segment of a polyline.
+    pub fn segment(entity: Handle, index: usize) -> Self {
+        Self {
+            entity,
+            marker: Some(POLYLINE_SEGMENT_MARKER_BASE - index as i32),
+        }
+    }
+
+    pub fn segment_index(self) -> Option<usize> {
+        let marker = self.marker?;
+        (marker <= POLYLINE_SEGMENT_MARKER_BASE)
+            .then(|| (POLYLINE_SEGMENT_MARKER_BASE - marker) as usize)
     }
 }
 

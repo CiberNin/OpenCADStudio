@@ -12,7 +12,9 @@ use acadrust::{CadDocument, EntityType};
 use rustc_hash::FxHashMap;
 
 use super::named_parameters::{DrivingValue, ParameterTable};
-use super::sketch_constraints::{ConstraintKind, SketchConstraint, SketchConstraintSet, SketchRef};
+use super::sketch_constraints::{
+    ConstraintKind, SketchConstraint, SketchConstraintSet, SketchRef, SketchScope,
+};
 use super::Scene;
 
 /// Default sub-dictionary key used for an associative network.
@@ -39,6 +41,7 @@ mod implicit_point_type {
 struct EntityNodes {
     geometry_node_id: i32,
     points: FxHashMap<i32, i32>,
+    segments: FxHashMap<usize, i32>,
 }
 
 /// Builds one scope's `Assoc2dConstraintGroup` graph incrementally,
@@ -51,6 +54,8 @@ struct GroupBuilder<'a> {
     /// Real entity handles that ended up with a geometry node — what
     /// `AssocGeomDependency` objects get created for, in first-touch order.
     referenced_entities: Vec<Handle>,
+    horizontal_datum: Option<i32>,
+    vertical_datum: Option<i32>,
 }
 
 impl<'a> GroupBuilder<'a> {
@@ -61,6 +66,8 @@ impl<'a> GroupBuilder<'a> {
             next_node_id: FIRST_NODE_ID,
             entities: FxHashMap::default(),
             referenced_entities: Vec::new(),
+            horizontal_datum: None,
+            vertical_datum: None,
         }
     }
 
@@ -92,24 +99,7 @@ impl<'a> GroupBuilder<'a> {
         });
     }
 
-    /// The geometry node id for `entity`'s whole shape, creating a `Line`
-    /// (well: `BoundedLine`, §4 — nothing we draw is an infinite
-    /// construction line), `Circle`, or `Arc` node the first time this
-    /// entity is referenced. Returns `None` for an entity kind this pass
-    /// doesn't support as constraint geometry — currently including
-    /// `Ellipse` (constraint-parity Phase 5): the solver
-    /// (`sketch_solve.rs`) and this app's own XRecord format both support
-    /// ellipse-referencing constraints already, but `acadrust`'s
-    /// `AssocConstraintNodeData::Ellipse`/`BoundedEllipse` variants have a
-    /// different field shape from `Circle`/`Arc`'s here (`owner_id`/
-    /// `is_implied`/`is_active` instead of `geometry_dependency`/
-    /// `geometry_node_id`, i.e. they don't obviously look like the same
-    /// "geometry dependency for an entity reference" role) — without
-    /// confirming that against a real externally written file, guessing would
-    /// risk writing a wrong-but-plausible-looking object graph, which is
-    /// worse than the honest "not persisted to DWG yet" gap this already
-    /// degrades to (same contract as `ArcLength`, which has no native
-    /// representation at all).
+    /// Returns the whole-geometry node for an entity, creating it once.
     fn geometry_node(&mut self, handle: Handle) -> Option<i32> {
         if let Some(existing) = self.entities.get(&handle) {
             if existing.geometry_node_id != 0 {
@@ -119,6 +109,71 @@ impl<'a> GroupBuilder<'a> {
         let entity = self.document.get_entity(handle)?;
         let node_id = self.alloc_node_id();
         match entity {
+            EntityType::Point(point) => {
+                self.push_node(
+                    node_id,
+                    "AcConstrainedPoint",
+                    AssocConstraintNodeData::Point {
+                        geometry_dependency: Handle::NULL,
+                        geometry_node_id: node_id,
+                        point: Some(point.location),
+                    },
+                );
+            }
+            EntityType::Insert(insert) => self.push_node(
+                node_id,
+                "AcConstrainedPoint",
+                AssocConstraintNodeData::Point {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: Some(insert.insert_point),
+                },
+            ),
+            EntityType::Text(text) => self.push_node(
+                node_id,
+                "AcConstrainedPoint",
+                AssocConstraintNodeData::Point {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: Some(text.insertion_point),
+                },
+            ),
+            EntityType::MText(text) => self.push_node(
+                node_id,
+                "AcConstrainedPoint",
+                AssocConstraintNodeData::Point {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: Some(text.insertion_point),
+                },
+            ),
+            EntityType::AttributeDefinition(attribute) => self.push_node(
+                node_id,
+                "AcConstrainedPoint",
+                AssocConstraintNodeData::Point {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: Some(attribute.insertion_point),
+                },
+            ),
+            EntityType::AttributeEntity(attribute) => self.push_node(
+                node_id,
+                "AcConstrainedPoint",
+                AssocConstraintNodeData::Point {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: Some(attribute.insertion_point),
+                },
+            ),
+            EntityType::Table(table) => self.push_node(
+                node_id,
+                "AcConstrainedPoint",
+                AssocConstraintNodeData::Point {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: Some(table.insertion_point),
+                },
+            ),
             EntityType::Line(l) => {
                 let point = l.start;
                 let direction = (l.end - l.start).normalize();
@@ -187,6 +242,50 @@ impl<'a> GroupBuilder<'a> {
                     },
                 );
             }
+            EntityType::Ellipse(e) => {
+                let major_length = e.major_axis.length();
+                let major = if major_length > f64::EPSILON {
+                    e.major_axis / major_length
+                } else {
+                    Vector3::UNIT_X
+                };
+                let normal = e.normal.normalize();
+                let minor = Vector3::new(
+                    normal.y * major.z - normal.z * major.y,
+                    normal.z * major.x - normal.x * major.z,
+                    normal.x * major.y - normal.y * major.x,
+                );
+                let point_at = |parameter: f64| {
+                    e.center
+                        + e.major_axis * parameter.cos()
+                        + minor * (major_length * e.minor_axis_ratio * parameter.sin())
+                };
+                let data = if e.is_full() {
+                    AssocConstraintNodeData::Ellipse {
+                        geometry_dependency: Handle::NULL,
+                        geometry_node_id: node_id,
+                        center: e.center,
+                        major_axis: e.major_axis,
+                        axis_ratio: e.minor_axis_ratio,
+                    }
+                } else {
+                    AssocConstraintNodeData::BoundedEllipse {
+                        geometry_dependency: Handle::NULL,
+                        geometry_node_id: node_id,
+                        center: e.center,
+                        major_axis: e.major_axis,
+                        axis_ratio: e.minor_axis_ratio,
+                        start_point: point_at(e.start_parameter),
+                        end_point: point_at(e.end_parameter),
+                    }
+                };
+                let class_name = if e.is_full() {
+                    "AcConstrainedEllipse"
+                } else {
+                    "AcConstrainedBoundedEllipse"
+                };
+                self.push_node(node_id, class_name, data);
+            }
             _ => return None,
         }
         self.entities.entry(handle).or_default().geometry_node_id = node_id;
@@ -206,12 +305,37 @@ impl<'a> GroupBuilder<'a> {
         {
             return Some(*existing);
         }
-        let curve_id = self.geometry_node(handle)?;
-        let point_type = match marker {
-            0 => implicit_point_type::START,
-            1 => implicit_point_type::END,
-            -3 => implicit_point_type::CENTER,
-            _ => return None,
+        let polyline = matches!(
+            self.document.get_entity(handle),
+            Some(EntityType::LwPolyline(_) | EntityType::Polyline2D(_))
+        );
+        let (curve_id, point_type) = if polyline && marker >= 0 {
+            let entity = self.document.get_entity(handle)?;
+            let points = super::dimension_assoc::source_points(entity);
+            let closed = match entity {
+                EntityType::LwPolyline(polyline) => polyline.is_closed,
+                EntityType::Polyline2D(polyline) => polyline.is_closed(),
+                _ => false,
+            };
+            let vertex = marker as usize;
+            if vertex >= points.len() {
+                return None;
+            }
+            let (segment, point_type) = if vertex + 1 < points.len() || closed {
+                (vertex, implicit_point_type::START)
+            } else {
+                (vertex.checked_sub(1)?, implicit_point_type::END)
+            };
+            (self.segment_node(handle, segment)?, point_type)
+        } else {
+            let curve_id = self.geometry_node(handle)?;
+            let point_type = match marker {
+                0 => implicit_point_type::START,
+                1 => implicit_point_type::END,
+                -3 => implicit_point_type::CENTER,
+                _ => return None,
+            };
+            (curve_id, point_type)
         };
         let node_id = self.alloc_node_id();
         self.push_node(
@@ -226,6 +350,22 @@ impl<'a> GroupBuilder<'a> {
                 curve_id,
             },
         );
+        let relation_id = self.alloc_node_id();
+        self.push_node(
+            relation_id,
+            if point_type == implicit_point_type::CENTER {
+                "AcCenterPointConstraint"
+            } else {
+                "AcPointCurveConstraint"
+            },
+            AssocConstraintNodeData::Geometrical {
+                owner_id: 0,
+                is_implied: false,
+                is_active: true,
+            },
+        );
+        self.connect(relation_id, node_id);
+        self.connect(relation_id, curve_id);
         self.entities
             .entry(handle)
             .or_default()
@@ -237,10 +377,119 @@ impl<'a> GroupBuilder<'a> {
     /// The node id `SketchRef` resolves to: a point node for a marked
     /// reference, the whole geometry node otherwise.
     fn ref_node(&mut self, r: SketchRef) -> Option<i32> {
+        if let Some(segment) = r.segment_index() {
+            return self.segment_node(r.entity, segment);
+        }
+        if r.marker == Some(0)
+            && matches!(
+                self.document.get_entity(r.entity),
+                Some(
+                    EntityType::Point(_)
+                        | EntityType::Insert(_)
+                        | EntityType::Text(_)
+                        | EntityType::MText(_)
+                        | EntityType::AttributeDefinition(_)
+                        | EntityType::AttributeEntity(_)
+                        | EntityType::Table(_)
+                )
+            )
+        {
+            return self.geometry_node(r.entity);
+        }
         match r.marker {
             Some(marker) => self.point_node(r.entity, marker),
             None => self.geometry_node(r.entity),
         }
+    }
+
+    fn segment_node(&mut self, handle: Handle, index: usize) -> Option<i32> {
+        if let Some(node_id) = self
+            .entities
+            .get(&handle)
+            .and_then(|entity| entity.segments.get(&index))
+        {
+            return Some(*node_id);
+        }
+        let entity = self.document.get_entity(handle)?;
+        let points = super::dimension_assoc::source_points(entity);
+        let closed = match entity {
+            EntityType::LwPolyline(polyline) => {
+                if polyline.vertices.get(index)?.bulge.abs() > 1e-9 {
+                    return None;
+                }
+                polyline.is_closed
+            }
+            EntityType::Polyline2D(polyline) => {
+                if polyline.vertices.get(index)?.bulge.abs() > 1e-9 {
+                    return None;
+                }
+                polyline.is_closed()
+            }
+            _ => return None,
+        };
+        let start = *points.get(index)?;
+        let end = if index + 1 < points.len() {
+            points[index + 1]
+        } else if closed {
+            *points.first()?
+        } else {
+            return None;
+        };
+        let node_id = self.alloc_node_id();
+        self.push_node(
+            node_id,
+            "AcConstrainedBoundedLine",
+            AssocConstraintNodeData::BoundedLine {
+                geometry_dependency: Handle::NULL,
+                geometry_node_id: node_id,
+                point: start,
+                direction: (end - start).normalize(),
+                is_ray: false,
+                start_point: start,
+                end_point: end,
+            },
+        );
+        self.entities
+            .entry(handle)
+            .or_default()
+            .segments
+            .insert(index, node_id);
+        if !self.referenced_entities.contains(&handle) {
+            self.referenced_entities.push(handle);
+        }
+        Some(node_id)
+    }
+
+    fn datum_line(&mut self, horizontal: bool) -> i32 {
+        let cached = if horizontal {
+            self.horizontal_datum
+        } else {
+            self.vertical_datum
+        };
+        if let Some(node_id) = cached {
+            return node_id;
+        }
+        let node_id = self.alloc_node_id();
+        self.push_node(
+            node_id,
+            "AcConstrainedDatumLine",
+            AssocConstraintNodeData::Line {
+                geometry_dependency: Handle::NULL,
+                geometry_node_id: node_id,
+                point: Vector3::ZERO,
+                direction: if horizontal {
+                    Vector3::UNIT_X
+                } else {
+                    Vector3::UNIT_Y
+                },
+            },
+        );
+        if horizontal {
+            self.horizontal_datum = Some(node_id);
+        } else {
+            self.vertical_datum = Some(node_id);
+        }
+        node_id
     }
 
     /// Records an undirected edge on both nodes.
@@ -258,8 +507,6 @@ impl<'a> GroupBuilder<'a> {
 fn geometrical_class_name(kind: ConstraintKind) -> Option<&'static str> {
     match kind {
         ConstraintKind::Coincident => Some("AcPointCoincidenceConstraint"),
-        ConstraintKind::Horizontal => Some("AcHorizontalConstraint"),
-        ConstraintKind::Vertical => Some("AcVerticalConstraint"),
         ConstraintKind::Perpendicular => Some("AcPerpendicularConstraint"),
         ConstraintKind::Tangent => Some("AcTangentConstraint"),
         ConstraintKind::Smooth => Some("AcG2SmoothConstraint"),
@@ -281,6 +528,8 @@ fn geometrical_class_name(kind: ConstraintKind) -> Option<&'static str> {
         ConstraintKind::EqualDistance => Some("AcEqualDistanceConstraint"),
         // `Equal` needs the resolved entity types, so the caller handles it.
         ConstraintKind::Equal
+        | ConstraintKind::Horizontal
+        | ConstraintKind::Vertical
         | ConstraintKind::Parallel
         | ConstraintKind::Distance
         | ConstraintKind::Angle
@@ -353,6 +602,36 @@ fn constraint_node(
         return Some(node_id);
     }
     match constraint.kind {
+        ConstraintKind::Horizontal | ConstraintKind::Vertical => {
+            if !matches!(refs.len(), 1 | 2) {
+                return None;
+            }
+            let targets: Vec<_> = refs
+                .iter()
+                .map(|reference| builder.ref_node(*reference))
+                .collect::<Option<_>>()?;
+            let horizontal = constraint.kind == ConstraintKind::Horizontal;
+            let datum = builder.datum_line(horizontal);
+            let node_id = builder.alloc_node_id();
+            builder.push_node(
+                node_id,
+                if horizontal {
+                    "AcHorizontalConstraint"
+                } else {
+                    "AcVerticalConstraint"
+                },
+                AssocConstraintNodeData::Parallel {
+                    owner_id: targets[0],
+                    is_implied: false,
+                    is_active: true,
+                    datum_line_index: Some(datum),
+                },
+            );
+            for target in targets {
+                builder.connect(node_id, target);
+            }
+            Some(node_id)
+        }
         ConstraintKind::Parallel => {
             let [a, b] = refs else { return None };
             let (na, nb) = (builder.ref_node(*a)?, builder.ref_node(*b)?);
@@ -374,8 +653,17 @@ fn constraint_node(
         ConstraintKind::Equal => {
             let [a, b] = refs else { return None };
             let (na, nb) = (builder.ref_node(*a)?, builder.ref_node(*b)?);
-            let both_lines = matches!(document.get_entity(a.entity), Some(EntityType::Line(_)))
-                && matches!(document.get_entity(b.entity), Some(EntityType::Line(_)));
+            let is_straight = |reference: &SketchRef| {
+                matches!(
+                    document.get_entity(reference.entity),
+                    Some(EntityType::Line(_))
+                ) || (reference.segment_index().is_some()
+                    && matches!(
+                        document.get_entity(reference.entity),
+                        Some(EntityType::LwPolyline(_) | EntityType::Polyline2D(_))
+                    ))
+            };
+            let both_lines = is_straight(a) && is_straight(b);
             let class_name = if both_lines {
                 "AcEqualLengthConstraint"
             } else {
@@ -657,7 +945,11 @@ impl Allocator<'_> {
 /// null dependency and refer to their owning geometry node by `curve_id`.
 fn set_geometry_dependency(data: &mut AssocConstraintNodeData, handle: Handle) {
     match data {
-        AssocConstraintNodeData::BoundedLine {
+        AssocConstraintNodeData::Point {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::BoundedLine {
             geometry_dependency,
             ..
         }
@@ -666,6 +958,14 @@ fn set_geometry_dependency(data: &mut AssocConstraintNodeData, handle: Handle) {
             ..
         }
         | AssocConstraintNodeData::Arc {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::Ellipse {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::BoundedEllipse {
             geometry_dependency,
             ..
         } => {
@@ -848,6 +1148,413 @@ fn has_native_network(document: &CadDocument, owner: Handle) -> bool {
     dictionary.get(NETWORK_DICTIONARY_KEY).is_some()
 }
 
+fn native_group(document: &CadDocument, owner: Handle) -> Option<&Assoc2dConstraintGroup> {
+    let network_handle = native_scope_network_handle(document, owner)?;
+    document.objects.values().find_map(|object| {
+        let ObjectType::Associative(object) = object else {
+            return None;
+        };
+        let AssociativeData::ConstraintGroup(group) = &object.data else {
+            return None;
+        };
+        (object.owner == network_handle || group.action.owning_network == network_handle)
+            .then_some(group)
+    })
+}
+
+fn native_scope_network_handle(document: &CadDocument, owner: Handle) -> Option<Handle> {
+    let dictionary = document.extension_dictionary_handle(owner)?;
+    let ObjectType::Dictionary(dictionary) = document.objects.get(&dictionary)? else {
+        return None;
+    };
+    let mut network_handle = dictionary.get(NETWORK_DICTIONARY_KEY)?;
+    while let Some(ObjectType::Dictionary(dictionary)) = document.objects.get(&network_handle) {
+        network_handle = dictionary.get(NETWORK_DICTIONARY_KEY)?;
+    }
+    matches!(
+        document.objects.get(&network_handle),
+        Some(ObjectType::Associative(AssociativeObject {
+            data: AssociativeData::Network(_),
+            ..
+        }))
+    )
+    .then_some(network_handle)
+}
+
+fn geometry_dependency(data: &AssocConstraintNodeData) -> Option<Handle> {
+    match data {
+        AssocConstraintNodeData::Point {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::Line {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::BoundedLine {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::Circle {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::Arc {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::Ellipse {
+            geometry_dependency,
+            ..
+        }
+        | AssocConstraintNodeData::BoundedEllipse {
+            geometry_dependency,
+            ..
+        } if !geometry_dependency.is_null() => Some(*geometry_dependency),
+        _ => None,
+    }
+}
+
+fn dependency_entity(
+    document: &CadDocument,
+    dependency: Handle,
+    geometry: &AssocConstraintNodeData,
+) -> Option<Handle> {
+    let ObjectType::Associative(object) = document.objects.get(&dependency)? else {
+        return None;
+    };
+    let AssociativeData::GeomDependency(dependency) = &object.data else {
+        return None;
+    };
+    let entity = dependency.dependency.dependent_on;
+    let supported = match (document.get_entity(entity), geometry) {
+        (
+            Some(
+                EntityType::Point(_)
+                | EntityType::Insert(_)
+                | EntityType::Text(_)
+                | EntityType::MText(_)
+                | EntityType::AttributeDefinition(_)
+                | EntityType::AttributeEntity(_)
+                | EntityType::Table(_),
+            ),
+            AssocConstraintNodeData::Point { .. },
+        ) => true,
+        (
+            Some(EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_)),
+            AssocConstraintNodeData::Line { .. } | AssocConstraintNodeData::BoundedLine { .. },
+        ) => true,
+        (Some(EntityType::Circle(_)), AssocConstraintNodeData::Circle { .. }) => true,
+        (Some(EntityType::Arc(_)), AssocConstraintNodeData::Arc { .. }) => true,
+        (
+            Some(EntityType::Ellipse(_)),
+            AssocConstraintNodeData::Ellipse { .. }
+            | AssocConstraintNodeData::BoundedEllipse { .. },
+        ) => true,
+        _ => false,
+    };
+    supported.then_some(entity)
+}
+
+fn native_group_requires_preservation(document: &CadDocument, owner: Handle) -> bool {
+    native_group(document, owner).is_some_and(|group| {
+        group.nodes.iter().any(|node| {
+            if matches!(node.data, AssocConstraintNodeData::RigidSet { .. }) {
+                return true;
+            }
+            if let Some(dependency) = geometry_dependency(&node.data) {
+                if dependency_entity(document, dependency, &node.data).is_none() {
+                    return true;
+                }
+            }
+            node.class_name.to_ascii_uppercase().ends_with("CONSTRAINT")
+                && constraint_kind(node).is_none()
+        })
+    })
+}
+
+fn polyline_segment_reference(
+    document: &CadDocument,
+    entity: Handle,
+    data: &AssocConstraintNodeData,
+) -> Option<SketchRef> {
+    let AssocConstraintNodeData::BoundedLine {
+        start_point,
+        end_point,
+        ..
+    } = data
+    else {
+        return None;
+    };
+    let entity_value = document.get_entity(entity)?;
+    let closed = match entity_value {
+        EntityType::LwPolyline(polyline) => polyline.is_closed,
+        EntityType::Polyline2D(polyline) => polyline.is_closed(),
+        _ => return None,
+    };
+    let points = super::dimension_assoc::source_points(entity_value);
+    let segment_count = points.len().saturating_sub(usize::from(!closed));
+    (0..segment_count)
+        .min_by(|first, second| {
+            let score = |index: usize| {
+                let a = points[index];
+                let b = points[(index + 1) % points.len()];
+                let forward =
+                    (a - *start_point).length_squared() + (b - *end_point).length_squared();
+                let reverse =
+                    (b - *start_point).length_squared() + (a - *end_point).length_squared();
+                forward.min(reverse)
+            };
+            score(*first).total_cmp(&score(*second))
+        })
+        .map(|index| SketchRef::segment(entity, index))
+}
+
+fn numeric_value(value: &AssocEvalVariant) -> Option<f64> {
+    match value.value {
+        AssocEvalValue::Real(value) => Some(value),
+        AssocEvalValue::Long(value) => Some(value as f64),
+        AssocEvalValue::Short(value) => Some(value as f64),
+        AssocEvalValue::Byte(value) => Some(value as f64),
+        _ => None,
+    }
+}
+
+fn driving_value(
+    document: &CadDocument,
+    dependency: Handle,
+    parameters: &mut ParameterTable,
+) -> Option<DrivingValue> {
+    let ObjectType::Associative(object) = document.objects.get(&dependency)? else {
+        return None;
+    };
+    let AssociativeData::ValueDependency(value_dependency) = &object.data else {
+        return None;
+    };
+    let literal = numeric_value(&value_dependency.value);
+    let ObjectType::Associative(variable) = document
+        .objects
+        .get(&value_dependency.dependency.dependent_on)?
+    else {
+        return literal.map(DrivingValue::Literal);
+    };
+    let AssociativeData::Variable(variable) = &variable.data else {
+        return literal.map(DrivingValue::Literal);
+    };
+    let source = if variable.expression.trim().is_empty() {
+        numeric_value(&variable.value)?.to_string()
+    } else {
+        variable.expression.clone()
+    };
+    if parameters.set(&variable.name, &source).is_ok() {
+        Some(DrivingValue::Named(variable.name.clone()))
+    } else {
+        literal
+            .or_else(|| numeric_value(&variable.value))
+            .map(DrivingValue::Literal)
+    }
+}
+
+fn constraint_owner(data: &AssocConstraintNodeData) -> Option<i32> {
+    match data {
+        AssocConstraintNodeData::Geometrical { owner_id, .. }
+        | AssocConstraintNodeData::Angle { owner_id, .. }
+        | AssocConstraintNodeData::Parallel { owner_id, .. }
+        | AssocConstraintNodeData::Distance { owner_id, .. }
+        | AssocConstraintNodeData::RadiusDiameter { owner_id, .. } => Some(*owner_id),
+        _ => None,
+    }
+}
+
+fn constraint_is_active(data: &AssocConstraintNodeData) -> bool {
+    match data {
+        AssocConstraintNodeData::Geometrical { is_active, .. }
+        | AssocConstraintNodeData::Angle { is_active, .. }
+        | AssocConstraintNodeData::Parallel { is_active, .. }
+        | AssocConstraintNodeData::Distance { is_active, .. }
+        | AssocConstraintNodeData::RadiusDiameter { is_active, .. } => *is_active,
+        _ => true,
+    }
+}
+
+fn constraint_kind(node: &AssocConstraintNode) -> Option<ConstraintKind> {
+    Some(match node.class_name.to_ascii_uppercase().as_str() {
+        "ACPOINTCOINCIDENCECONSTRAINT" => ConstraintKind::Coincident,
+        "ACHORIZONTALCONSTRAINT" => ConstraintKind::Horizontal,
+        "ACVERTICALCONSTRAINT" => ConstraintKind::Vertical,
+        "ACPARALLELCONSTRAINT" => ConstraintKind::Parallel,
+        "ACPERPENDICULARCONSTRAINT" => ConstraintKind::Perpendicular,
+        "ACEQUALLENGTHCONSTRAINT" | "ACEQUALRADIUSCONSTRAINT" => ConstraintKind::Equal,
+        "ACANGLECONSTRAINT" | "AC3POINTANGLECONSTRAINT" => ConstraintKind::Angle,
+        "ACTANGENTCONSTRAINT" => ConstraintKind::Tangent,
+        "ACG2SMOOTHCONSTRAINT" => ConstraintKind::Smooth,
+        "ACCONCENTRICCONSTRAINT" => ConstraintKind::Concentric,
+        "ACCENTERPOINTCONSTRAINT" => ConstraintKind::CenterPoint,
+        "ACCOLINEARCONSTRAINT" => ConstraintKind::Colinear,
+        "ACMIDPOINTCONSTRAINT" => ConstraintKind::Midpoint,
+        "ACFIXEDCONSTRAINT" => ConstraintKind::Fixed,
+        "ACPOINTCURVECONSTRAINT" => ConstraintKind::PointOnCurve,
+        "ACEQUALDISTANCECONSTRAINT" => ConstraintKind::EqualDistance,
+        "ACSYMMETRICCONSTRAINT" => ConstraintKind::Symmetric,
+        "ACNORMALCONSTRAINT" => ConstraintKind::Normal,
+        "ACRADIUSDIAMETERCONSTRAINT" => {
+            let AssocConstraintNodeData::RadiusDiameter { mode, .. } = node.data else {
+                return None;
+            };
+            if mode == 1 {
+                ConstraintKind::Diameter
+            } else {
+                ConstraintKind::Radius
+            }
+        }
+        "ACDISTANCECONSTRAINT" => {
+            let AssocConstraintNodeData::Distance {
+                direction_type,
+                distance,
+                ..
+            } = &node.data
+            else {
+                return None;
+            };
+            if *direction_type == 0 {
+                ConstraintKind::Distance
+            } else if distance.is_some_and(|direction| direction.x.abs() >= direction.y.abs()) {
+                ConstraintKind::DistanceX
+            } else {
+                ConstraintKind::DistanceY
+            }
+        }
+        _ => return None,
+    })
+}
+
+pub(super) fn native_constraint_set(
+    document: &CadDocument,
+    owner: Handle,
+    parameters: &mut ParameterTable,
+) -> Option<SketchConstraintSet> {
+    let group = native_group(document, owner)?;
+    let mut refs = FxHashMap::default();
+    for node in &group.nodes {
+        let Some(dependency) = geometry_dependency(&node.data) else {
+            continue;
+        };
+        if let Some(entity) = dependency_entity(document, dependency, &node.data) {
+            let reference = polyline_segment_reference(document, entity, &node.data)
+                .unwrap_or_else(|| {
+                    if matches!(node.data, AssocConstraintNodeData::Point { .. }) {
+                        SketchRef::point(entity, 0)
+                    } else {
+                        SketchRef::whole(entity)
+                    }
+                });
+            refs.insert(node.node_id, reference);
+        }
+    }
+    for node in &group.nodes {
+        let AssocConstraintNodeData::ImplicitPoint {
+            point_type,
+            curve_id,
+            ..
+        } = node.data
+        else {
+            continue;
+        };
+        let Some(curve) = refs.get(&curve_id).copied() else {
+            continue;
+        };
+        let marker = if let Some(segment) = curve.segment_index() {
+            let point_count =
+                super::dimension_assoc::source_points(document.get_entity(curve.entity)?).len();
+            (match point_type {
+                implicit_point_type::START => segment,
+                implicit_point_type::END if point_count > 0 => (segment + 1) % point_count,
+                _ => continue,
+            }) as i32
+        } else {
+            match point_type {
+                implicit_point_type::START => 0,
+                implicit_point_type::END => 1,
+                implicit_point_type::CENTER => -3,
+                _ => continue,
+            }
+        };
+        refs.insert(node.node_id, SketchRef::point(curve.entity, marker));
+    }
+
+    let scope = if owner == document.header.model_space_block_handle {
+        SketchScope::ModelSpace
+    } else {
+        SketchScope::Block(owner)
+    };
+    let mut set = SketchConstraintSet::new(scope);
+    for node in &group.nodes {
+        let Some(kind) = constraint_kind(node) else {
+            continue;
+        };
+        if !constraint_is_active(&node.data) {
+            continue;
+        }
+        let mut targets: Vec<SketchRef> = node
+            .connections
+            .iter()
+            .filter_map(|id| refs.get(id).copied())
+            .collect();
+        if let Some(owner) = constraint_owner(&node.data).and_then(|id| refs.get(&id).copied()) {
+            if !targets.contains(&owner) {
+                targets.insert(0, owner);
+            }
+        }
+        if matches!(
+            kind,
+            ConstraintKind::PointOnCurve | ConstraintKind::CenterPoint
+        ) && targets.len() == 2
+            && targets[0].entity == targets[1].entity
+        {
+            continue;
+        }
+        let driving = match &node.data {
+            AssocConstraintNodeData::Angle {
+                value_dependency, ..
+            }
+            | AssocConstraintNodeData::Distance {
+                value_dependency, ..
+            }
+            | AssocConstraintNodeData::RadiusDiameter {
+                value_dependency, ..
+            } => driving_value(document, *value_dependency, parameters),
+            _ => None,
+        };
+        let expected = match kind {
+            ConstraintKind::Fixed | ConstraintKind::Radius | ConstraintKind::Diameter => 1,
+            ConstraintKind::Symmetric => 3,
+            ConstraintKind::EqualDistance => 4,
+            _ => 2,
+        };
+        if (matches!(kind, ConstraintKind::Horizontal | ConstraintKind::Vertical)
+            && !matches!(targets.len(), 1 | 2))
+            || (!matches!(kind, ConstraintKind::Horizontal | ConstraintKind::Vertical)
+                && targets.len() != expected)
+        {
+            continue;
+        }
+        if matches!(
+            kind,
+            ConstraintKind::Distance
+                | ConstraintKind::DistanceX
+                | ConstraintKind::DistanceY
+                | ConstraintKind::Angle
+                | ConstraintKind::Radius
+                | ConstraintKind::Diameter
+        ) && driving.is_none()
+        {
+            continue;
+        }
+        set.add(kind, targets, driving);
+    }
+    (!set.constraints.is_empty()).then_some(set)
+}
+
 /// One scope's worth of
 /// [`Scene::materialize_dwg_native_constraints_for_save`] — see that
 /// method's doc comment for the save-time contract this implements.
@@ -919,15 +1626,19 @@ fn materialize_scope(
             continue;
         };
         if entity_nodes.geometry_node_id == 0 {
-            continue;
+            if entity_nodes.segments.is_empty() {
+                continue;
+            }
         }
         let dep_handle = allocator.geom_dependency(group_handle, *entity_handle, index as i32 + 1);
         geometry_dependencies.push(dep_handle);
-        if let Some(node) = nodes
-            .iter_mut()
-            .find(|n| n.node_id == entity_nodes.geometry_node_id)
+        for node_id in std::iter::once(entity_nodes.geometry_node_id)
+            .filter(|node_id| *node_id != 0)
+            .chain(entity_nodes.segments.values().copied())
         {
-            set_geometry_dependency(&mut node.data, dep_handle);
+            if let Some(node) = nodes.iter_mut().find(|node| node.node_id == node_id) {
+                set_geometry_dependency(&mut node.data, dep_handle);
+            }
         }
     }
 
@@ -1039,6 +1750,7 @@ impl Scene {
     /// toggling this off never leaves a stale graph sitting in the file.
     pub(crate) fn materialize_dwg_native_constraints_for_save(&mut self, enabled: bool) {
         let mut scopes = Vec::new();
+        let mut preserved_networks = Vec::new();
         for index in 0..self.sketch_constraints.len() {
             let set = self.sketch_constraints[index].clone();
             let owner = set.scope.owner_handle(&self.document);
@@ -1046,6 +1758,12 @@ impl Scene {
                 continue;
             }
             if !enabled && !has_native_network(&self.document, owner) {
+                continue;
+            }
+            if native_group_requires_preservation(&self.document, owner) {
+                if let Some(network) = native_scope_network_handle(&self.document, owner) {
+                    preserved_networks.push(network);
+                }
                 continue;
             }
             scopes.push((owner, set));
@@ -1062,7 +1780,7 @@ impl Scene {
             NETWORK_DICTIONARY_KEY,
         );
         let root_network_handle = self.document.allocate_handle();
-        let mut child_networks = Vec::new();
+        let mut child_networks = preserved_networks;
         for (index, (owner, set)) in scopes.into_iter().enumerate() {
             if let Some(handle) = materialize_scope(
                 &mut self.document,
@@ -1119,7 +1837,9 @@ impl Scene {
 mod tests {
     use super::super::sketch_constraints::SketchScope;
     use super::*;
-    use acadrust::entities::{Arc, Circle, Line};
+    use acadrust::entities::{Arc, Circle, Insert, Line, LwPolyline};
+    use acadrust::tables::BlockRecord;
+    use acadrust::types::Vector2;
 
     fn line_entity(scene: &mut Scene, start: (f64, f64), end: (f64, f64)) -> Handle {
         scene.add_entity(EntityType::Line(Line::from_points(
@@ -1207,13 +1927,12 @@ mod tests {
 
             scene.materialize_dwg_native_constraints_for_save(true);
             let owner = scene.document.header.model_space_block_handle;
-            // Sanity before the round trip even happens: root + 2 geometry
-            // nodes + 2 constraint nodes.
+            // Root + two geometry nodes + two datums + two constraints.
             let before = native_group(&scene.document, owner);
             assert_eq!(
                 before.nodes.len(),
-                5,
-                "expected root + 2 geometry + 2 constraint nodes, got {:#?}",
+                7,
+                "expected root + 2 geometry + 2 datums + 2 constraints, got {:#?}",
                 before.nodes
             );
 
@@ -1241,7 +1960,155 @@ mod tests {
                 2,
                 "{ext}: expected both lines' geometry nodes to survive, got {class_names:?}"
             );
+            let datums: Vec<i32> = group
+                .nodes
+                .iter()
+                .filter_map(|node| match node.data {
+                    AssocConstraintNodeData::Parallel {
+                        datum_line_index: Some(datum),
+                        ..
+                    } if matches!(
+                        node.class_name.as_str(),
+                        "AcHorizontalConstraint" | "AcVerticalConstraint"
+                    ) =>
+                    {
+                        Some(datum)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(datums.len(), 2, "{ext}: both constraints need a datum");
+            assert!(datums.iter().all(|datum| group.nodes.iter().any(|node| {
+                node.node_id == *datum && node.class_name == "AcConstrainedDatumLine"
+            })));
         }
+    }
+
+    #[test]
+    fn native_only_constraints_and_parameters_are_imported() {
+        let mut scene = Scene::new();
+        let a = line_entity(&mut scene, (0.0, 0.0), (10.0, 0.0));
+        let b = line_entity(&mut scene, (0.0, 5.0), (10.0, 5.0));
+        scene.named_parameters.set("gap", "5").unwrap();
+        let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+        set.add(ConstraintKind::Horizontal, vec![SketchRef::whole(a)], None);
+        set.add(
+            ConstraintKind::Parallel,
+            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            None,
+        );
+        set.add(
+            ConstraintKind::DistanceY,
+            vec![SketchRef::point(a, 0), SketchRef::point(b, 0)],
+            Some(DrivingValue::Named("gap".to_string())),
+        );
+
+        scene.materialize_dwg_native_constraints_for_save(true);
+        let bytes = crate::io::save_to_bytes(&scene.document, "dwg", scene.document.version)
+            .expect("save native-only graph");
+        let mut restored = Scene::new();
+        restored.document = crate::io::load_bytes("native_only.dwg", bytes).unwrap();
+        restored.load_named_parameters_from_document();
+        restored.load_sketch_constraints_from_document();
+
+        let set = restored
+            .sketch_constraint_set(SketchScope::ModelSpace)
+            .expect("native group should become an editable constraint set");
+        let kinds: Vec<_> = set
+            .constraints
+            .iter()
+            .map(|constraint| constraint.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ConstraintKind::Horizontal,
+                ConstraintKind::Parallel,
+                ConstraintKind::DistanceY,
+            ]
+        );
+        assert_eq!(restored.named_parameters.resolve("gap"), Ok(5.0));
+        assert_eq!(
+            set.constraints[2].driving_param,
+            Some(DrivingValue::Named("gap".to_string()))
+        );
+    }
+
+    #[test]
+    fn point_and_two_point_horizontal_constraints_round_trip_natively() {
+        let mut scene = Scene::new();
+        let mut block = BlockRecord::new("fixture");
+        block.handle = scene.document.allocate_handle();
+        scene.document.block_records.add(block).unwrap();
+        let point = scene.add_entity(EntityType::Point(acadrust::entities::Point::at(
+            Vector3::new(1.0, 2.0, 0.0),
+        )));
+        let insert = scene.add_entity(EntityType::Insert(Insert::new(
+            "fixture",
+            Vector3::new(3.0, 4.0, 0.0),
+        )));
+        let line = line_entity(&mut scene, (5.0, 7.0), (10.0, 9.0));
+        let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+        set.add(
+            ConstraintKind::Horizontal,
+            vec![SketchRef::point(point, 0), SketchRef::point(insert, 0)],
+            None,
+        );
+        set.add(
+            ConstraintKind::Midpoint,
+            vec![SketchRef::point(point, 0), SketchRef::whole(line)],
+            None,
+        );
+
+        scene.materialize_dwg_native_constraints_for_save(true);
+        let bytes = crate::io::save_to_bytes(&scene.document, "dwg", scene.document.version)
+            .expect("save point graph");
+        let mut restored = Scene::new();
+        restored.document = crate::io::load_bytes("point_constraints.dwg", bytes).unwrap();
+        restored.load_sketch_constraints_from_document();
+
+        let constraints = &restored
+            .sketch_constraint_set(SketchScope::ModelSpace)
+            .expect("native point constraints should be imported")
+            .constraints;
+        assert_eq!(constraints.len(), 2);
+        assert_eq!(constraints[0].kind, ConstraintKind::Horizontal);
+        assert_eq!(constraints[0].refs.len(), 2);
+        assert_eq!(constraints[1].kind, ConstraintKind::Midpoint);
+    }
+
+    #[test]
+    fn polyline_segment_constraints_round_trip_through_the_native_graph() {
+        let mut scene = Scene::new();
+        let polyline = scene.add_entity(EntityType::LwPolyline(LwPolyline::from_points(vec![
+            Vector2::new(0.0, 0.0),
+            Vector2::new(5.0, 2.0),
+            Vector2::new(10.0, 7.0),
+        ])));
+        scene
+            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .add(
+                ConstraintKind::Horizontal,
+                vec![SketchRef::segment(polyline, 1)],
+                None,
+            );
+
+        scene.materialize_dwg_native_constraints_for_save(true);
+        let bytes = crate::io::save_to_bytes(&scene.document, "dwg", scene.document.version)
+            .expect("save polyline segment graph");
+        let mut restored = Scene::new();
+        restored.document = crate::io::load_bytes("polyline_segment.dwg", bytes).unwrap();
+        restored.load_sketch_constraints_from_document();
+
+        let set = restored
+            .sketch_constraint_set(SketchScope::ModelSpace)
+            .expect("native segment constraint should be imported");
+        assert_eq!(set.constraints.len(), 1);
+        assert_eq!(set.constraints[0].kind, ConstraintKind::Horizontal);
+        assert_eq!(
+            set.constraints[0].refs,
+            vec![SketchRef::segment(polyline, 1)]
+        );
     }
 
     fn distance_with_named_parameter_scene() -> (Scene, Handle) {
@@ -1413,6 +2280,53 @@ mod tests {
             first_count, second_count,
             "a resave with the same constraints must not accumulate new objects"
         );
+    }
+
+    #[test]
+    fn resaving_preserves_a_native_group_with_uneditable_geometry() {
+        let mut scene = Scene::new();
+        let a = line_entity(&mut scene, (0.0, 0.0), (10.0, 0.0));
+        scene
+            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .add(ConstraintKind::Horizontal, vec![SketchRef::whole(a)], None);
+        scene.materialize_dwg_native_constraints_for_save(true);
+
+        let owner = scene.document.header.model_space_block_handle;
+        let group_handle = native_group_handle(&scene.document, owner);
+        let Some(ObjectType::Associative(AssociativeObject {
+            data: AssociativeData::ConstraintGroup(group),
+            ..
+        })) = scene.document.objects.get_mut(&group_handle)
+        else {
+            panic!("expected a native constraint group");
+        };
+        group.nodes.push(AssocConstraintNode {
+            node_id: 99,
+            class_name: "AcConstrainedRigidSet".to_string(),
+            data: AssocConstraintNodeData::RigidSet {
+                geometry_dependency: Handle::NULL,
+                geometry_node_id: 99,
+                reserved: false,
+                transform: [0.0; 16],
+                geometry_ids: vec![1],
+            },
+            ..Default::default()
+        });
+
+        scene
+            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .add(ConstraintKind::Vertical, vec![SketchRef::whole(a)], None);
+        scene.materialize_dwg_native_constraints_for_save(true);
+
+        let group = native_group(&scene.document, owner);
+        assert!(group
+            .nodes
+            .iter()
+            .any(|node| matches!(node.data, AssocConstraintNodeData::RigidSet { .. })));
+        assert!(!group
+            .nodes
+            .iter()
+            .any(|node| node.class_name == "AcVerticalConstraint"));
     }
 
     #[test]
@@ -1711,16 +2625,8 @@ mod tests {
         }
     }
 
-    /// Constraint-parity Phase 5: an ellipse isn't a supported geometry
-    /// node type in `geometry_node` yet (see its own doc comment for why),
-    /// so a Concentric constraint referencing one degrades to "not in the
-    /// native graph" — the same "skip, don't error" contract every other
-    /// unbuildable native-constraint case gets — while the other
-    /// constraint in the same scope (Fixed, on a plain circle) still
-    /// persists normally, and the ellipse constraint itself still survives
-    /// in this app's own XRecord format.
     #[test]
-    fn a_constraint_referencing_an_ellipse_is_absent_from_the_native_graph_but_not_from_xrecord() {
+    fn an_ellipse_constraint_round_trips_in_the_native_graph() {
         for ext in ["dxf", "dwg"] {
             let mut scene = Scene::new();
             let ellipse = scene.add_entity(EntityType::Ellipse(
@@ -1757,8 +2663,12 @@ mod tests {
                 "{ext}: the other constraint should still persist, got {class_names:?}"
             );
             assert!(
-                !class_names.contains(&"AcConcentricConstraint"),
-                "{ext}: the ellipse-referencing Concentric constraint has no supported geometry node and must not appear, got {class_names:?}"
+                class_names.contains(&"AcConcentricConstraint"),
+                "{ext}: missing ellipse-referencing constraint, got {class_names:?}"
+            );
+            assert!(
+                class_names.contains(&"AcConstrainedEllipse"),
+                "{ext}: missing ellipse geometry node, got {class_names:?}"
             );
 
             let mut reloaded_scene = Scene::new();
