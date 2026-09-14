@@ -4451,6 +4451,31 @@ properties={:.1}ms picked={}",
                 sel.box_current = None;
             } else {
                 if box_anchor.is_none() {
+                    // A sketch-constraint glyph pill draws on top of the
+                    // geometry it touches and takes priority over it when
+                    // clicked (design mirrors `has_selection` gating the
+                    // viewport right-click menu, and `DeleteSelected`
+                    // preferring a selected pill over entity erase).
+                    let glyph_hit = (self.tabs[i].scene.current_layout == "Model")
+                        .then(|| {
+                            let scope = self.tabs[i].current_sketch_scope();
+                            self.tabs[i].scene.constraint_glyph_hit(
+                                scope,
+                                canvas_sz,
+                                self.show_constraint_values,
+                                p_full,
+                            )
+                        })
+                        .flatten();
+                    if let Some(id) = glyph_hit {
+                        if !selection_pick_add && !self.shift_down {
+                            self.tabs[i].scene.deselect_all();
+                        }
+                        self.tabs[i].scene.selected_constraint = Some(id);
+                        self.refresh_properties();
+                        selection_just_completed = true;
+                    }
+                    if glyph_hit.is_none() {
                     let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                     let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
                     let t_arm = crate::perf::enabled().then(Instant::now);
@@ -4610,6 +4635,7 @@ was_selected={}",
                                 sel.box_crossing = false;
                             }
                         }
+                    }
                     }
                 } else {
                     let a = box_anchor.unwrap();

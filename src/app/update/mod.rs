@@ -4287,6 +4287,13 @@ impl OpenCADStudio {
                 }
                 let i = self.active_tab;
                 self.tabs[i].scene.selection.borrow_mut().context_menu = None;
+                // A selected constraint-glyph pill takes Delete before entity
+                // erase — the two selections are mutually exclusive (see
+                // `Scene::selected_constraint`).
+                if let Some(id) = self.tabs[i].scene.selected_constraint {
+                    self.delete_sketch_constraint(id);
+                    return Task::none();
+                }
                 let handles: Vec<_> = self.tabs[i].scene.selected.iter().cloned().collect();
                 if !handles.is_empty() {
                     // Erase is delta-safe unless a target is in a group (group
@@ -6216,6 +6223,10 @@ impl OpenCADStudio {
                     self.tabs[i].scene.select_entity(h, false);
                 }
                 self.refresh_properties();
+                Task::none()
+            }
+            Message::PropConstraintDelete(id) => {
+                self.delete_sketch_constraint(id);
                 Task::none()
             }
 

@@ -2908,6 +2908,12 @@ pub enum Message {
     /// A Constraints-section row was clicked: select every entity in the
     /// list (replacing the current selection) in the viewport.
     PropConstraintLinkClick(Vec<acadrust::Handle>),
+    /// A Constraints-section row's delete button was clicked, the Delete key
+    /// was pressed with the constraint's viewport glyph selected, or its
+    /// right-click "Delete Constraint" menu item was chosen: remove that one
+    /// persistent sketch constraint (undoable), independent of the entities
+    /// it touches.
+    PropConstraintDelete(crate::scene::sketch_constraints::ConstraintId),
     // ── About window ────────────────────────────────────────────────────
     AboutOpen,
     // ── Graphics warning ────────────────────────────────────────────────

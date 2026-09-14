@@ -62,8 +62,13 @@ pub enum PropValue {
     /// row for one persistent sketch constraint. Clicking it selects every
     /// entity in `handles` in the viewport. `conflicting` mirrors
     /// `SketchConstraintSet::conflicts`, tinting the row the same danger
-    /// color the constraint's glyph pill already uses.
-    EntityLink { handles: Vec<Handle>, conflicting: bool },
+    /// color the constraint's glyph pill already uses. `id` routes the
+    /// row's own delete button back to this specific constraint.
+    EntityLink {
+        id: crate::scene::sketch_constraints::ConstraintId,
+        handles: Vec<Handle>,
+        conflicting: bool,
+    },
     /// One row of the document-wide named-parameter table (Parameters
     /// section, shown when nothing is selected). `index` is the row's
     /// position in `ParameterTable::iter()` order — stable across edits to

@@ -2224,7 +2224,7 @@ impl OpenCADStudio {
                                     crate::scene::model::object::Property {
                                         label,
                                         field: "sketch_constraint",
-                                        value: crate::scene::model::object::PropValue::EntityLink { handles, conflicting },
+                                        value: crate::scene::model::object::PropValue::EntityLink { id: c.id, handles, conflicting },
                                     }
                                 })
                                 .collect();

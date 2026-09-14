@@ -970,6 +970,41 @@ impl OpenCADStudio {
         }
     }
 
+    /// Removes one persistent sketch constraint by id (undoable), regardless
+    /// of whether it's flagged as conflicting. Shared by the Properties
+    /// panel's per-row delete button, the viewport's Delete key when a
+    /// constraint glyph is selected, and its right-click "Delete Constraint"
+    /// menu item — see `resolve_one_sketch_conflict` above for the same
+    /// undo pattern applied to the solver's own auto-removal.
+    pub(super) fn delete_sketch_constraint(
+        &mut self,
+        id: crate::scene::sketch_constraints::ConstraintId,
+    ) {
+        let i = self.active_tab;
+        let scope = self.tabs[i].current_sketch_scope();
+        let Some(set) = self.tabs[i].scene.sketch_constraint_set(scope) else { return };
+        let Some(constraint) = set.get(id) else { return };
+        let touched: Vec<Handle> = constraint.refs.iter().map(|r| r.entity).collect();
+        let label = "Delete constraint";
+
+        let constraints_before = set.clone();
+        let pending = self.begin_undo(i, label, touched.len(), true);
+        self.tabs[i]
+            .scene
+            .record_undo_sketch_constraints_before(scope, constraints_before);
+        self.tabs[i].scene.sketch_constraint_set_mut(scope).remove(id);
+        if self.tabs[i].scene.selected_constraint == Some(id) {
+            self.tabs[i].scene.selected_constraint = None;
+        }
+        let changes: Vec<(Handle, crate::scene::ChangeKind)> =
+            touched.into_iter().map(|h| (h, crate::scene::ChangeKind::Modified)).collect();
+        self.tabs[i].scene.bump_entities(&changes);
+        if let Some(pd) = pending {
+            self.commit_undo_delta(i, pd);
+        }
+        self.refresh_properties();
+    }
+
     /// Rebuilds the active tab's `Scene::named_parameters` from the
     /// editor's working buffer and re-solves dependent constraints.
     pub(super) fn apply_named_parameter_editor_rows(&mut self) {
@@ -7453,6 +7488,43 @@ mod sketch_constraint_undo_tests {
         app.undo_steps(1);
         let set = app.tabs[app.active_tab].scene.sketch_constraint_set(SketchScope::ModelSpace).unwrap();
         assert_eq!(set.constraints.len(), 2, "undo should restore the removed constraint");
+    }
+
+    /// `delete_sketch_constraint` is the non-conflict counterpart to
+    /// `resolve_one_sketch_conflict` above: it removes an arbitrary
+    /// constraint by id (undoable), and also clears
+    /// `Scene::selected_constraint` when the deleted id was the one
+    /// selected — otherwise a stale id would linger and the viewport's
+    /// Delete key / right-click menu would target a constraint that no
+    /// longer exists.
+    #[test]
+    fn delete_sketch_constraint_removes_an_arbitrary_constraint_and_is_undoable() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let line = add_line(&mut app, 0.0, 0.0, 10.0, 3.0);
+
+        let _ = app.apply_cmd_result(CmdResult::AddSketchConstraint {
+            kind: ConstraintKind::Horizontal,
+            refs: vec![SketchRef::whole(line)],
+            driving_param: None,
+            label: "Horizontal constraint",
+        });
+        let set = app.tabs[app.active_tab].scene.sketch_constraint_set(SketchScope::ModelSpace).unwrap();
+        assert_eq!(set.constraints.len(), 1);
+        let id = set.constraints[0].id;
+        app.tabs[app.active_tab].scene.selected_constraint = Some(id);
+
+        app.delete_sketch_constraint(id);
+        let set = app.tabs[app.active_tab].scene.sketch_constraint_set(SketchScope::ModelSpace).unwrap();
+        assert_eq!(set.constraints.len(), 0, "the constraint should have been removed");
+        assert_eq!(
+            app.tabs[app.active_tab].scene.selected_constraint, None,
+            "deleting the selected constraint should clear the selection"
+        );
+
+        app.undo_steps(1);
+        let set = app.tabs[app.active_tab].scene.sketch_constraint_set(SketchScope::ModelSpace).unwrap();
+        assert_eq!(set.constraints.len(), 1, "undo should restore the deleted constraint");
     }
 
     /// `named_parameters_design.md` stage 4: applying the PARAMETERS editor's

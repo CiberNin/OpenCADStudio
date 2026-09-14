@@ -1627,6 +1627,13 @@ pub struct Scene {
     /// Currently selected entity handles.
     pub selected: HashSet<Handle>,
     selected_order: Vec<Handle>,
+    /// The sketch-constraint glyph pill currently selected in the viewport
+    /// (click-to-select — see `sketch_constraints::constraint_glyph_hit`),
+    /// independent of `selected`'s entity handles. Cleared whenever entity
+    /// selection changes so the two stay mutually exclusive; validated
+    /// against the current scope's constraint set at use, since switching
+    /// sketch scope can leave a stale id behind.
+    pub selected_constraint: Option<crate::scene::sketch_constraints::ConstraintId>,
     /// Session-only ISOLATEOBJECTS / HIDEOBJECTS state. Never written to DWG/DXF.
     pub object_isolation: ObjectIsolationState,
     /// Entity handles temporarily removed from the base render while an
@@ -2171,6 +2178,7 @@ impl Scene {
             lighting_cache: RefCell::new(HashMap::default()),
             selected: HashSet::default(),
             selected_order: Vec::new(),
+            selected_constraint: None,
             object_isolation: ObjectIsolationState::default(),
             preview_hidden: HashSet::default(),
             command_preview_hidden: HashSet::default(),

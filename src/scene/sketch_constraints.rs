@@ -640,6 +640,98 @@ impl super::Scene {
         }
     }
 
+    /// Screen-projected sketch-constraint glyph placements for `scope`:
+    /// `(id, anchor, outward_screen_direction, label, is_conflicting)` for
+    /// every enabled, visible constraint whose glyph projects on-screen.
+    /// `vp_size` is the full canvas size (as `SelectionState::vp_size`
+    /// reports it), matching what `viewport_edit_frame`/
+    /// `active_model_tile_bounds` expect. Mirrors the projection
+    /// `crate::app::view` builds its own render list with, and is reused by
+    /// [`constraint_glyph_hit`](Self::constraint_glyph_hit) — both feed the
+    /// same `(anchor, outward, label)` triples into
+    /// `crate::ui::overlay::constraint_glyph_box`/`constraint_glyph_offsets`,
+    /// so hit-testing can never drift from what's actually drawn.
+    pub fn constraint_glyph_placements_screen(
+        &self,
+        scope: SketchScope,
+        vp_size: (f32, f32),
+        show_values: bool,
+    ) -> Vec<(ConstraintId, iced::Point, [f32; 2], String, bool)> {
+        let Some(set) = self.sketch_constraint_set(scope) else {
+            return Vec::new();
+        };
+        if set.constraints.is_empty() {
+            return Vec::new();
+        }
+        let edit_frame = self.viewport_edit_frame(vp_size);
+        let bounds = match &edit_frame {
+            Some((_, full)) => *full,
+            None => self.active_model_tile_bounds(vp_size.0, vp_size.1),
+        };
+        let (view_rot, eye) = if let Some((cam, _)) = &edit_frame {
+            (cam.view_proj_rte(bounds), cam.eye())
+        } else {
+            let cam = self.camera.borrow();
+            (cam.view_proj_rte(bounds), cam.eye())
+        };
+        set.constraints
+            .iter()
+            .filter(|c| c.enabled)
+            .filter(|c| self.is_sketch_constraint_visible(scope, c.id))
+            .filter_map(|c| {
+                let (anchor, outward) = glyph_placement(&self.document, c)?;
+                let screen = crate::scene::pick::grip::project_rte(
+                    glam::DVec3::new(anchor.x, anchor.y, anchor.z),
+                    view_rot,
+                    eye,
+                    bounds,
+                )?;
+                let outward_screen = crate::scene::pick::grip::project_rte(
+                    glam::DVec3::new(
+                        anchor.x + outward.x,
+                        anchor.y + outward.y,
+                        anchor.z + outward.z,
+                    ),
+                    view_rot,
+                    eye,
+                    bounds,
+                )?;
+                let direction = (outward_screen - screen).normalize_or(glam::Vec2::NEG_Y);
+                let point = iced::Point::new(bounds.x + screen.x, bounds.y + screen.y);
+                let is_conflicting = set.conflicts.iter().any(|(id, _)| *id == c.id);
+                let label = if show_values {
+                    glyph_label(c)
+                } else {
+                    c.kind.glyph_symbol().to_string()
+                };
+                point.x.is_finite().then_some((c.id, point, direction.to_array(), label, is_conflicting))
+            })
+            .collect()
+    }
+
+    /// Hit-tests screen point `p` (same coordinate space as `p_full` in the
+    /// viewport click handler) against the glyph pills from
+    /// [`constraint_glyph_placements_screen`](Self::constraint_glyph_placements_screen),
+    /// via `crate::ui::overlay::constraint_glyph_hit_test`'s shared layout
+    /// math, so a click only registers where the pill is actually drawn.
+    pub fn constraint_glyph_hit(
+        &self,
+        scope: SketchScope,
+        vp_size: (f32, f32),
+        show_values: bool,
+        p: iced::Point,
+    ) -> Option<ConstraintId> {
+        let placements = self.constraint_glyph_placements_screen(scope, vp_size, show_values);
+        let glyphs: Vec<(iced::Point, [f32; 2], String, bool)> = placements
+            .iter()
+            .map(|(_, point, direction, label, is_conflicting)| {
+                (*point, *direction, label.clone(), *is_conflicting)
+            })
+            .collect();
+        let index = crate::ui::overlay::constraint_glyph_hit_test(&glyphs, p)?;
+        Some(placements[index].0)
+    }
+
     /// Handle remapping lives in each command that duplicates
     /// entities — `Scene::copy_entities`' `handle_map` (COPY/ARRAY/MIRROR,
     /// `src/scene/modify.rs`) and `OpenCADStudio::finalize_paste`'s own

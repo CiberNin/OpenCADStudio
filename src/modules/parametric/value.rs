@@ -302,6 +302,18 @@ impl CadCommand for DistanceConstraintCommand {
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        // A token that names an existing parameter always wins over the
+        // mode-switch keywords below — otherwise a parameter literally
+        // named "r", "d", "a", "x", or "y" (all entirely reasonable names,
+        // and exactly the single-letter keywords this command recognizes)
+        // could never be referenced here: e.g. on a circle, typing "r"
+        // would always be swallowed as the Radius mode-switch instead of
+        // resolving to the parameter.
+        if let Some(value @ DrivingValue::Named(_)) =
+            parse_driving_value(text, &self.known_param_names)
+        {
+            return self.build(value);
+        }
         // Mode-switch keywords re-prompt instead of building — consumed
         // inputs return `Some(NeedPoint)` so the driver doesn't re-offer
         // the same token a second time (matches e.g. `trim.rs`'s
@@ -581,6 +593,41 @@ mod tests {
                 driving_param: Some(DrivingValue::Literal(8.0)),
                 ..
             }
+        ));
+    }
+
+    /// A parameter literally named "r" (or "d"/"a"/"x"/"y", the other
+    /// single-letter mode-switch keywords) must still resolve to the
+    /// parameter, not be swallowed as a keyword — regression test for the
+    /// bug where typing a circle's radius-driving parameter named "r" was
+    /// always misread as the "switch to Radius mode" keyword and silently
+    /// re-prompted instead of building a constraint.
+    #[test]
+    fn a_parameter_named_like_a_mode_keyword_still_resolves_by_name() {
+        let mut scene = Scene::new();
+        let circle = add_circle(&mut scene);
+        scene.named_parameters_mut().set("r", "5").unwrap();
+        let mut cmd = DistanceConstraintCommand::new(&scene, circle).unwrap();
+        assert!(matches!(
+            cmd.on_text_input("R"),
+            Some(CmdResult::AddSketchConstraint {
+                kind: ConstraintKind::Radius,
+                driving_param: Some(DrivingValue::Named(name)),
+                ..
+            }) if name == "r"
+        ));
+
+        let mut scene2 = Scene::new();
+        let line = add_line(&mut scene2);
+        scene2.named_parameters_mut().set("x", "5").unwrap();
+        let mut cmd2 = DistanceConstraintCommand::new(&scene2, line).unwrap();
+        assert!(matches!(
+            cmd2.on_text_input("X"),
+            Some(CmdResult::AddSketchConstraint {
+                kind: ConstraintKind::Distance,
+                driving_param: Some(DrivingValue::Named(name)),
+                ..
+            }) if name == "x"
         ));
     }
 
