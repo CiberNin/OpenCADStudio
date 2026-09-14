@@ -48,15 +48,20 @@ pub fn build_step(meshes: &[&MeshModel]) -> Option<String> {
             let a = point(i0);
             let b = point(i1);
             let c = point(i2);
-            let n = if !normals.is_empty() && i0 < normals.len() {
+            // The face is placed on the triangle's own plane. A smoothed vertex
+            // normal leans off it, so only a triangle whose cross product is
+            // zero falls back to the normal the mesh gives it. Small triangles
+            // have a tiny cross product but still a plane of their own.
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let nx = ab[1] * ac[2] - ab[2] * ac[1];
+            let ny = ab[2] * ac[0] - ab[0] * ac[2];
+            let nz = ab[0] * ac[1] - ab[1] * ac[0];
+            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            let n = if len == 0.0 && i0 < normals.len() {
                 normals[i0]
             } else {
-                let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-                let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-                let nx = ab[1] * ac[2] - ab[2] * ac[1];
-                let ny = ab[2] * ac[0] - ab[0] * ac[2];
-                let nz = ab[0] * ac[1] - ab[1] * ac[0];
-                let len = (nx * nx + ny * ny + nz * nz).sqrt().max(f64::EPSILON);
+                let len = len.max(f64::MIN_POSITIVE);
                 [(nx / len) as f32, (ny / len) as f32, (nz / len) as f32]
             };
             tris.push(Tri { v: [a, b, c], n });
@@ -329,5 +334,80 @@ mod tests {
         );
         let step = build_step(&[&mesh]).expect("step");
         assert!(step.contains("CARTESIAN_POINT('',(1.500000,2.000000,0.000000));"));
+    }
+
+    /// The direction each face's PLANE is placed with, read back through its
+    /// AXIS2_PLACEMENT_3D. The export writes one face per triangle.
+    fn plane_normals(step: &str) -> Vec<[f64; 3]> {
+        let direction = |id: &str| -> [f64; 3] {
+            let prefix = format!("{id} = DIRECTION('',(");
+            let line = step
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("no DIRECTION {id}"));
+            let values: Vec<f64> = line[prefix.len()..]
+                .trim_end_matches("));")
+                .split(',')
+                .map(|value| value.parse().expect("number"))
+                .collect();
+            [values[0], values[1], values[2]]
+        };
+        step.lines()
+            .filter_map(|line| line.split_once(" = AXIS2_PLACEMENT_3D('',"))
+            .map(|(_, refs)| {
+                let refs: Vec<&str> = refs.trim_end_matches(");").split(',').collect();
+                direction(refs[1])
+            })
+            .collect()
+    }
+
+    /// A curved surface shares smoothed normals across its facets, so a
+    /// vertex normal leans away from the triangle. The face's PLANE has to be
+    /// the triangle's own plane, or its corners do not lie on it.
+    #[test]
+    fn a_face_plane_follows_the_triangle_not_its_vertex_normal() {
+        let mut mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            Vec::new(),
+        );
+        let leaning = [
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        mesh.normals = vec![leaning; 3];
+        let step = build_step(&[&mesh]).expect("step");
+        assert_eq!(plane_normals(&step), vec![[0.0, 0.0, 1.0]]);
+    }
+
+    /// A small triangle still has a plane of its own. Its cross product is
+    /// tiny (1e-18 here), far below f64::EPSILON, but it is not zero.
+    #[test]
+    fn a_small_triangle_keeps_its_own_plane() {
+        let mut mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1e-9, 0.0, 0.0], [0.0, 1e-9, 0.0]],
+            Vec::new(),
+        );
+        let leaning = [
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        mesh.normals = vec![leaning; 3];
+        let step = build_step(&[&mesh]).expect("step");
+        assert_eq!(plane_normals(&step), vec![[0.0, 0.0, 1.0]]);
+    }
+
+    /// A triangle with no area has no plane of its own, so it keeps the
+    /// normal the mesh gives it rather than a zero direction.
+    #[test]
+    fn a_degenerate_triangle_keeps_its_vertex_normal() {
+        let mut mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            Vec::new(),
+        );
+        mesh.normals = vec![[0.0, 1.0, 0.0]; 3];
+        let step = build_step(&[&mesh]).expect("step");
+        assert_eq!(plane_normals(&step), vec![[0.0, 1.0, 0.0]]);
     }
 }
