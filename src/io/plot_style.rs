@@ -357,7 +357,13 @@ impl PlotStyleTable {
         let description = self.description.replace(['\r', '\n'], " ");
         s.push_str(&format!("description=\"{description}\n"));
         s.push_str("aci_table_available=TRUE\n");
-        s.push_str(&format!("scale_factor={:.1}\n", self.scale_factor));
+        // The factor scales every lineweight when applied, so write it in full,
+        // keeping the decimal point on a whole value.
+        let mut scale_factor = self.scale_factor.to_string();
+        if scale_factor.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            scale_factor.push_str(".0");
+        }
+        s.push_str(&format!("scale_factor={scale_factor}\n"));
         s.push_str(&format!(
             "apply_factor={}\n",
             if self.apply_factor { "TRUE" } else { "FALSE" }
@@ -742,4 +748,36 @@ fn parse_legacy_plot_style_text(
         }
     }
     Ok(table)
+}
+
+#[cfg(test)]
+mod round_trip_tests {
+    use super::{compress_ctb, PlotStyleTable};
+
+    /// What SAVE writes, read back the way the Plot dialog loads it.
+    fn saved_and_reloaded(table: &PlotStyleTable) -> PlotStyleTable {
+        let bytes = compress_ctb(table.to_text().as_bytes()).expect("compress");
+        PlotStyleTable::from_bytes(table.name.clone(), &bytes).expect("reload")
+    }
+
+    /// Saving a table keeps its global scale factor, which scales every
+    /// lineweight while apply_factor is on. It used to be cut to one decimal.
+    #[test]
+    fn the_scale_factor_survives_a_save() {
+        let mut table = PlotStyleTable::identity("scaled.ctb");
+        table.apply_factor = true;
+        table.scale_factor = 0.25;
+        table.aci_entries[1].lineweight = 13; // 0.50 mm
+        let reloaded = saved_and_reloaded(&table);
+        assert_eq!(reloaded.scale_factor, 0.25);
+        assert_eq!(reloaded.resolve_lineweight(1), Some(0.125));
+    }
+
+    /// A whole factor is still written with its decimal point.
+    #[test]
+    fn a_whole_scale_factor_keeps_its_decimal_point() {
+        let table = PlotStyleTable::identity("plain.ctb");
+        assert!(table.to_text().contains("\nscale_factor=1.0\n"));
+        assert_eq!(saved_and_reloaded(&table).scale_factor, 1.0);
+    }
 }
