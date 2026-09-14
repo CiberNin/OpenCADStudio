@@ -103,6 +103,19 @@ pub fn unit_context() -> UnitContext {
 /// produce "n'-d/D"" style strings (1 unit = 1 inch); decimal / scientific /
 /// engineering / Windows-desktop fall back to plain decimal at LUPREC places.
 pub fn format_length(value: f64) -> String {
+    without_negative_zero(format_signed_length(value))
+}
+
+/// Drop the sign from a formatted number whose digits all rounded to zero. A
+/// rotation leaves coordinates like -1e-15 behind, which read as `-0.0000`.
+fn without_negative_zero(text: String) -> String {
+    match text.strip_prefix('-') {
+        Some(rest) if !rest.chars().any(|c| matches!(c, '1'..='9')) => rest.to_string(),
+        _ => text,
+    }
+}
+
+fn format_signed_length(value: f64) -> String {
     let ctx = unit_context();
     let prec = ctx.luprec.max(0) as usize;
     match ctx.lunits {
@@ -173,6 +186,10 @@ pub fn format_area(value: f64) -> String {
 
 /// Format an angle (input in radians) using AUNITS / AUPREC.
 pub fn format_angle(value_rad: f64) -> String {
+    without_negative_zero(format_signed_angle(value_rad))
+}
+
+fn format_signed_angle(value_rad: f64) -> String {
     let ctx = unit_context();
     let prec = ctx.auprec.max(0) as usize;
     match ctx.aunits {
@@ -1207,5 +1224,56 @@ mod angle_format_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod negative_zero_format_tests {
+    use super::*;
+
+    /// What ROTATE leaves in X when it turns the point (0, 10) by 180°.
+    const ROTATION_NOISE: f64 = -1.2246467991473533e-15;
+
+    fn length(lunits: i16, luprec: i16, value: f64) -> String {
+        let mut ctx = unit_context();
+        ctx.lunits = lunits;
+        ctx.luprec = luprec;
+        set_unit_context(ctx);
+        format_length(value)
+    }
+
+    fn angle(aunits: i16, auprec: i16, value_rad: f64) -> String {
+        let mut ctx = unit_context();
+        ctx.aunits = aunits;
+        ctx.auprec = auprec;
+        set_unit_context(ctx);
+        format_angle(value_rad)
+    }
+
+    /// A length that rounds to zero reads as zero in every format, instead of
+    /// `-0.0000` in Properties after a rotation leaves float noise behind.
+    #[test]
+    fn a_length_that_rounds_to_zero_has_no_sign() {
+        assert_eq!(length(2, 4, ROTATION_NOISE), "0.0000");
+        assert_eq!(length(3, 4, ROTATION_NOISE), "0.0000\"");
+        assert_eq!(length(4, 4, ROTATION_NOISE), "0\"");
+        assert_eq!(length(5, 4, ROTATION_NOISE), "0");
+    }
+
+    #[test]
+    fn an_angle_that_rounds_to_zero_has_no_sign() {
+        assert_eq!(angle(0, 0, ROTATION_NOISE), "0°");
+        assert_eq!(angle(1, 0, ROTATION_NOISE), "0d0'0\"");
+        assert_eq!(angle(2, 0, ROTATION_NOISE), "0g");
+        assert_eq!(angle(3, 2, ROTATION_NOISE), "0.00r");
+    }
+
+    /// Values that still show a digit keep their sign.
+    #[test]
+    fn a_visible_negative_keeps_its_sign() {
+        assert_eq!(length(2, 4, -2.5), "-2.5000");
+        assert_eq!(length(2, 0, -0.6), "-1");
+        assert_eq!(angle(0, 0, -45f64.to_radians()), "-45°");
+        assert_eq!(angle(1, 1, -0.0001f64.to_radians()), "-0d0'0.4\"");
     }
 }
