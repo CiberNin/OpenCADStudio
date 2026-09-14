@@ -2304,6 +2304,33 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::XrefRowOp(index, op) => {
+                // Open is not a palette op — it navigates to the file.
+                if op == crate::ui::window::xref_manager::XrefPaletteOp::Open {
+                    self.xref_manager.right_click_select(index);
+                    if let Some(entry) = self.xref_manager.entries.get(index) {
+                        if let Some(found) = entry.found_at.clone() {
+                            let is_dwg = found.to_ascii_lowercase().ends_with(".dwg")
+                                || found.to_ascii_lowercase().ends_with(".dxf");
+                            if is_dwg {
+                                return Task::done(Message::OpenRecent(std::path::PathBuf::from(found)));
+                            } else {
+                                let _ = open::that_detached(&found);
+                            }
+                        } else {
+                            self.command_line.push_error(
+                                crate::t!("File not found — check the saved path.").as_ref(),
+                            );
+                        }
+                    }
+                    return Task::none();
+                }
+                // For XrefPathPick the row menu just sets the anchor; the
+                // picker's result handler does the work. Don't run it through
+                // xref_manager_op.
+                if matches!(op, crate::ui::window::xref_manager::XrefPaletteOp::Attach) {
+                    self.xref_manager.right_click_select(index);
+                    return Task::done(Message::XAttachPick);
+                }
                 // Row-scoped op: select the row first, then run the op.
                 self.xref_manager.right_click_select(index);
                 self.xref_manager_op(op);

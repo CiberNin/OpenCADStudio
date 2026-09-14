@@ -924,6 +924,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             return;
         }
         let label = match op {
+            XrefPaletteOp::Open => "XREF-OPEN",
             XrefPaletteOp::Detach => "XREF-DETACH",
             XrefPaletteOp::Unload => "XREF-UNLOAD",
             XrefPaletteOp::Reload => "XREF-RELOAD",
@@ -1189,6 +1190,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         Err(msg) => self.command_line.push_error(msg.as_str()),
                     }
                 }
+            }
+            XrefPaletteOp::Open | XrefPaletteOp::Attach => {
+                // Handled in update/mod.rs XrefRowOp dispatch (navigation / picker), not here.
             }
         }
         if done > 0 {

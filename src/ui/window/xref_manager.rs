@@ -180,6 +180,7 @@ pub enum SelectExtend {
 /// Selection-gated palette operation the toolbar offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XrefPaletteOp {
+    Open,
     Detach,
     Unload,
     Reload,
@@ -291,23 +292,10 @@ impl XrefManagerPanel {
                 .iter()
                 .position(|e| e.key == k && e.saved_path == p)
         });
-        // Previews decode here (not in `view`, which must stay pure): the
-        // anchor entry only, and only under single selection — the spec shows
-        // a preview solely for one selected reference.
+        // Previews decode here and on selection change (view stays pure):
+        // the anchor entry only, and only under single selection.
         self.previews.clear();
-        if self.selected.len() <= 1 {
-            if let Some(a) = self.anchor.and_then(|i| self.entries.get(i)) {
-                if let (Some(found), Some(img)) =
-                    (a.found_at.clone(), reference_preview(a))
-                {
-                    let (w, h) = (img.width(), img.height());
-                    self.previews.insert(
-                        (a.key, found),
-                        iced::widget::image::Handle::from_rgba(w, h, img.into_raw()),
-                    );
-                }
-            }
-        }
+        self.ensure_preview_for_anchor();
         self.expanded.retain(|k| live_keys.contains(k));
         self.entries
             .iter()
@@ -334,6 +322,7 @@ impl XrefManagerPanel {
             self.selected.clear();
             self.selected.insert(index);
             self.anchor = Some(index);
+            self.ensure_preview_for_anchor();
             return;
         }
         match extend {
@@ -364,6 +353,7 @@ impl XrefManagerPanel {
                 }
             }
         }
+        self.ensure_preview_for_anchor();
     }
 
     /// Legacy toggle entry point: Ctrl-style toggle in list mode, single
@@ -382,12 +372,35 @@ impl XrefManagerPanel {
         }
         if !self.selected.contains(&index) {
             self.click_select(index, SelectExtend::Single);
+        } else {
+            self.ensure_preview_for_anchor();
         }
     }
 
     /// Flip list/tree presentation.
     pub fn toggle_tree(&mut self) {
         self.tree = !self.tree;
+    }
+
+    fn ensure_preview_for_anchor(&mut self) {
+        if self.selected.len() > 1 {
+            return;
+        }
+        let Some(a) = self.anchor.and_then(|i| self.entries.get(i)) else {
+            return;
+        };
+        let Some(found) = a.found_at.clone() else {
+            return;
+        };
+        let key = (a.key, found.clone());
+        if self.previews.contains_key(&key) {
+            return;
+        }
+        if let Some(img) = reference_preview(a) {
+            let (w, h) = (img.width(), img.height());
+            self.previews
+                .insert(key, iced::widget::image::Handle::from_rgba(w, h, img.into_raw()));
+        }
     }
 
     /// Total table content width: column widths plus inter-column gutters.
@@ -1472,23 +1485,75 @@ fn menu_row(label: String, msg: Message) -> Element<'static, Message> {
         .into()
 }
 
-/// Per-row right-click menu. Each item targets its own row, so the
-/// operation applies to the row under the cursor. Nested rows report
-/// per-entry errors from the engine, matching the CLI wording.
+fn menu_header(label: String) -> Element<'static, Message> {
+    container(text(label).size(11).style(|theme: &Theme| iced::widget::text::Style {
+        color: Some(theme.palette().background.base.text.scale_alpha(0.55)),
+    }))
+    .padding([6, 12])
+    .width(Fill)
+    .into()
+}
+
+fn menu_separator() -> Element<'static, Message> {
+    container(iced::widget::Space::new().height(Length::Fixed(1.0)))
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.neutral.color)),
+            ..Default::default()
+        })
+        .padding([0, 8])
+        .width(Fill)
+        .into()
+}
+
+/// Per-row right-click menu. Eight items exactly: universal tools +
+/// path tools. No Bind, no Attach/Overlay — those are DWG-only and
+/// hidden entirely. Change Path Type renders as an indented group
+/// because iced_aw ContextMenu has no nested flyout.
 fn row_menu_for(index: usize) -> Element<'static, Message> {
     let item = |label: &str, op: XrefPaletteOp| -> Element<'static, Message> {
         menu_row(label.to_string(), Message::XrefRowOp(index, op))
     };
+    let pathtype_item = |label: &str, pt: Pathtype| -> Element<'static, Message> {
+        container(menu_row(
+            label.to_string(),
+            Message::XrefRowOp(index, XrefPaletteOp::Pathtype(pt)),
+        ))
+        .padding(Padding {
+            left: 12.0,
+            ..Padding::default()
+        })
+        .width(Fill)
+        .into()
+    };
     container(
         column![
-            item(&crate::t!("Detach").into_owned(), XrefPaletteOp::Detach),
+            item(&crate::t!("Open").into_owned(), XrefPaletteOp::Open),
+            item(&crate::t!("Attach...").into_owned(), XrefPaletteOp::Attach),
             item(&crate::t!("Unload").into_owned(), XrefPaletteOp::Unload),
             item(&crate::t!("Reload").into_owned(), XrefPaletteOp::Reload),
-            item(&crate::t!("Bind").into_owned(), XrefPaletteOp::Bind),
-            item(&crate::t!("Overlay").into_owned(), XrefPaletteOp::Overlay),
-            item(&crate::t!("Attach DWG").into_owned(), XrefPaletteOp::Attach),
+            item(&crate::t!("Detach").into_owned(), XrefPaletteOp::Detach),
+            menu_separator(),
+            menu_header(crate::t!("Change Path Type").into_owned()),
+            pathtype_item(
+                &crate::t!("Make Absolute").into_owned(),
+                Pathtype::Full
+            ),
+            pathtype_item(
+                &crate::t!("Make Relative").into_owned(),
+                Pathtype::Relative
+            ),
+            pathtype_item(&crate::t!("Remove Path").into_owned(), Pathtype::None),
+            menu_separator(),
+            menu_row(
+                crate::t!("Select New Path").into_owned(),
+                Message::XrefPathPick
+            ),
+            menu_row(
+                crate::t!("Find and Replace...").into_owned(),
+                Message::XrefFindReplacePrompt
+            ),
         ]
-        .spacing(2)
+        .spacing(1)
         .padding(4),
     )
     .style(|theme: &Theme| container::Style {
@@ -1502,7 +1567,7 @@ fn row_menu_for(index: usize) -> Element<'static, Message> {
         },
         ..Default::default()
     })
-    .width(Length::Fixed(200.0))
+    .width(Length::Fixed(220.0))
     .into()
 }
 
@@ -1791,6 +1856,17 @@ fn details_pane<'a>(entry: Option<&'a ReferenceEntry>, doc: &'a CadDocument) -> 
                             format!("{:?}", def.resolution_unit),
                         ));
                 }
+                if let Some((w, h)) = find_image_display_size(doc, e.key) {
+                    rows = rows
+                        .push(detail_row(
+                            crate::t!("Display Width"),
+                            format!("{:.2}", w),
+                        ))
+                        .push(detail_row(
+                            crate::t!("Display Height"),
+                            format!("{:.2}", h),
+                        ));
+                }
             }
             rows.into()
         }
@@ -1863,6 +1939,20 @@ fn find_image_def(
         acadrust::objects::ObjectType::ImageDefinition(def) => Some(def),
         _ => None,
     })
+}
+
+fn find_image_display_size(doc: &CadDocument, key: u64) -> Option<(f64, f64)> {
+    let handle = acadrust::types::Handle::from(key);
+    for entity in doc.entities() {
+        if let acadrust::EntityType::RasterImage(img) = entity {
+            if img.definition_handle == Some(handle) {
+                let w = (img.u_vector.x.powi(2) + img.u_vector.y.powi(2) + img.u_vector.z.powi(2)).sqrt();
+                let h = (img.v_vector.x.powi(2) + img.v_vector.y.powi(2) + img.v_vector.z.powi(2)).sqrt();
+                return Some((w, h));
+            }
+        }
+    }
+    None
 }
 
 fn detail_row<'a>(
