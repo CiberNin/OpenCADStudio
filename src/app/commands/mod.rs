@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 mod blocks;
 mod dim;
-mod display;
+pub(crate) mod display;
 mod draw;
 mod fileops;
 mod inquiry;

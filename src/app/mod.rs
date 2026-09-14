@@ -29,6 +29,7 @@ mod startup;
 mod style_ops;
 mod text_inline;
 mod tolerance_dialog;
+mod annotation_data;
 mod update;
 mod view;
 mod visibility;
@@ -1092,6 +1093,12 @@ pub(super) struct OpenCADStudio {
     /// without Apply, mirroring the style managers' staging.
     scale_stage: Option<crate::app::style_ops::ScaleStage>,
 
+    // ── Annotation table/data dialogs ────────────────────────────────────
+    table_insert: crate::ui::window::annotation_data::TableInsertState,
+    data_link_manager: crate::ui::window::annotation_data::DataLinkManagerState,
+    data_link_parent_table: bool,
+    data_extraction: crate::ui::window::annotation_data::DataExtractionState,
+
     // ── Plot Style Panel ──────────────────────────────────────────────────
     /// Selected ACI index in the panel (1-255).
     plotstyle_panel_aci: u8,
@@ -1747,6 +1754,9 @@ pub enum ModalKind {
     /// Add / remove the annotation scales a single selected object has a
     /// per-object representation for.
     AnnoObjectScale,
+    InsertTable,
+    DataLinkManager,
+    DataExtraction,
     /// The scene is drawn by a software rasterizer, or not at all: what that
     /// means and what usually fixes it. Queued once per verdict; the status
     /// bar's ⚠ pill reopens it.
@@ -3412,6 +3422,35 @@ pub enum Message {
     /// Background extraction/write completion.
     WblockWriteFinished(String, std::path::PathBuf, Result<(), String>),
     // ── DATAEXTRACTION ────────────────────────────────────────────────────
+    TableInsertStyle(String),
+    TableInsertField(crate::ui::window::annotation_data::TableInsertField),
+    TableInsertApply,
+    DataLinkManagerOpen,
+    DataLinkNew,
+    DataLinkSelect(acadrust::types::Handle),
+    DataLinkEdit,
+    DataLinkEditCancel,
+    DataLinkField(crate::ui::window::annotation_data::DataLinkField),
+    DataLinkBrowse,
+    DataLinkBrowseResult(Option<std::path::PathBuf>),
+    DataLinkSave,
+    DataLinkDelete,
+    DataLinkInsert,
+    DataLinkClose,
+    DataExtractionOpen,
+    DataExtractionField(crate::ui::window::annotation_data::DataExtractionField),
+    DataExtractionBack,
+    DataExtractionNext,
+    DataExtractionBrowseSettings,
+    DataExtractionBrowseSettingsResult(Option<std::path::PathBuf>),
+    DataExtractionAddDrawings,
+    DataExtractionAddDrawingsResult(Vec<std::path::PathBuf>),
+    DataExtractionAddFolder,
+    DataExtractionAddFolderResult(Option<std::path::PathBuf>),
+    DataExtractionClearSources,
+    DataExtractionBrowseOutput,
+    DataExtractionBrowseOutputResult(Option<std::path::PathBuf>),
+    DataExtractionFinish,
     /// Save the pre-built CSV string to a file chosen by the user.
     DataExtractionSave(String),
     /// Path chosen (or None = cancelled).
@@ -3780,6 +3819,10 @@ impl OpenCADStudio {
             anno_object_scale_target: None,
             scale_rename_buf: String::new(),
             scale_stage: None,
+            table_insert: Default::default(),
+            data_link_manager: Default::default(),
+            data_link_parent_table: false,
+            data_extraction: Default::default(),
             layout_manager_rename_buf: String::new(),
             plotstyle_panel_aci: 1,
             ps_color_buf: String::new(),

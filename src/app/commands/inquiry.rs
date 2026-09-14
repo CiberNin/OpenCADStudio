@@ -1198,8 +1198,7 @@ impl OpenCADStudio {
             }
 
             "DATAEXTRACTION" | "EATTEXT" | "ATTEXT" => {
-                let csv = build_data_extraction_csv(&self.tabs[i].scene.document);
-                return Some(Task::done(Message::DataExtractionSave(csv)));
+                self.open_data_extraction();
             }
 
             // ── Find / Replace ────────────────────────────────────────────────
@@ -1933,82 +1932,6 @@ fn positive_z_normal(normal: acadrust::types::Vector3) -> bool {
 
 fn z_axis_normal(normal: acadrust::types::Vector3) -> bool {
     normal.x == 0.0 && normal.y == 0.0 && normal.z != 0.0
-}
-
-// ── DATAEXTRACTION ─────────────────────────────────────────────────────────
-
-/// Build a CSV string with one row per entity in model space.
-/// Columns: Type, Handle, Layer, Color, Linetype, ExtraInfo
-fn build_data_extraction_csv(doc: &acadrust::CadDocument) -> String {
-    use acadrust::EntityType;
-
-    let mut out = String::from("Type,Handle,Layer,Color,Linetype,ExtraInfo\n");
-
-    let ms_handle = doc.header.model_space_block_handle;
-    for e in doc.entities() {
-        // Skip Block/EndBlock sentinels and paper-space entities.
-        if matches!(e, EntityType::Block(_) | EntityType::BlockEnd(_)) {
-            continue;
-        }
-        if !ms_handle.is_null() && e.common().owner_handle != ms_handle {
-            continue;
-        }
-        let type_name = crate::entities::names::dxf_name(e);
-        let handle = format!("{:X}", e.common().handle.value());
-        let layer = csv_escape(&e.common().layer);
-        let color = format!("{}", e.common().color);
-        let lt = csv_escape(&e.common().linetype);
-        let extra = csv_escape(&entity_extra_info(e));
-        out.push_str(&format!(
-            "{type_name},{handle},{layer},{color},{lt},{extra}\n"
-        ));
-    }
-    out
-}
-
-/// Return a short geometry summary for CSV ExtraInfo column.
-fn entity_extra_info(entity: &acadrust::EntityType) -> String {
-    use acadrust::EntityType;
-    match entity {
-        EntityType::Line(e) => format!(
-            "({:.3},{:.3})-({:.3},{:.3})",
-            e.start.x, e.start.y, e.end.x, e.end.y
-        ),
-        EntityType::Circle(e) => {
-            format!("C({:.3},{:.3}) R={:.3}", e.center.x, e.center.y, e.radius)
-        }
-        EntityType::Arc(e) => format!(
-            "C({:.3},{:.3}) R={:.3} {:.1}°-{:.1}°",
-            e.center.x,
-            e.center.y,
-            e.radius,
-            e.start_angle.to_degrees(),
-            e.end_angle.to_degrees()
-        ),
-        EntityType::Text(e) => e.value.clone(),
-        EntityType::MText(e) => e.value.chars().take(60).collect(),
-        EntityType::Insert(e) => format!(
-            "BLK={} @({:.3},{:.3})",
-            e.block_name, e.insert_point.x, e.insert_point.y
-        ),
-        EntityType::LwPolyline(e) => crate::tf!("{} vertices", e.vertices.len()).into_owned(),
-        EntityType::Polyline(e) => crate::tf!("{} vertices", e.vertices.len()).into_owned(),
-        EntityType::Polyline2D(e) => crate::tf!("{} vertices", e.vertices.len()).into_owned(),
-        EntityType::Polyline3D(e) => crate::tf!("{} vertices", e.vertices.len()).into_owned(),
-        EntityType::Hatch(e) => format!("PAT={}", e.pattern.name),
-        EntityType::Dimension(e) => format!("{:.3}", e.base().actual_measurement),
-        EntityType::Spline(e) => crate::tf!("{} ctrl pts", e.control_points.len()).into_owned(),
-        _ => String::new(),
-    }
-}
-
-/// Escape a string for a CSV field (wrap in quotes if it contains comma/quote/newline).
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
 }
 
 // ── CAL — arithmetic expression evaluator ──────────────────────────────────

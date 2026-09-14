@@ -22,6 +22,7 @@ pub fn tool() -> ToolDef {
 pub struct DataLinkPlaceCommand {
     table: Table,
     plane: WorkingPlane,
+    command_name: &'static str,
 }
 
 impl DataLinkPlaceCommand {
@@ -30,6 +31,43 @@ impl DataLinkPlaceCommand {
         Self {
             table,
             plane: WorkingPlane::default(),
+            command_name: "DATALINK",
+        }
+    }
+
+    /// Place a table that references a data-link object already stored in the
+    /// drawing. Every populated cell is locked and points at the same link so
+    /// update and save/reopen keep one stable relationship.
+    pub fn existing(mut table: Table, link: acadrust::Handle) -> Self {
+        use acadrust::entities::table::CellStateFlags;
+        let rows = table.row_count() as i32;
+        let columns = table.column_count() as i32;
+        for row in &mut table.rows {
+            for cell in &mut row.cells {
+                cell.has_linked_data = true;
+                cell.data_link_handle = Some(link);
+                cell.data_link_rows = rows;
+                cell.data_link_columns = columns;
+                cell.state.insert(
+                    CellStateFlags::LINKED
+                        | CellStateFlags::CONTENT_LOCKED
+                        | CellStateFlags::FORMAT_LOCKED,
+                );
+            }
+        }
+        Self {
+            table,
+            plane: WorkingPlane::default(),
+            command_name: "DATALINK",
+        }
+    }
+
+    /// Place a prepared, unlinked table (used by the extraction wizard).
+    pub fn unlinked(table: Table) -> Self {
+        Self {
+            table,
+            plane: WorkingPlane::default(),
+            command_name: "DATAEXTRACTION",
         }
     }
 
@@ -105,11 +143,15 @@ impl CadCommand for DataLinkPlaceCommand {
     }
 
     fn name(&self) -> &'static str {
-        "DATALINK"
+        self.command_name
     }
 
     fn prompt(&self) -> String {
-        t!("DATALINK  Specify insertion point:").into_owned()
+        if self.command_name == "DATALINK" {
+            t!("DATALINK  Specify insertion point:").into_owned()
+        } else {
+            t!("DATAEXTRACTION  Specify insertion point:").into_owned()
+        }
     }
 
     fn on_point(&mut self, point: DVec3) -> CmdResult {

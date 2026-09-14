@@ -1585,10 +1585,7 @@ impl OpenCADStudio {
 
             // DATALINK <path.csv> — create a persistent linked table.
             "DATALINK" => {
-                use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new("DATALINK", "DATALINK  path to the .csv file:");
-                self.command_line.push_info(&c.prompt());
-                self.tabs[i].active_cmd = Some(Box::new(c));
+                self.open_data_link_manager(false);
             }
             cmd if cmd.starts_with("DATALINK ") => {
                 let path = cmd.trim_start_matches("DATALINK").trim();
@@ -1690,20 +1687,7 @@ impl OpenCADStudio {
                     let Some(link_handle) = link_handle else {
                         continue;
                     };
-                    let path = match self.tabs[i].scene.document.objects.get(&link_handle) {
-                        Some(acadrust::objects::ObjectType::ClassObject(object)) => {
-                            match &object.data {
-                                acadrust::objects::ClassObjectData::DataLink(link) => {
-                                    Some(link.connection_string.clone())
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(path) = path {
-                        jobs.push((*handle, link_handle, path));
-                    }
+                    jobs.push((*handle, link_handle));
                 }
                 if jobs.is_empty() {
                     self.command_line
@@ -1712,28 +1696,43 @@ impl OpenCADStudio {
                 }
                 if write_back {
                     let mut written = 0usize;
-                    for (table_handle, _, path) in &jobs {
+                    let mut errors = Vec::new();
+                    for (table_handle, link_handle) in &jobs {
                         let Some(acadrust::EntityType::Table(table)) =
                             self.tabs[i].scene.document.get_entity(*table_handle)
                         else {
                             continue;
                         };
                         let csv = table_to_csv(table);
-                        if std::fs::write(path, csv).is_ok() {
-                            written += 1;
+                        match crate::app::annotation_data::data_link_write_path(
+                            &self.tabs[i].scene.document,
+                            *link_handle,
+                        )
+                        .and_then(|path| std::fs::write(path, csv).map_err(|error| error.to_string()))
+                        {
+                            Ok(()) => written += 1,
+                            Err(error) => errors.push(error),
                         }
                     }
-                    self.command_line.push_output(
-                        crate::tf!("DATALINKUPDATE: wrote {} linked source(s).", written).as_ref(),
-                    );
+                    if written > 0 {
+                        self.command_line.push_output(
+                            crate::tf!("DATALINKUPDATE: wrote {} linked source(s).", written).as_ref(),
+                        );
+                    }
+                    for error in errors {
+                        self.command_line.push_error(&error);
+                    }
                     return Some(Task::none());
                 }
                 let updates: Vec<_> = jobs
                     .into_iter()
-                    .filter_map(|(table_handle, link_handle, path)| {
-                        std::fs::read_to_string(&path)
-                            .ok()
-                            .map(|text| (table_handle, link_handle, parse_csv_table(&text)))
+                    .filter_map(|(table_handle, link_handle)| {
+                        crate::app::annotation_data::read_data_link(
+                            &self.tabs[i].scene.document,
+                            link_handle,
+                        )
+                        .ok()
+                        .map(|rows| (table_handle, link_handle, rows))
                     })
                     .filter(|(_, _, rows)| !rows.is_empty())
                     .collect();
@@ -1888,7 +1887,7 @@ fn parse_landxml_cgpoints(xml: &str) -> Vec<[f64; 3]> {
     out
 }
 
-fn parse_csv_table(text: &str) -> Vec<Vec<String>> {
+pub(crate) fn parse_csv_table(text: &str) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut field = String::new();
@@ -1928,7 +1927,7 @@ fn parse_csv_table(text: &str) -> Vec<Vec<String>> {
     rows
 }
 
-fn table_to_csv(table: &acadrust::entities::Table) -> String {
+pub(crate) fn table_to_csv(table: &acadrust::entities::Table) -> String {
     fn escape(value: &str) -> String {
         if value.contains([',', '"', '\r', '\n']) {
             format!("\"{}\"", value.replace('"', "\"\""))

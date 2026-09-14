@@ -1384,6 +1384,7 @@ pub enum CmdResult {
     CommitManyAndEditText {
         entities: Vec<EntityType>,
         edit_index: usize,
+        open_editor: bool,
     },
     /// Create a block definition from existing entities and insert one reference.
     CreateBlock {

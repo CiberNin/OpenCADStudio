@@ -2474,6 +2474,7 @@ impl OpenCADStudio {
             CmdResult::CommitManyAndEditText {
                 entities,
                 edit_index,
+                open_editor,
             } => {
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
                 let delta_safe = entities
@@ -2527,8 +2528,10 @@ impl OpenCADStudio {
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
                 }
-                if let Some(h) = edit_handle {
-                    return self.begin_text_edit(h);
+                if open_editor {
+                    if let Some(h) = edit_handle {
+                        return self.begin_text_edit(h);
+                    }
                 }
             }
             CmdResult::CreateBlock {

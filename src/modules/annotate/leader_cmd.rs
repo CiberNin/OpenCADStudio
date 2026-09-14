@@ -35,6 +35,8 @@ pub fn tool() -> ToolDef {
 enum Step {
     Points,
     Format,
+    Annotation,
+    AnnotationOptions,
 }
 
 pub struct LeaderCommand {
@@ -50,6 +52,7 @@ pub struct LeaderCommand {
     gap: f64,
     arrow_size: f64,
     annotative: bool,
+    annotation_lines: Vec<String>,
 }
 
 impl LeaderCommand {
@@ -76,10 +79,11 @@ impl LeaderCommand {
             gap: defaults.gap,
             arrow_size: defaults.arrow_size,
             annotative: defaults.annotative,
+            annotation_lines: Vec::new(),
         }
     }
 
-    fn finish(&self) -> CmdResult {
+    fn finish(&self, annotation: Option<&str>, open_editor: bool) -> CmdResult {
         if self.verts.len() < 2 {
             return CmdResult::Cancel;
         }
@@ -134,8 +138,13 @@ impl LeaderCommand {
         // when another representation becomes active.
         let mtext_height = displayed_height;
 
+        if annotation.is_none() {
+            leader.creation_type = LeaderCreationType::NoAnnotation;
+            return CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Leader(leader)));
+        }
+
         let mtext = build_mtext(
-            "",
+            annotation.unwrap_or_default(),
             anchor,
             mtext_height,
             attach,
@@ -150,6 +159,7 @@ impl LeaderCommand {
                 self.plane.place_entity(EntityType::MText(mtext)),
             ],
             edit_index: 1,
+            open_editor,
         }
     }
 }
@@ -168,6 +178,16 @@ impl CadCommand for LeaderCommand {
             return t!("LEADER  Enter leader formatting option [Spline/Straight/Arrow/None] <exit>:")
                 .into_owned();
         }
+        if self.step == Step::AnnotationOptions {
+            return t!("LEADER  Enter an annotation option [None/Mtext]:").into_owned();
+        }
+        if self.step == Step::Annotation {
+            return if self.annotation_lines.is_empty() {
+                t!("LEADER  Enter first line of annotation text or <options>:").into_owned()
+            } else {
+                t!("LEADER  Enter next line of annotation text:").into_owned()
+            };
+        }
         match self.verts.len() {
             0 => t!("LEADER  Specify leader start point:").into_owned(),
             1 => t!("LEADER  Specify next point:").into_owned(),
@@ -185,6 +205,12 @@ impl CadCommand for LeaderCommand {
                 CmdOption::new("None", "NONE"),
             ];
         }
+        if self.step == Step::AnnotationOptions {
+            return vec![
+                CmdOption::new("None", "NONE"),
+                CmdOption::new("Mtext", "MTEXT"),
+            ];
+        }
         if self.verts.len() >= 2 {
             vec![
                 CmdOption::new("Annotation", "ANNOTATION"),
@@ -197,8 +223,10 @@ impl CadCommand for LeaderCommand {
     }
 
     fn input_kind(&self) -> InputKind {
-        if self.step == Step::Format {
+        if matches!(self.step, Step::Format | Step::AnnotationOptions) {
             InputKind::SingleToken
+        } else if self.step == Step::Annotation {
+            InputKind::FreeText
         } else {
             InputKind::Point
         }
@@ -210,6 +238,17 @@ impl CadCommand for LeaderCommand {
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         let keyword = text.trim().to_ascii_uppercase();
+        if self.step == Step::Annotation {
+            self.annotation_lines.push(text.to_string());
+            return Some(CmdResult::NeedPoint);
+        }
+        if self.step == Step::AnnotationOptions {
+            return match keyword.as_str() {
+                "N" | "NONE" => Some(self.finish(None, false)),
+                "M" | "MTEXT" => Some(self.finish(Some(""), true)),
+                _ => None,
+            };
+        }
         if self.step == Step::Format {
             match keyword.as_str() {
                 "S" | "SPLINE" => self.path_type = LeaderPathType::Spline,
@@ -225,7 +264,10 @@ impl CadCommand for LeaderCommand {
             return None;
         }
         match keyword.as_str() {
-            "A" | "ANNOTATION" => Some(self.finish()),
+            "A" | "ANNOTATION" => {
+                self.step = Step::Annotation;
+                Some(CmdResult::NeedPoint)
+            }
             "F" | "FORMAT" => {
                 self.step = Step::Format;
                 Some(CmdResult::NeedPoint)
@@ -250,8 +292,19 @@ impl CadCommand for LeaderCommand {
         if self.step == Step::Format {
             self.step = Step::Points;
             CmdResult::NeedPoint
+        } else if self.step == Step::Annotation {
+            if self.annotation_lines.is_empty() {
+                self.step = Step::AnnotationOptions;
+                CmdResult::NeedPoint
+            } else {
+                let text = self.annotation_lines.join("\n");
+                self.finish(Some(&text), false)
+            }
+        } else if self.step == Step::AnnotationOptions {
+            CmdResult::NeedPoint
         } else {
-            self.finish()
+            self.step = Step::Annotation;
+            CmdResult::NeedPoint
         }
     }
 

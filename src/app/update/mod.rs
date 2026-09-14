@@ -1070,6 +1070,59 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::TableInsertStyle(value) => self.on_table_insert_style(value),
+            Message::TableInsertField(field) => self.on_table_insert_field(field),
+            Message::TableInsertApply => self.on_table_insert_apply(),
+            Message::DataLinkManagerOpen => {
+                let from_table = self.active_modal == Some(super::ModalKind::InsertTable);
+                self.open_data_link_manager(from_table);
+                Task::none()
+            }
+            Message::DataLinkNew => self.on_data_link_new(),
+            Message::DataLinkSelect(handle) => self.on_data_link_select(handle),
+            Message::DataLinkEdit => self.on_data_link_edit(),
+            Message::DataLinkEditCancel => {
+                self.data_link_manager.editing = false;
+                self.data_link_manager.editing_handle = None;
+                self.data_link_manager.status.clear();
+                Task::none()
+            }
+            Message::DataLinkField(field) => self.on_data_link_field(field),
+            Message::DataLinkBrowse => self.on_data_link_browse(),
+            Message::DataLinkBrowseResult(path) => self.on_data_link_browse_result(path),
+            Message::DataLinkSave => self.on_data_link_save(),
+            Message::DataLinkDelete => self.on_data_link_delete(),
+            Message::DataLinkInsert => self.on_data_link_insert(),
+            Message::DataLinkClose => self.on_data_link_close(),
+            Message::DataExtractionOpen => {
+                self.open_data_extraction();
+                Task::none()
+            }
+            Message::DataExtractionField(field) => self.on_data_extraction_field(field),
+            Message::DataExtractionBack => self.on_data_extraction_back(),
+            Message::DataExtractionNext => self.on_data_extraction_next(),
+            Message::DataExtractionBrowseSettings => self.on_data_extraction_browse_settings(),
+            Message::DataExtractionBrowseSettingsResult(path) => {
+                self.on_data_extraction_browse_settings_result(path)
+            }
+            Message::DataExtractionAddDrawings => self.on_data_extraction_add_drawings(),
+            Message::DataExtractionAddDrawingsResult(paths) => {
+                self.on_data_extraction_add_drawings_result(paths)
+            }
+            Message::DataExtractionAddFolder => self.on_data_extraction_add_folder(),
+            Message::DataExtractionAddFolderResult(path) => {
+                self.on_data_extraction_add_folder_result(path)
+            }
+            Message::DataExtractionClearSources => {
+                self.data_extraction.source_files.clear();
+                Task::none()
+            }
+            Message::DataExtractionBrowseOutput => self.on_data_extraction_browse_output(),
+            Message::DataExtractionBrowseOutputResult(path) => {
+                self.on_data_extraction_browse_output_result(path)
+            }
+            Message::DataExtractionFinish => self.on_data_extraction_finish(),
+
             Message::DataExtractionSave(csv) => {
                 let csv_clone = csv.clone();
                 Task::perform(
