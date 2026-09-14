@@ -74,12 +74,6 @@ const TOOLS: &[Tool] = &[
         options: &[],
     },
     Tool {
-        command: "WIPEOUT",
-        label: "Wipeout",
-        icon: include_bytes!("../../../assets/icons/wipeout.svg"),
-        options: &[],
-    },
-    Tool {
         command: "BOUNDARY",
         label: "Boundary",
         icon: include_bytes!("../../../assets/icons/boundary.svg"),
@@ -105,16 +99,6 @@ const TOOLS: &[Tool] = &[
             ("POINT", "Single Point"),
             ("MULTIPOINT", "Multiple Points"),
             ("DDPTYPE", "Point Style"),
-        ],
-    },
-    Tool {
-        command: "REVCLOUD",
-        label: "Revision Cloud",
-        icon: include_bytes!("../../../assets/icons/revcloud.svg"),
-        options: &[
-            ("REVCLOUD_RECTANGULAR", "Rectangular"),
-            ("REVCLOUD_POLYGONAL", "Polygonal"),
-            ("REVCLOUD_FREEHAND", "Freehand"),
         ],
     },
 ];
@@ -305,7 +289,7 @@ mod tests {
 
     #[test]
     fn extension_submenus_resolve_to_their_parent_panel() {
-        assert_eq!(parent_panel("REVCLOUD"), Some(PANEL_ID));
+        assert_eq!(parent_panel("MULTIPOINT"), Some(PANEL_ID));
         assert_eq!(parent_panel("DRAWORDER_FRONT"), Some("modify_extension"));
         assert_eq!(parent_panel("unknown"), None);
     }
