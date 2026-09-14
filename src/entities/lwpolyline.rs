@@ -1,6 +1,7 @@
 use acadrust::entities::{LwPolyline, LwVertex};
 use cadkernel::geom2d::{
-    signed_area, Curve, Polyline, PolylineVertex, RectangleFrame, Tolerance, Vec2,
+    circle_circle_points, fillet_between_rays, signed_area, Curve, Polyline, PolylineVertex,
+    RectangleFrame, Tolerance, Vec2,
 };
 
 use crate::t;
@@ -1162,6 +1163,407 @@ fn apply_grip(pline: &mut LwPolyline, grip_id: usize, apply: GripApply) {
     }
 }
 
+fn nearest_line_circle_intersection(
+    line_point: Vec2,
+    line_direction: Vec2,
+    circle_center: Vec2,
+    circle_radius: f64,
+    near: Vec2,
+) -> Option<Vec2> {
+    let aa = line_direction.dot(line_direction);
+    if aa <= Tolerance::default().linear().powi(2) {
+        return None;
+    }
+    let relative = line_point - circle_center;
+    let bb = 2.0 * relative.dot(line_direction);
+    let cc = relative.dot(relative) - circle_radius * circle_radius;
+    let discriminant = bb * bb - 4.0 * aa * cc;
+    if discriminant < -Tolerance::default().linear() {
+        return None;
+    }
+    let root = discriminant.max(0.0).sqrt();
+    let first = line_point + line_direction * ((-bb - root) / (2.0 * aa));
+    let second = line_point + line_direction * ((-bb + root) / (2.0 * aa));
+    Some(if first.distance(near) <= second.distance(near) {
+        first
+    } else {
+        second
+    })
+}
+
+fn nearest_circle_circle_intersection(
+    first_center: Vec2,
+    first_radius: f64,
+    second_center: Vec2,
+    second_radius: f64,
+    near: Vec2,
+) -> Option<Vec2> {
+    circle_circle_points(
+        first_center.into(),
+        first_radius,
+        second_center.into(),
+        second_radius,
+    )
+    .into_iter()
+    .map(Vec2::from)
+    .min_by(|a, b| a.distance(near).total_cmp(&b.distance(near)))
+}
+
+fn bulge_for_circle_arc(center: Vec2, start: Vec2, end: Vec2, direction: f64) -> Option<f64> {
+    let start_angle = (start.y - center.y).atan2(start.x - center.x);
+    let end_angle = (end.y - center.y).atan2(end.x - center.x);
+    let sweep = if direction >= 0.0 {
+        (end_angle - start_angle).rem_euclid(TAU)
+    } else {
+        -(start_angle - end_angle).rem_euclid(TAU)
+    };
+    let bulge = (sweep * 0.25).tan();
+    bulge.is_finite().then_some(bulge.clamp(-1.0e6, 1.0e6))
+}
+
+fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
+    let n = pline.vertices.len();
+    let count = if pline.is_closed {
+        n
+    } else {
+        n.saturating_sub(1)
+    };
+    if seg >= count || !offset.is_finite() {
+        return;
+    }
+    let i0 = seg;
+    let i1 = (seg + 1) % n;
+    if pline.vertices[i0].bulge.abs() >= 1.0e-9 {
+        return;
+    }
+    let p0 = Vec2::new(pline.vertices[i0].location.x, pline.vertices[i0].location.y);
+    let p1 = Vec2::new(pline.vertices[i1].location.x, pline.vertices[i1].location.y);
+    let selected = p1 - p0;
+    let length = selected.length();
+    if length <= Tolerance::default().linear() {
+        return;
+    }
+    let normal = Vec2::new(-selected.y / length, selected.x / length);
+    let q0 = p0 + normal * offset;
+
+    let intersect = |a: Vec2, direction: Vec2| -> Option<Vec2> {
+        let cross = direction.x * selected.y - direction.y * selected.x;
+        if cross.abs() < 1.0e-9 * direction.length().max(1.0) * length.max(1.0) {
+            return None;
+        }
+        let delta = q0 - a;
+        let t = (delta.x * selected.y - delta.y * selected.x) / cross;
+        Some(a + direction * t)
+    };
+    let mut previous_arc_bulge = None;
+    let new0 = if pline.is_closed || seg > 0 {
+        let previous = (i0 + n - 1) % n;
+        let a = Vec2::new(
+            pline.vertices[previous].location.x,
+            pline.vertices[previous].location.y,
+        );
+        if pline.vertices[previous].bulge.abs() >= 1.0e-9 {
+            let Some(neighbor) = crate::entities::common::BulgeArc::from_bulge(
+                a.into(),
+                p0.into(),
+                pline.vertices[previous].bulge,
+            ) else {
+                return;
+            };
+            let center = Vec2::from(neighbor.center);
+            let Some(point) =
+                nearest_line_circle_intersection(q0, selected, center, neighbor.radius, p0)
+            else {
+                return;
+            };
+            let Some(bulge) = bulge_for_circle_arc(center, a, point, neighbor.sweep.signum())
+            else {
+                return;
+            };
+            previous_arc_bulge = Some((previous, bulge));
+            point
+        } else {
+            let Some(point) = intersect(a, p0 - a) else {
+                return;
+            };
+            point
+        }
+    } else {
+        q0
+    };
+    let mut next_arc_bulge = None;
+    let new1 = if pline.is_closed || seg + 1 < count {
+        let next = (i1 + 1) % n;
+        let d = Vec2::new(
+            pline.vertices[next].location.x,
+            pline.vertices[next].location.y,
+        );
+        if pline.vertices[i1].bulge.abs() >= 1.0e-9 {
+            let Some(neighbor) = crate::entities::common::BulgeArc::from_bulge(
+                p1.into(),
+                d.into(),
+                pline.vertices[i1].bulge,
+            ) else {
+                return;
+            };
+            let center = Vec2::from(neighbor.center);
+            let Some(point) =
+                nearest_line_circle_intersection(q0, selected, center, neighbor.radius, p1)
+            else {
+                return;
+            };
+            let Some(bulge) = bulge_for_circle_arc(center, point, d, neighbor.sweep.signum())
+            else {
+                return;
+            };
+            next_arc_bulge = Some((i1, bulge));
+            point
+        } else {
+            let Some(point) = intersect(p1, d - p1) else {
+                return;
+            };
+            point
+        }
+    } else {
+        p1 + normal * offset
+    };
+    pline.vertices[i0].location = acadrust::types::Vector2::new(new0.x, new0.y);
+    pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+    if let Some((previous, bulge)) = previous_arc_bulge {
+        pline.vertices[previous].bulge = bulge;
+    }
+    if let Some((next, bulge)) = next_arc_bulge {
+        pline.vertices[next].bulge = bulge;
+    }
+}
+
+/// Resize an arc concentrically while preserving its neighboring geometry.
+/// This is used exclusively by the Radius grip-menu action.
+fn resize_arc_concentrically(pline: &mut LwPolyline, seg: usize, offset: f64) {
+    let n = pline.vertices.len();
+    let count = if pline.is_closed { n } else { n.saturating_sub(1) };
+    if seg >= count || !offset.is_finite() {
+        return;
+    }
+    let i0 = seg;
+    let i1 = (seg + 1) % n;
+    let p0 = Vec2::new(pline.vertices[i0].location.x, pline.vertices[i0].location.y);
+    let p1 = Vec2::new(pline.vertices[i1].location.x, pline.vertices[i1].location.y);
+    let bulge = pline.vertices[i0].bulge;
+    let Some(arc) = crate::entities::common::BulgeArc::from_bulge(p0.into(), p1.into(), bulge)
+    else {
+        return;
+    };
+    let center = Vec2::from(arc.center);
+    let radius = arc.radius + offset;
+    if radius <= Tolerance::default().linear() {
+        return;
+    }
+
+    let linear_sq = Tolerance::default().linear().powi(2);
+    let mut sync_previous = None;
+    let mut previous_arc_bulge = None;
+    let new0 = if pline.is_closed || seg > 0 {
+        let previous = (i0 + n - 1) % n;
+        let a = Vec2::new(
+            pline.vertices[previous].location.x,
+            pline.vertices[previous].location.y,
+        );
+        if pline.vertices[previous].bulge.abs() >= 1.0e-9 {
+            let Some(neighbor) = crate::entities::common::BulgeArc::from_bulge(
+                a.into(), p0.into(), pline.vertices[previous].bulge,
+            ) else {
+                return;
+            };
+            let neighbor_center = Vec2::from(neighbor.center);
+            let Some(point) = nearest_circle_circle_intersection(
+                center, radius, neighbor_center, neighbor.radius, p0,
+            ) else {
+                return;
+            };
+            let Some(new_bulge) = bulge_for_circle_arc(
+                neighbor_center, a, point, neighbor.sweep.signum(),
+            ) else {
+                return;
+            };
+            previous_arc_bulge = Some((previous, new_bulge));
+            point
+        } else if (p0 - a).length_squared() <= linear_sq {
+            sync_previous = Some(previous);
+            center + (p0 - center) * (radius / arc.radius)
+        } else {
+            let Some(point) = nearest_line_circle_intersection(
+                a, p0 - a, center, radius, p0,
+            ) else {
+                return;
+            };
+            point
+        }
+    } else {
+        center + (p0 - center) * (radius / arc.radius)
+    };
+    let mut sync_next = None;
+    let mut next_arc_bulge = None;
+    let new1 = if pline.is_closed || seg + 1 < count {
+        let next = (i1 + 1) % n;
+        let d = Vec2::new(
+            pline.vertices[next].location.x,
+            pline.vertices[next].location.y,
+        );
+        if pline.vertices[i1].bulge.abs() >= 1.0e-9 {
+            let Some(neighbor) = crate::entities::common::BulgeArc::from_bulge(
+                p1.into(), d.into(), pline.vertices[i1].bulge,
+            ) else {
+                return;
+            };
+            let neighbor_center = Vec2::from(neighbor.center);
+            let Some(point) = nearest_circle_circle_intersection(
+                center, radius, neighbor_center, neighbor.radius, p1,
+            ) else {
+                return;
+            };
+            let Some(new_bulge) = bulge_for_circle_arc(
+                neighbor_center, point, d, neighbor.sweep.signum(),
+            ) else {
+                return;
+            };
+            next_arc_bulge = Some((i1, new_bulge));
+            point
+        } else if (d - p1).length_squared() <= linear_sq {
+            sync_next = Some(next);
+            center + (p1 - center) * (radius / arc.radius)
+        } else {
+            let Some(point) = nearest_line_circle_intersection(
+                p1, d - p1, center, radius, p1,
+            ) else {
+                return;
+            };
+            point
+        }
+    } else {
+        center + (p1 - center) * (radius / arc.radius)
+    };
+
+    let Some(new_bulge) = bulge_for_circle_arc(center, new0, new1, arc.sweep.signum()) else {
+        return;
+    };
+    pline.vertices[i0].location = acadrust::types::Vector2::new(new0.x, new0.y);
+    pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+    if let Some(previous) = sync_previous {
+        pline.vertices[previous].location = acadrust::types::Vector2::new(new0.x, new0.y);
+    }
+    if let Some(next) = sync_next {
+        pline.vertices[next].location = acadrust::types::Vector2::new(new1.x, new1.y);
+    }
+    if let Some((previous, bulge)) = previous_arc_bulge {
+        pline.vertices[previous].bulge = bulge;
+    }
+    if let Some((next, bulge)) = next_arc_bulge {
+        pline.vertices[next].bulge = bulge;
+    }
+    pline.vertices[i0].bulge = new_bulge;
+}
+
+/// Return the corner and the two rays retained by the straight segments on
+/// either side of an internal arc. Open endpoint arcs have no fillet frame.
+fn arc_fillet_frame(pline: &LwPolyline, seg: usize) -> Option<(Vec2, Vec2, Vec2)> {
+    let n = pline.vertices.len();
+    let count = if pline.is_closed { n } else { n.checked_sub(1)? };
+    if seg >= count || (!pline.is_closed && (seg == 0 || seg + 1 == count)) {
+        return None;
+    }
+    let i1 = (seg + 1) % n;
+    let previous = (seg + n - 1) % n;
+    let next = (i1 + 1) % n;
+    if pline.vertices[previous].bulge.abs() >= 1.0e-9
+        || pline.vertices[i1].bulge.abs() >= 1.0e-9
+    {
+        return None;
+    }
+    let as_vec = |p: acadrust::types::Vector2| Vec2::new(p.x, p.y);
+    let outer0 = as_vec(pline.vertices[previous].location);
+    let tangent0 = as_vec(pline.vertices[seg].location);
+    let tangent1 = as_vec(pline.vertices[i1].location);
+    let outer1 = as_vec(pline.vertices[next].location);
+    let d0 = (tangent0 - outer0).normalize()?;
+    let d1 = (outer1 - tangent1).normalize()?;
+    let arc = crate::entities::common::BulgeArc::from_bulge(
+        tangent0.into(),
+        tangent1.into(),
+        pline.vertices[seg].bulge,
+    )?;
+    let center = Vec2::from(arc.center);
+    let tangent_tolerance = (arc.radius * 1.0e-6).max(Tolerance::default().linear());
+    if (tangent0 - center).dot(d0).abs() > tangent_tolerance
+        || (tangent1 - center).dot(d1).abs() > tangent_tolerance
+    {
+        // Merely being between two lines does not make an arc a fillet. An
+        // ordinary polyline arc must keep its centre while its radius changes.
+        return None;
+    }
+    let cross = d0.cross(d1);
+    if cross.abs() <= 1.0e-9 {
+        return None;
+    }
+    let apex = outer0 + d0 * ((tangent1 - outer0).cross(d1) / cross);
+    Some((
+        apex,
+        (outer0 - apex).normalize()?,
+        (outer1 - apex).normalize()?,
+    ))
+}
+
+fn resize_arc_segment_radius(pline: &mut LwPolyline, seg: usize, radius: f64) {
+    if radius <= Tolerance::default().linear() {
+        return;
+    }
+    let n = pline.vertices.len();
+    let count = if pline.is_closed { n } else { n.saturating_sub(1) };
+    if seg >= count {
+        return;
+    }
+    let i1 = (seg + 1) % n;
+    let (Some(vertex0), Some(vertex1)) = (pline.vertices.get(seg), pline.vertices.get(i1)) else {
+        return;
+    };
+    let p0 = Vec2::new(vertex0.location.x, vertex0.location.y);
+    let p1 = Vec2::new(vertex1.location.x, vertex1.location.y);
+    let original_bulge = vertex0.bulge;
+    let Some(original) = crate::entities::common::BulgeArc::from_bulge(
+        p0.into(), p1.into(), original_bulge,
+    ) else {
+        return;
+    };
+
+    if let Some((apex, keep0, keep1)) = arc_fillet_frame(pline, seg) {
+        let Some(fillet) = fillet_between_rays(apex.into(), keep0.into(), keep1.into(), radius)
+        else {
+            return;
+        };
+        let new0 = Vec2::from(fillet.tangent1);
+        let new1 = Vec2::from(fillet.tangent2);
+        let center = Vec2::from(fillet.centre);
+        let (Some(r0), Some(r1)) = ((new0 - center).normalize(), (new1 - center).normalize())
+        else {
+            return;
+        };
+        let sweep = r0.dot(r1).clamp(-1.0, 1.0).acos();
+        let bulge = original_bulge.signum() * (sweep * 0.25).tan();
+        if !bulge.is_finite() {
+            return;
+        }
+        pline.vertices[seg].location = acadrust::types::Vector2::new(new0.x, new0.y);
+        pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+        pline.vertices[seg].bulge = bulge;
+        return;
+    }
+
+    // Ordinary arcs keep their centre. Connected endpoints slide along the
+    // infinite lines of their adjacent straight segments, preserving those
+    // lines' angles; only free open endpoints move radially.
+    resize_arc_concentrically(pline, seg, radius - original.radius);
+}
+
 fn apply_transform(pline: &mut LwPolyline, t: &EntityTransform) {
     crate::scene::view::transform::apply_standard_entity_transform(pline, t, |entity, p1, p2| {
         for v in &mut entity.vertices {
@@ -1240,6 +1642,17 @@ impl crate::entities::traits::Grippable for LwPolyline {
             }
         };
         let mut items = Vec::new();
+        if is_arc {
+            items.push(GripMenuItem {
+                label: "Radius",
+                action: GripMenuAction::Radius,
+            });
+        } else {
+            items.push(GripMenuItem {
+                label: "Move Parallel",
+                action: GripMenuAction::MoveParallel,
+            });
+        }
         if is_rectangle(self) && seg < 4 {
             // Moving an edge changes the dimension perpendicular to it.
             items.push(GripMenuItem {
@@ -1272,6 +1685,22 @@ impl crate::entities::traits::Grippable for LwPolyline {
     ) -> Option<&'static str> {
         use crate::scene::model::object::GripMenuAction as A;
         let n = self.vertices.len();
+        if action == A::MoveParallel && grip_id >= n {
+            let seg = grip_id - n;
+            let count = if self.is_closed {
+                n
+            } else {
+                n.saturating_sub(1)
+            };
+            return (seg < count && self.vertices[seg].bulge.abs() < 1.0e-9)
+                .then_some("Parallel offset");
+        }
+        if action == A::Radius && grip_id >= n {
+            let seg = grip_id - n;
+            let count = if self.is_closed { n } else { n.saturating_sub(1) };
+            return (seg < count && self.vertices[seg].bulge.abs() >= 1.0e-9)
+                .then_some("New radius");
+        }
         (is_rectangle(self)
             && n == 4
             && (n..n + 4).contains(&grip_id)
@@ -1289,6 +1718,67 @@ impl crate::entities::traits::Grippable for LwPolyline {
         point: glam::DVec3,
     ) -> Option<f64> {
         use crate::scene::model::object::GripMenuAction as A;
+        if action == A::Radius {
+            let n = self.vertices.len();
+            let seg = grip_id.checked_sub(n)?;
+            let count = if self.is_closed { n } else { n.saturating_sub(1) };
+            if seg >= count {
+                return None;
+            }
+            let plane = crate::entities::curve::lwpolyline_curve(self)?.plane;
+            let point = Vec2::from(plane.project(point.to_array())?);
+            let p0 = self.vertices[seg].location;
+            let p1 = self.vertices[(seg + 1) % n].location;
+            let arc = crate::entities::common::BulgeArc::from_bulge(
+                [p0.x, p0.y], [p1.x, p1.y], self.vertices[seg].bulge,
+            )?;
+            if let Some((apex, _, _)) = arc_fillet_frame(self, seg) {
+                let midpoint = Vec2::from(arc.sample(0.5));
+                let ray = midpoint - apex;
+                let scale = (point - apex).dot(ray) / ray.dot(ray);
+                let radius = arc.radius * scale;
+                return (radius > Tolerance::default().linear()).then_some(radius);
+            }
+            let radius = point.distance(Vec2::from(arc.center));
+            return (radius > Tolerance::default().linear()).then_some(radius);
+        }
+        if action == A::MoveParallel {
+            let n = self.vertices.len();
+            let seg = grip_id.checked_sub(n)?;
+            let count = if self.is_closed {
+                n
+            } else {
+                n.saturating_sub(1)
+            };
+            if seg >= count || self.vertices[seg].bulge.abs() >= 1.0e-9 {
+                return None;
+            }
+            let plane = crate::entities::curve::lwpolyline_curve(self)?.plane;
+            let point = Vec2::from(plane.project(point.to_array())?);
+            let p0 = Vec2::new(self.vertices[seg].location.x, self.vertices[seg].location.y);
+            let p1 = Vec2::new(
+                self.vertices[(seg + 1) % n].location.x,
+                self.vertices[(seg + 1) % n].location.y,
+            );
+            let bulge = self.vertices[seg].bulge;
+            if bulge.abs() >= 1.0e-9 {
+                let arc = crate::entities::common::BulgeArc::from_bulge(
+                    p0.into(),
+                    p1.into(),
+                    bulge,
+                )?;
+                let midpoint = Vec2::from(arc.sample(0.5));
+                let radial = (midpoint - Vec2::from(arc.center)).normalize()?;
+                return Some((point - midpoint).dot(radial));
+            }
+            let direction = p1 - p0;
+            let length = direction.length();
+            if length <= Tolerance::default().linear() {
+                return None;
+            }
+            let normal = Vec2::new(-direction.y / length, direction.x / length);
+            return Some((point - p0).dot(normal));
+        }
         let (frame, plane) = rectangle_frame(self)?;
         let seg = grip_id.checked_sub(4)?;
         if seg >= 4 {
@@ -1316,6 +1806,20 @@ impl crate::entities::traits::Grippable for LwPolyline {
         value: f64,
     ) {
         use crate::scene::model::object::GripMenuAction as A;
+        if action == A::Radius {
+            if let Some(seg) = grip_id.checked_sub(self.vertices.len()) {
+                resize_arc_segment_radius(self, seg, value);
+            }
+            return;
+        }
+        if action == A::MoveParallel {
+            if let Some(seg) = grip_id.checked_sub(self.vertices.len()) {
+                if self.vertices.get(seg).is_some_and(|vertex| vertex.bulge.abs() < 1.0e-9) {
+                    move_segment_parallel(self, seg, value);
+                }
+            }
+            return;
+        }
         if value <= Tolerance::default().linear() {
             return;
         }
@@ -1535,6 +2039,7 @@ impl crate::entities::traits::MassPropsCalc for acadrust::entities::LwPolyline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::entities::traits::{Grippable, PropertyEditable};
     use crate::scene::model::object::GripMenuAction;
     use acadrust::entities::{LwPolyline, LwVertex};
@@ -1563,12 +2068,24 @@ mod tests {
     fn rectangle_midpoint_offers_dimension_before_stretch() {
         let pl = make_test_rectangle();
         let bottom = pl.grip_menu(4);
-        assert_eq!(bottom[0].action, GripMenuAction::RectangleHeight);
-        assert_eq!(bottom[1].action, GripMenuAction::Stretch);
+        assert_eq!(bottom[0].action, GripMenuAction::MoveParallel);
+        assert_eq!(bottom[1].action, GripMenuAction::RectangleHeight);
+        assert_eq!(bottom[2].action, GripMenuAction::Stretch);
 
         let right = pl.grip_menu(5);
-        assert_eq!(right[0].action, GripMenuAction::RectangleWidth);
-        assert_eq!(right[1].action, GripMenuAction::Stretch);
+        assert_eq!(right[0].action, GripMenuAction::MoveParallel);
+        assert_eq!(right[1].action, GripMenuAction::RectangleWidth);
+        assert_eq!(right[2].action, GripMenuAction::Stretch);
+    }
+
+    #[test]
+    fn arc_midpoint_offers_radius_first_without_move_parallel() {
+        let mut pl = make_test_lwpolyline(2, 0.0);
+        pl.vertices[0].bulge = 0.5;
+        let menu = pl.grip_menu(2);
+        assert_eq!(menu[0].action, GripMenuAction::Radius);
+        assert_eq!(menu[1].action, GripMenuAction::Stretch);
+        assert!(!menu.iter().any(|item| item.action == GripMenuAction::MoveParallel));
     }
 
     #[test]
@@ -1612,6 +2129,246 @@ mod tests {
         let value = pl.grip_menu_point_value(5, GripMenuAction::RectangleWidth, point);
 
         assert_eq!(value, Some(14.0));
+    }
+
+    fn polyline(points: &[(f64, f64)], closed: bool) -> LwPolyline {
+        let mut pl = LwPolyline::default();
+        pl.is_closed = closed;
+        pl.vertices = points
+            .iter()
+            .map(|&(x, y)| LwVertex::new(Vector2::new(x, y)))
+            .collect();
+        pl
+    }
+
+    #[test]
+    fn move_parallel_reconnects_internal_edge_to_adjacent_lines() {
+        let mut pl = polyline(
+            &[(0.0, 0.0), (2.0, 2.0), (8.0, 2.0), (10.0, 0.0)],
+            false,
+        );
+        move_segment_parallel(&mut pl, 1, 2.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(0.0, 0.0));
+        assert_eq!(pl.vertices[1].location, Vector2::new(4.0, 4.0));
+        assert_eq!(pl.vertices[2].location, Vector2::new(6.0, 4.0));
+        assert_eq!(pl.vertices[3].location, Vector2::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn moving_a_line_parallel_only_changes_the_connected_arcs_length() {
+        let mut pl = polyline(&[(-5.0, 0.0), (0.0, 0.0), (5.0, 5.0)], false);
+        pl.vertices[1].bulge = -(std::f64::consts::FRAC_PI_2 * 0.25).tan();
+        let before = crate::entities::common::BulgeArc::from_bulge(
+            [0.0, 0.0], [5.0, 5.0], pl.vertices[1].bulge,
+        ).unwrap();
+
+        move_segment_parallel(&mut pl, 0, 1.0);
+
+        let after = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            [pl.vertices[2].location.x, pl.vertices[2].location.y],
+            pl.vertices[1].bulge,
+        ).unwrap();
+        assert!(Vec2::from(after.center).distance(Vec2::from(before.center)) < 1.0e-9);
+        assert!((after.radius - before.radius).abs() < 1.0e-9);
+        assert_eq!(pl.vertices[2].location, Vector2::new(5.0, 5.0));
+        assert!((after.sweep - before.sweep).abs() > 1.0e-6);
+        assert!((pl.vertices[0].location.y - 1.0).abs() < 1.0e-9);
+        assert!((pl.vertices[1].location.y - 1.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn radius_offsets_arc_concentrically() {
+        let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0)], false);
+        pl.vertices[0].bulge = 1.0;
+        let original = crate::entities::common::BulgeArc::from_bulge(
+            [0.0, 0.0],
+            [10.0, 0.0],
+            pl.vertices[0].bulge,
+        )
+        .unwrap();
+
+        resize_arc_concentrically(&mut pl, 0, 2.0);
+
+        let moved = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[0].location.x, pl.vertices[0].location.y],
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            pl.vertices[0].bulge,
+        )
+        .unwrap();
+        assert!(Vec2::from(moved.center).distance(original.center.into()) < 1.0e-9);
+        assert!((moved.radius - original.radius - 2.0).abs() < 1.0e-9);
+        assert_eq!(moved.sweep.signum(), original.sweep.signum());
+    }
+
+    #[test]
+    fn radius_allows_an_open_arc_with_a_duplicate_end_vertex() {
+        let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 0.0)], false);
+        pl.vertices[0].bulge = 1.0;
+
+        resize_arc_concentrically(&mut pl, 0, 2.0);
+
+        let moved = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[0].location.x, pl.vertices[0].location.y],
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            pl.vertices[0].bulge,
+        ).unwrap();
+        assert!((moved.radius - 7.0).abs() < 1.0e-9);
+        assert_eq!(pl.vertices[2].location, pl.vertices[1].location);
+    }
+
+    #[test]
+    fn resizing_an_end_arc_only_changes_the_connected_arcs_length() {
+        let shared = Vec2::new(3.0, 4.0);
+        let mut pl = polyline(&[(-5.0, 0.0), (shared.x, shared.y), (11.0, 0.0)], false);
+        let ccw_bulge = |center: Vec2, start: Vec2, end: Vec2| {
+            let a0 = (start.y - center.y).atan2(start.x - center.x);
+            let a1 = (end.y - center.y).atan2(end.x - center.x);
+            ((a1 - a0).rem_euclid(TAU) * 0.25).tan()
+        };
+        pl.vertices[0].bulge = ccw_bulge(Vec2::ZERO, Vec2::new(-5.0, 0.0), shared);
+        pl.vertices[1].bulge = ccw_bulge(Vec2::new(6.0, 0.0), shared, Vec2::new(11.0, 0.0));
+        let before = crate::entities::common::BulgeArc::from_bulge(
+            [shared.x, shared.y], [11.0, 0.0], pl.vertices[1].bulge,
+        ).unwrap();
+
+        resize_arc_concentrically(&mut pl, 0, 1.0);
+
+        let after = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            [pl.vertices[2].location.x, pl.vertices[2].location.y],
+            pl.vertices[1].bulge,
+        ).unwrap();
+        assert!(Vec2::from(after.center).distance(Vec2::from(before.center)) < 1.0e-9);
+        assert!((after.radius - before.radius).abs() < 1.0e-9);
+        assert_eq!(pl.vertices[2].location, Vector2::new(11.0, 0.0));
+        assert!((after.sweep - before.sweep).abs() > 1.0e-6);
+    }
+
+    #[test]
+    fn radius_menu_resizes_a_corner_as_a_tangent_fillet() {
+        let mut pl = polyline(
+            &[(0.0, 0.0), (8.0, 0.0), (10.0, 2.0), (10.0, 10.0)], false,
+        );
+        pl.vertices[1].bulge = (std::f64::consts::FRAC_PI_2 / 4.0).tan();
+        let grip = pl.vertices.len() + 1;
+        assert!(pl.grip_menu(grip).iter().any(|item| item.action == GripMenuAction::Radius));
+        pl.apply_grip_menu_value(grip, GripMenuAction::Radius, 4.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(0.0, 0.0));
+        assert!((pl.vertices[1].location.x - 6.0).abs() < 1.0e-9);
+        assert!(pl.vertices[1].location.y.abs() < 1.0e-9);
+        assert!((pl.vertices[2].location.x - 10.0).abs() < 1.0e-9);
+        assert!((pl.vertices[2].location.y - 4.0).abs() < 1.0e-9);
+        assert_eq!(pl.vertices[3].location, Vector2::new(10.0, 10.0));
+        let arc = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            [pl.vertices[2].location.x, pl.vertices[2].location.y],
+            pl.vertices[1].bulge,
+        ).unwrap();
+        assert!((arc.radius - 4.0).abs() < 1.0e-9);
+        assert!(arc.sweep > 0.0);
+    }
+
+    #[test]
+    fn radius_cursor_tracks_the_fillet_midpoint_ray() {
+        let mut pl = polyline(
+            &[(0.0, 0.0), (8.0, 0.0), (10.0, 2.0), (10.0, 10.0)], false,
+        );
+        pl.vertices[1].bulge = (std::f64::consts::FRAC_PI_2 / 4.0).tan();
+        let arc = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            [pl.vertices[2].location.x, pl.vertices[2].location.y],
+            pl.vertices[1].bulge,
+        ).unwrap();
+        let midpoint = Vec2::from(arc.sample(0.5));
+        let cursor = Vec2::new(10.0, 0.0) + (midpoint - Vec2::new(10.0, 0.0)) * 2.0;
+        let value = pl.grip_menu_point_value(
+            pl.vertices.len() + 1, GripMenuAction::Radius,
+            glam::DVec3::new(cursor.x, cursor.y, 0.0),
+        ).unwrap();
+        assert!((value - 4.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn radius_on_an_open_endpoint_arc_stays_concentric() {
+        let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0)], false);
+        pl.vertices[0].bulge = 1.0;
+        resize_arc_segment_radius(&mut pl, 0, 8.0);
+        let arc = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[0].location.x, pl.vertices[0].location.y],
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            pl.vertices[0].bulge,
+        ).unwrap();
+        assert!((arc.radius - 8.0).abs() < 1.0e-9);
+        assert!(Vec2::from(arc.center).distance(Vec2::new(5.0, 0.0)) < 1.0e-9);
+        assert!(arc.sweep > 0.0);
+    }
+
+    #[test]
+    fn radius_edit_ignores_an_invalid_segment_grip() {
+        let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0)], false);
+        pl.vertices[0].bulge = 1.0;
+        let before = pl.clone();
+
+        pl.apply_grip_menu_value(99, GripMenuAction::Radius, 8.0);
+
+        assert_eq!(pl, before);
+    }
+
+    #[test]
+    fn radius_on_a_non_tangent_internal_arc_keeps_center_and_side_angles() {
+        let mut pl = polyline(
+            &[(0.0, 0.0), (8.0, 0.0), (10.0, 2.0), (10.0, 10.0)], false,
+        );
+        pl.vertices[1].bulge = 1.0;
+        let before = crate::entities::common::BulgeArc::from_bulge(
+            [8.0, 0.0], [10.0, 2.0], pl.vertices[1].bulge,
+        ).unwrap();
+        resize_arc_segment_radius(&mut pl, 1, 4.0);
+        let after = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            [pl.vertices[2].location.x, pl.vertices[2].location.y],
+            pl.vertices[1].bulge,
+        ).unwrap();
+        assert!(Vec2::from(after.center).distance(Vec2::from(before.center)) < 1.0e-9);
+        assert!((after.radius - 4.0).abs() < 1.0e-9);
+        let incoming = Vec2::new(
+            pl.vertices[1].location.x - pl.vertices[0].location.x,
+            pl.vertices[1].location.y - pl.vertices[0].location.y,
+        );
+        let outgoing = Vec2::new(
+            pl.vertices[3].location.x - pl.vertices[2].location.x,
+            pl.vertices[3].location.y - pl.vertices[2].location.y,
+        );
+        assert!(incoming.cross(Vec2::new(1.0, 0.0)).abs() < 1.0e-9);
+        assert!(outgoing.cross(Vec2::new(0.0, 1.0)).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn move_parallel_translates_free_endpoint_of_open_polyline() {
+        let mut pl = polyline(&[(0.0, 0.0), (6.0, 0.0), (8.0, 2.0)], false);
+        move_segment_parallel(&mut pl, 0, 2.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(0.0, 2.0));
+        assert_eq!(pl.vertices[1].location, Vector2::new(8.0, 2.0));
+        assert_eq!(pl.vertices[2].location, Vector2::new(8.0, 2.0));
+    }
+
+    #[test]
+    fn move_parallel_wraps_closed_polyline_indices() {
+        let mut pl = polyline(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)], true);
+        move_segment_parallel(&mut pl, 3, -1.0);
+        assert_eq!(pl.vertices[0].location, Vector2::new(-1.0, 0.0));
+        assert_eq!(pl.vertices[3].location, Vector2::new(-1.0, 4.0));
+        assert_eq!(pl.vertices[1].location, Vector2::new(4.0, 0.0));
+        assert_eq!(pl.vertices[2].location, Vector2::new(4.0, 4.0));
+    }
+
+    #[test]
+    fn move_parallel_rejects_parallel_adjacent_line() {
+        let mut pl = polyline(&[(0.0, 0.0), (2.0, 0.0), (5.0, 0.0), (6.0, 2.0)], false);
+        let original = pl.vertices.clone();
+        move_segment_parallel(&mut pl, 1, 1.0);
+        assert_eq!(pl.vertices, original);
     }
 
     #[test]
