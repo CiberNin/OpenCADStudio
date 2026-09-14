@@ -472,6 +472,8 @@ impl CadCommand for MLeaderCommand {
     fn input_kind(&self) -> InputKind {
         if matches!(self.step, Step::Layer | Step::PreEnterText) {
             InputKind::FreeText
+        } else if matches!(self.step, Step::PickPoints | Step::SelectMText) {
+            InputKind::Point
         } else {
             InputKind::SingleToken
         }

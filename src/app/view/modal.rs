@@ -31,6 +31,9 @@ impl OpenCADStudio {
             Some(K::LayoutManager) => crate::tr!("modal", "layout-manager"),
             Some(K::ScaleManager) => crate::tr!("modal", "scale-manager"),
             Some(K::AnnoObjectScale) => crate::tr!("modal", "annotation-object-scale"),
+            Some(K::InsertTable) => crate::t!("Insert Table").into_owned(),
+            Some(K::DataLinkManager) => crate::t!("Data Link Manager").into_owned(),
+            Some(K::DataExtraction) => crate::t!("Data Extraction Wizard").into_owned(),
             Some(K::Plotstyle) => crate::tr!("modal", "plot-style-editor"),
             Some(K::TextStyle) => crate::tr!("modal", "text-style-manager"),
             Some(K::MlStyle) => crate::tr!("modal", "multiline-style-manager"),
@@ -581,6 +584,24 @@ impl OpenCADStudio {
                     },
                 )
             }
+            super::super::ModalKind::InsertTable => sized_flow(
+                ex,
+                620,
+                650,
+                |flow| crate::ui::window::annotation_data::table_insert_view(&self.table_insert, flow),
+            ),
+            super::super::ModalKind::DataLinkManager => sized_flow(
+                ex,
+                760,
+                560,
+                |flow| crate::ui::window::annotation_data::data_link_view(&self.data_link_manager, flow),
+            ),
+            super::super::ModalKind::DataExtraction => sized_flow(
+                ex,
+                780,
+                570,
+                |flow| crate::ui::window::annotation_data::data_extraction_view(&self.data_extraction, flow),
+            ),
             super::super::ModalKind::Plotstyle => sized_flow(
                 ex,
                 780,

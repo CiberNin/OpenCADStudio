@@ -8,7 +8,7 @@ use cadkernel::space::Plane;
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdOption, CmdResult, WorkingPlane};
+use crate::command::{CadCommand, CmdOption, CmdResult, InputKind, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 
@@ -268,6 +268,15 @@ impl CadCommand for WipeoutCommand {
             self.mode,
             WipeoutMode::Draw | WipeoutMode::Frames | WipeoutMode::ErasePolyline
         )
+    }
+
+    fn input_kind(&self) -> InputKind {
+        match self.mode {
+            WipeoutMode::Frames | WipeoutMode::ErasePolyline => InputKind::SingleToken,
+            WipeoutMode::Draw | WipeoutMode::Polyline | WipeoutMode::Rectangular => {
+                InputKind::Point
+            }
+        }
     }
 
     fn point_step_accepts_keywords(&self) -> bool {

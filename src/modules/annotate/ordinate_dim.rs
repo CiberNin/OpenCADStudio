@@ -142,8 +142,10 @@ impl CadCommand for OrdinateDimCommand {
     fn input_kind(&self) -> InputKind {
         if self.awaiting_text {
             InputKind::FreeText
-        } else {
+        } else if self.awaiting_angle {
             InputKind::SingleToken
+        } else {
+            InputKind::Point
         }
     }
 

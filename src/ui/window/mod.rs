@@ -16,6 +16,7 @@ pub mod open_progress;
 pub mod recovery;
 pub mod options;
 pub mod attribute_editor;
+pub mod annotation_data;
 pub mod alias_editor;
 pub mod find_replace;
 pub mod named_parameters;

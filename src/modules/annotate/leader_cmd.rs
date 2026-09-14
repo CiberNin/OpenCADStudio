@@ -10,12 +10,12 @@
 // (DXF group 340); editing/erasing them stays in sync via that link.
 
 use acadrust::entities::mtext::AttachmentPoint;
-use acadrust::entities::{Leader, LeaderCreationType, MText};
+use acadrust::entities::{Leader, LeaderCreationType, LeaderPathType, MText};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::{DVec3, Mat4, Vec3};
 
-use crate::command::{CadCommand, CmdResult, WorkingPlane};
+use crate::command::{CadCommand, CmdOption, CmdResult, InputKind, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -31,8 +31,19 @@ pub fn tool() -> ToolDef {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Points,
+    Format,
+    Annotation,
+    AnnotationOptions,
+}
+
 pub struct LeaderCommand {
     verts: Vec<DVec3>,
+    step: Step,
+    path_type: LeaderPathType,
+    arrow_enabled: bool,
     plane: WorkingPlane,
     dimension_style: String,
     text_style: String,
@@ -41,6 +52,7 @@ pub struct LeaderCommand {
     gap: f64,
     arrow_size: f64,
     annotative: bool,
+    annotation_lines: Vec<String>,
 }
 
 impl LeaderCommand {
@@ -56,6 +68,9 @@ impl LeaderCommand {
 
         Self {
             verts: Vec::new(),
+            step: Step::Points,
+            path_type: LeaderPathType::StraightLine,
+            arrow_enabled: true,
             plane: WorkingPlane::default(),
             dimension_style: defaults.style_name,
             text_style: defaults.text_style_name,
@@ -64,10 +79,11 @@ impl LeaderCommand {
             gap: defaults.gap,
             arrow_size: defaults.arrow_size,
             annotative: defaults.annotative,
+            annotation_lines: Vec::new(),
         }
     }
 
-    fn finish(&self) -> CmdResult {
+    fn finish(&self, annotation: Option<&str>, open_editor: bool) -> CmdResult {
         if self.verts.len() < 2 {
             return CmdResult::Cancel;
         }
@@ -91,7 +107,7 @@ impl LeaderCommand {
         let mut leader_points = local.clone();
 
         let first = local[0];
-        let elbow = local[1];
+        let elbow = *local.last().unwrap_or(&first);
         let sign = if elbow.x >= first.x { 1.0 } else { -1.0 };
 
         let landing_end = DVec3::new(
@@ -102,7 +118,7 @@ impl LeaderCommand {
 
         leader_points.push(landing_end);
 
-        let leader = build_leader(
+        let mut leader = build_leader(
             &leader_points,
             Mat4::IDENTITY,
             &self.dimension_style,
@@ -110,6 +126,8 @@ impl LeaderCommand {
             self.gap,
             self.arrow_size,
         );
+        leader.path_type = self.path_type;
+        leader.arrow_enabled = self.arrow_enabled;
 
         // The MTEXT starts at the real end of the landing.
         let (anchor, attach) =
@@ -120,8 +138,13 @@ impl LeaderCommand {
         // when another representation becomes active.
         let mtext_height = displayed_height;
 
+        if annotation.is_none() {
+            leader.creation_type = LeaderCreationType::NoAnnotation;
+            return CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Leader(leader)));
+        }
+
         let mtext = build_mtext(
-            "",
+            annotation.unwrap_or_default(),
             anchor,
             mtext_height,
             attach,
@@ -136,6 +159,7 @@ impl LeaderCommand {
                 self.plane.place_entity(EntityType::MText(mtext)),
             ],
             edit_index: 1,
+            open_editor,
         }
     }
 }
@@ -150,25 +174,138 @@ impl CadCommand for LeaderCommand {
     }
 
     fn prompt(&self) -> String {
-        if self.verts.is_empty() {
-            t!("LEADER  Specify arrowhead point:").into_owned()
+        if self.step == Step::Format {
+            return t!("LEADER  Enter leader formatting option [Spline/Straight/Arrow/None] <exit>:")
+                .into_owned();
+        }
+        if self.step == Step::AnnotationOptions {
+            return t!("LEADER  Enter an annotation option [None/Mtext]:").into_owned();
+        }
+        if self.step == Step::Annotation {
+            return if self.annotation_lines.is_empty() {
+                t!("LEADER  Enter first line of annotation text or <options>:").into_owned()
+            } else {
+                t!("LEADER  Enter next line of annotation text:").into_owned()
+            };
+        }
+        match self.verts.len() {
+            0 => t!("LEADER  Specify leader start point:").into_owned(),
+            1 => t!("LEADER  Specify next point:").into_owned(),
+            _ => t!("LEADER  Specify next point or [Annotation/Format/Undo] <Annotation>:")
+                .into_owned(),
+        }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        if self.step == Step::Format {
+            return vec![
+                CmdOption::new("Spline", "SPLINE"),
+                CmdOption::new("Straight", "STRAIGHT"),
+                CmdOption::new("Arrow", "ARROW"),
+                CmdOption::new("None", "NONE"),
+            ];
+        }
+        if self.step == Step::AnnotationOptions {
+            return vec![
+                CmdOption::new("None", "NONE"),
+                CmdOption::new("Mtext", "MTEXT"),
+            ];
+        }
+        if self.verts.len() >= 2 {
+            vec![
+                CmdOption::new("Annotation", "ANNOTATION"),
+                CmdOption::new("Format", "FORMAT"),
+                CmdOption::new("Undo", "UNDO"),
+            ]
         } else {
-            t!("LEADER  Specify landing point:").into_owned()
+            Vec::new()
+        }
+    }
+
+    fn input_kind(&self) -> InputKind {
+        if matches!(self.step, Step::Format | Step::AnnotationOptions) {
+            InputKind::SingleToken
+        } else if self.step == Step::Annotation {
+            InputKind::FreeText
+        } else {
+            InputKind::Point
+        }
+    }
+
+    fn point_step_accepts_keywords(&self) -> bool {
+        self.step == Step::Points && self.verts.len() >= 2
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        let keyword = text.trim().to_ascii_uppercase();
+        if self.step == Step::Annotation {
+            self.annotation_lines.push(text.to_string());
+            return Some(CmdResult::NeedPoint);
+        }
+        if self.step == Step::AnnotationOptions {
+            return match keyword.as_str() {
+                "N" | "NONE" => Some(self.finish(None, false)),
+                "M" | "MTEXT" => Some(self.finish(Some(""), true)),
+                _ => None,
+            };
+        }
+        if self.step == Step::Format {
+            match keyword.as_str() {
+                "S" | "SPLINE" => self.path_type = LeaderPathType::Spline,
+                "ST" | "STRAIGHT" => self.path_type = LeaderPathType::StraightLine,
+                "A" | "ARROW" => self.arrow_enabled = true,
+                "N" | "NONE" => self.arrow_enabled = false,
+                _ => return None,
+            }
+            self.step = Step::Points;
+            return Some(CmdResult::NeedPoint);
+        }
+        if self.verts.len() < 2 {
+            return None;
+        }
+        match keyword.as_str() {
+            "A" | "ANNOTATION" => {
+                self.step = Step::Annotation;
+                Some(CmdResult::NeedPoint)
+            }
+            "F" | "FORMAT" => {
+                self.step = Step::Format;
+                Some(CmdResult::NeedPoint)
+            }
+            "U" | "UNDO" => {
+                self.verts.pop();
+                Some(CmdResult::NeedPoint)
+            }
+            _ => None,
         }
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        self.verts.push(pt);
-
-        if self.verts.len() >= 2 {
-            self.finish()
-        } else {
-            CmdResult::NeedPoint
+        if self.step != Step::Points {
+            return CmdResult::NeedPoint;
         }
+        self.verts.push(pt);
+        CmdResult::NeedPoint
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        self.finish()
+        if self.step == Step::Format {
+            self.step = Step::Points;
+            CmdResult::NeedPoint
+        } else if self.step == Step::Annotation {
+            if self.annotation_lines.is_empty() {
+                self.step = Step::AnnotationOptions;
+                CmdResult::NeedPoint
+            } else {
+                let text = self.annotation_lines.join("\n");
+                self.finish(Some(&text), false)
+            }
+        } else if self.step == Step::AnnotationOptions {
+            CmdResult::NeedPoint
+        } else {
+            self.step = Step::Annotation;
+            CmdResult::NeedPoint
+        }
     }
 
     fn on_escape(&mut self) -> CmdResult {
@@ -176,7 +313,7 @@ impl CadCommand for LeaderCommand {
     }
 
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
-        if self.verts.is_empty() {
+        if self.step != Step::Points || self.verts.is_empty() {
             return None;
         }
         let mut pts: Vec<Vec3> = self

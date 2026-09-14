@@ -4,6 +4,7 @@
 // data rows. The command remembers its previous settings and supports either a
 // fixed insertion point or a two-corner sizing window.
 
+use acadrust::entities::table::{CellStyle, CellStylePropertyFlags};
 use acadrust::entities::TableBuilder;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
@@ -101,7 +102,45 @@ pub struct TableCommand {
     preview_scale: f64,
     title_row: bool,
     header_row: bool,
+    row_style_overrides: Option<[CellStyle; 3]>,
+    preview_enabled: bool,
     plane: WorkingPlane,
+}
+
+fn cell_style_from_row(style: &acadrust::objects::RowCellStyle) -> CellStyle {
+    let mut result = CellStyle::new();
+    result.property_flags = CellStylePropertyFlags::DATA_TYPE
+        | CellStylePropertyFlags::DATA_FORMAT
+        | CellStylePropertyFlags::ALIGNMENT
+        | CellStylePropertyFlags::CONTENT_COLOR
+        | CellStylePropertyFlags::TEXT_STYLE
+        | CellStylePropertyFlags::TEXT_HEIGHT
+        | CellStylePropertyFlags::BACKGROUND_COLOR;
+    result.content_color = style.text_color;
+    result.text_style_handle = style.text_style_handle;
+    result.text_style_name = style.text_style_name.clone();
+    result.text_height = style.text_height;
+    result.alignment = style.alignment as i32;
+    result.background_color = style.fill_color;
+    result.fill_enabled = style.fill_enabled;
+    result.value_data_type = style.data_type;
+    result.value_unit_type = style.unit_type;
+    result.value_format = style.format_string.clone();
+    result
+}
+
+fn selected_row_style(
+    table_style: &acadrust::objects::TableStyle,
+    name: &str,
+) -> CellStyle {
+    let style = if name.eq_ignore_ascii_case("Title") {
+        &table_style.title_row_style
+    } else if name.eq_ignore_ascii_case("Header") {
+        &table_style.header_row_style
+    } else {
+        &table_style.data_row_style
+    };
+    cell_style_from_row(style)
 }
 
 impl TableCommand {
@@ -114,6 +153,8 @@ impl TableCommand {
             preview_scale: 1.0,
             title_row: true,
             header_row: true,
+            row_style_overrides: None,
+            preview_enabled: true,
             plane: WorkingPlane::default(),
         }
     }
@@ -141,8 +182,58 @@ impl TableCommand {
             },
             title_row: !style.title_suppressed,
             header_row: !style.header_suppressed,
+            row_style_overrides: None,
+            preview_enabled: true,
             plane: WorkingPlane::default(),
         }
+    }
+
+    /// Build the insertion command from the values accepted by the Insert
+    /// Table dialog. The dialog owns validation, so the command starts at the
+    /// point/window placement step instead of asking for the same values again.
+    pub fn configured(
+        style: Option<(acadrust::Handle, &acadrust::objects::TableStyle)>,
+        annotation_multiplier: f64,
+        columns: usize,
+        data_rows: usize,
+        column_width: f64,
+        row_height: f64,
+        use_window: bool,
+        preview_enabled: bool,
+        row_style_names: [&str; 3],
+    ) -> Self {
+        let mut command = style.map_or_else(Self::new, |(handle, style)| {
+            Self::with_style(handle, style, annotation_multiplier)
+        });
+        let insertion_mode = if use_window {
+            InsertionMode::Window
+        } else {
+            InsertionMode::Point
+        };
+        if let Ok(mut saved) = saved_defaults().lock() {
+            *saved = TableDefaults {
+                columns,
+                data_rows,
+                column_width,
+                row_height,
+                insertion_mode,
+            };
+        }
+        command.step = if use_window {
+            Step::WindowFirst { columns, data_rows }
+        } else {
+            Step::Insertion {
+                columns,
+                data_rows,
+                column_width,
+                row_height,
+            }
+        };
+        command.preview_enabled = preview_enabled;
+        command.row_style_overrides = style.map(|(_, table_style)| {
+            row_style_names.map(|name| selected_row_style(table_style, name))
+        });
+        command
     }
 
     fn defaults(&self) -> TableDefaults {
@@ -175,6 +266,11 @@ impl TableCommand {
             .column_width(column_width)
             .build();
         table.table_style_handle = self.style_handle;
+        if let Some(styles) = &self.row_style_overrides {
+            for (row_index, row) in table.rows.iter_mut().enumerate() {
+                row.style = Some(styles[row_index.min(2)].clone());
+            }
+        }
         self.plane.place_entity(EntityType::Table(table))
     }
 
@@ -447,6 +543,9 @@ impl CadCommand for TableCommand {
     }
 
     fn on_mouse_move(&mut self, point: DVec3) -> Option<WireModel> {
+        if !self.preview_enabled {
+            return None;
+        }
         match self.step {
             Step::Insertion {
                 columns,

@@ -246,6 +246,8 @@ impl CadCommand for MTextCommand {
     fn input_kind(&self) -> InputKind {
         if matches!(self.step, Step::Style) {
             InputKind::FreeText
+        } else if matches!(self.step, Step::FirstCorner | Step::OppositeCorner) {
+            InputKind::Point
         } else {
             InputKind::SingleToken
         }

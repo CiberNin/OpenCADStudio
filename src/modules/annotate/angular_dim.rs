@@ -489,8 +489,10 @@ impl CadCommand for AngularDimensionCommand {
     fn input_kind(&self) -> InputKind {
         if self.awaiting_text {
             InputKind::FreeText
-        } else {
+        } else if self.awaiting_angle || self.awaiting_quadrant {
             InputKind::SingleToken
+        } else {
+            InputKind::Point
         }
     }
 

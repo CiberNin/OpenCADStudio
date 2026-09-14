@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 mod blocks;
 mod dim;
-mod display;
+pub(crate) mod display;
 mod draw;
 mod fileops;
 mod inquiry;
@@ -400,6 +400,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ANNOUPDATE",
         "SCALELISTEDIT",
         "OBJECTSCALE",
+        "ANNORESET",
         // Import CSV into a table + LandXML survey points.
         "DATALINK",
         "DATALINKUPDATE",

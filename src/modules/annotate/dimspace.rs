@@ -3,12 +3,12 @@
 // Workflow:
 //   1. Select the base dimension
 //   2. Select the other dimensions to space (click each, Enter to finish)
-//   3. Enter spacing value (or 0 for automatic equal spacing)
+//   3. Enter a non-negative spacing value, or choose Auto
 
-use acadrust::Handle;
+use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdOption, CmdResult, InputKind, SelectionEntity};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::t;
 
@@ -31,12 +31,14 @@ enum Step {
 
 pub struct DimSpaceCommand {
     step: Step,
+    picked_entity: Option<EntityType>,
 }
 
 impl DimSpaceCommand {
     pub fn new() -> Self {
         Self {
             step: Step::PickBase,
+            picked_entity: None,
         }
     }
 }
@@ -54,12 +56,66 @@ impl CadCommand for DimSpaceCommand {
                 count = others.len()
             )
             .into_owned(),
-            Step::EnterSpacing { .. } => t!("DIMSPACE  Enter value (0 = auto):").into_owned(),
+            Step::EnterSpacing { .. } => {
+                t!("DIMSPACE  Specify distance between dimensions or [Auto] <Auto>:")
+                    .into_owned()
+            }
+        }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        matches!(self.step, Step::EnterSpacing { .. })
+            .then(|| vec![CmdOption::new("Auto", "AUTO")])
+            .unwrap_or_default()
+    }
+
+    fn input_kind(&self) -> InputKind {
+        if matches!(self.step, Step::EnterSpacing { .. }) {
+            InputKind::SingleToken
+        } else {
+            InputKind::Point
         }
     }
 
     fn needs_entity_pick(&self) -> bool {
-        matches!(self.step, Step::PickBase | Step::PickOthers { .. })
+        matches!(self.step, Step::PickBase)
+    }
+
+    fn inject_before_entity_pick(&self) -> bool {
+        matches!(self.step, Step::PickBase)
+    }
+
+    fn inject_picked_entity(&mut self, entity: EntityType) {
+        self.picked_entity = Some(entity);
+    }
+
+    fn is_selection_gathering(&self) -> bool {
+        matches!(self.step, Step::PickOthers { .. })
+    }
+
+    fn selection_entities_exclude_locked(&self) -> bool {
+        true
+    }
+
+    fn inject_selection_entities(&mut self, entities: Vec<SelectionEntity>) {
+        let Step::PickOthers { base, others } = &mut self.step else {
+            return;
+        };
+        others.clear();
+        for selected in entities {
+            if selected.handle != *base
+                && matches!(
+                    selected.entity,
+                    EntityType::Dimension(
+                        acadrust::entities::Dimension::Linear(_)
+                            | acadrust::entities::Dimension::Aligned(_)
+                    )
+                )
+                && !others.contains(&selected.handle)
+            {
+                others.push(selected.handle);
+            }
+        }
     }
 
     fn on_entity_pick(&mut self, handle: Handle, _pt: DVec3) -> CmdResult {
@@ -68,29 +124,60 @@ impl CadCommand for DimSpaceCommand {
         }
         match &mut self.step {
             Step::PickBase => {
+                if !matches!(
+                    self.picked_entity.take(),
+                    Some(EntityType::Dimension(
+                        acadrust::entities::Dimension::Linear(_)
+                            | acadrust::entities::Dimension::Aligned(_)
+                    ))
+                ) {
+                    return CmdResult::ReportError(
+                        t!("DIMSPACE: select a linear or aligned dimension.").into_owned(),
+                    );
+                }
                 self.step = Step::PickOthers {
                     base: handle,
                     others: vec![],
                 };
                 CmdResult::NeedPoint
             }
-            Step::PickOthers { others, .. } => {
-                if !others.contains(&handle) {
-                    others.push(handle);
-                }
-                CmdResult::NeedPoint
-            }
             _ => CmdResult::NeedPoint,
         }
     }
 
-    fn wants_text_input(&self) -> bool {
-        matches!(self.step, Step::EnterSpacing { .. })
+    fn on_selection_complete(&mut self, _handles: Vec<Handle>) -> CmdResult {
+        let Step::PickOthers { base, others } = &self.step else {
+            return CmdResult::Cancel;
+        };
+        if others.is_empty() {
+            return CmdResult::ReportError(
+                t!("DIMSPACE: select one or more linear or aligned dimensions.").into_owned(),
+            );
+        }
+        let base = *base;
+        let others = others.clone();
+        self.step = Step::EnterSpacing { base, others };
+        CmdResult::NeedPoint
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         if let Step::EnterSpacing { base, others } = &self.step {
-            let spacing: f64 = text.trim().parse().unwrap_or(0.0);
+            let token = text.trim();
+            let spacing = if matches!(token.to_ascii_uppercase().as_str(), "A" | "AUTO") {
+                "AUTO".to_string()
+            } else {
+                let Ok(value) = token.parse::<f64>() else {
+                    return Some(CmdResult::ReportError(
+                        t!("DIMSPACE: enter a non-negative spacing value or Auto.").into_owned(),
+                    ));
+                };
+                if value < 0.0 {
+                    return Some(CmdResult::ReportError(
+                        t!("DIMSPACE: spacing value cannot be negative.").into_owned(),
+                    ));
+                }
+                value.to_string()
+            };
             let b = *base;
             let o = others.clone();
             // Emit sentinel for commands.rs to handle
@@ -116,15 +203,12 @@ impl CadCommand for DimSpaceCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        match &self.step {
-            Step::PickOthers { base, others } if !others.is_empty() => {
-                let b = *base;
-                let o = others.clone();
-                self.step = Step::EnterSpacing { base: b, others: o };
-                CmdResult::NeedPoint
-            }
-            _ => CmdResult::Cancel,
+        if matches!(self.step, Step::EnterSpacing { .. }) {
+            return self
+                .on_text_input("AUTO")
+                .unwrap_or(CmdResult::Cancel);
         }
+        CmdResult::Cancel
     }
 }
 

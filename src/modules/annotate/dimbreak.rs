@@ -1,18 +1,9 @@
-// DIMBREAK command — insert a break in a dimension/extension line where
-// another object crosses it.
-//
-// Simplified workflow:
-//   1. Select the dimension to break
-//   2. Select the object that crosses it (or Enter for AUTO mode on all crossings)
-//
-// Because breaking a dimension line requires deep geometric intersection logic
-// that depends on the renderer, this implementation records the target handles
-// and emits a ReplaceEntity sentinel that commands.rs intercepts to apply the break.
+// DIMBREAK — create automatic, object-driven or manual gaps in dimensions.
 
-use acadrust::Handle;
+use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdOption, CmdResult, InputKind};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::t;
 
@@ -28,19 +19,53 @@ pub fn tool() -> ToolDef {
 }
 
 enum Step {
-    PickDim,
-    PickCrossing { dim_handle: Handle },
+    PickDimension,
+    PickDimensions(Vec<Handle>),
+    PickCrossing(Vec<Handle>),
+    ManualFirst(Vec<Handle>),
+    ManualSecond(Vec<Handle>, DVec3),
 }
 
 pub struct DimBreakCommand {
     step: Step,
+    picked_entity: Option<EntityType>,
 }
 
 impl DimBreakCommand {
     pub fn new() -> Self {
         Self {
-            step: Step::PickDim,
+            step: Step::PickDimension,
+            picked_entity: None,
         }
+    }
+
+    fn marker(layer: String, primary: Handle) -> CmdResult {
+        use acadrust::entities::XLine;
+        let mut marker = XLine::default();
+        marker.common.layer = layer;
+        CmdResult::ReplaceEntity(primary, vec![EntityType::XLine(marker)])
+    }
+
+    fn handles(handles: &[Handle]) -> String {
+        handles
+            .iter()
+            .map(|handle| handle.value().to_string())
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    fn automatic(handles: &[Handle]) -> CmdResult {
+        Self::marker(
+            format!("__DIMBREAK_AUTO__{}", Self::handles(handles)),
+            handles[0],
+        )
+    }
+
+    fn remove(handles: &[Handle]) -> CmdResult {
+        Self::marker(
+            format!("__DIMBREAK_REMOVE__{}", Self::handles(handles)),
+            handles[0],
+        )
     }
 }
 
@@ -51,54 +76,151 @@ impl CadCommand for DimBreakCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::PickDim => t!("DIMBREAK  Select dimension to break:").into_owned(),
-            Step::PickCrossing { .. } => {
-                t!("DIMBREAK  Select object to break at, or Enter for Auto:").into_owned()
+            Step::PickDimension => {
+                t!("DIMBREAK  Select dimension to add/remove break or [Multiple]:").into_owned()
+            }
+            Step::PickDimensions(handles) => crate::tf!(
+                "DIMBREAK  Select dimensions ({} selected, press Enter when done):",
+                handles.len()
+            )
+            .into_owned(),
+            Step::PickCrossing(_) => t!(
+                "DIMBREAK  Select object to break dimension or [Auto/Manual/Remove] <Auto>:"
+            )
+            .into_owned(),
+            Step::ManualFirst(_) => t!("DIMBREAK  Specify first break point:").into_owned(),
+            Step::ManualSecond(_, _) => {
+                t!("DIMBREAK  Specify second break point:").into_owned()
             }
         }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        match self.step {
+            Step::PickDimension => vec![CmdOption::new("Multiple", "MULTIPLE")],
+            Step::PickCrossing(_) => vec![
+                CmdOption::new("Auto", "AUTO"),
+                CmdOption::new("Manual", "MANUAL"),
+                CmdOption::new("Remove", "REMOVE"),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    fn input_kind(&self) -> InputKind {
+        InputKind::Point
+    }
+
+    fn point_step_accepts_keywords(&self) -> bool {
+        matches!(self.step, Step::PickDimension | Step::PickCrossing(_))
     }
 
     fn needs_entity_pick(&self) -> bool {
-        true
+        matches!(
+            self.step,
+            Step::PickDimension | Step::PickDimensions(_) | Step::PickCrossing(_)
+        )
     }
 
-    fn on_entity_pick(&mut self, handle: Handle, _pt: DVec3) -> CmdResult {
+    fn inject_before_entity_pick(&self) -> bool {
+        matches!(self.step, Step::PickDimension | Step::PickDimensions(_))
+    }
+
+    fn inject_picked_entity(&mut self, entity: EntityType) {
+        self.picked_entity = Some(entity);
+    }
+
+    fn on_entity_pick(&mut self, handle: Handle, _point: DVec3) -> CmdResult {
         if handle.is_null() {
             return CmdResult::NeedPoint;
         }
-        match &self.step {
-            Step::PickDim => {
-                self.step = Step::PickCrossing { dim_handle: handle };
+        match &mut self.step {
+            Step::PickDimension => {
+                if !matches!(self.picked_entity.take(), Some(EntityType::Dimension(_))) {
+                    return CmdResult::ReportError(
+                        t!("DIMBREAK: select a dimension.").into_owned(),
+                    );
+                }
+                self.step = Step::PickCrossing(vec![handle]);
                 CmdResult::NeedPoint
             }
-            Step::PickCrossing { dim_handle } => {
-                let dim_h = *dim_handle;
-                // Emit sentinel: the actual break logic is in commands.rs
-                use acadrust::entities::XLine;
-                let mut xl = XLine::default();
-                xl.common.layer = format!("__DIMBREAK__{},{}", dim_h.value(), handle.value());
-                CmdResult::ReplaceEntity(dim_h, vec![acadrust::EntityType::XLine(xl)])
+            Step::PickDimensions(handles) => {
+                if !matches!(self.picked_entity.take(), Some(EntityType::Dimension(_))) {
+                    return CmdResult::ReportError(
+                        t!("DIMBREAK: select a dimension.").into_owned(),
+                    );
+                }
+                if !handles.contains(&handle) {
+                    handles.push(handle);
+                }
+                CmdResult::NeedPoint
             }
+            Step::PickCrossing(handles) => Self::marker(
+                format!(
+                    "__DIMBREAK_OBJECT__{}|{}",
+                    Self::handles(handles),
+                    handle.value()
+                ),
+                handles[0],
+            ),
+            Step::ManualFirst(_) | Step::ManualSecond(_, _) => CmdResult::NeedPoint,
         }
     }
 
-    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
-        CmdResult::NeedPoint
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        let keyword = text.trim().to_ascii_uppercase();
+        match &mut self.step {
+            Step::PickDimension if matches!(keyword.as_str(), "M" | "MULTIPLE") => {
+                self.step = Step::PickDimensions(Vec::new());
+                Some(CmdResult::NeedPoint)
+            }
+            Step::PickCrossing(handles) if matches!(keyword.as_str(), "A" | "AUTO") => {
+                Some(Self::automatic(handles))
+            }
+            Step::PickCrossing(handles) if matches!(keyword.as_str(), "M" | "MANUAL") => {
+                self.step = Step::ManualFirst(handles.clone());
+                Some(CmdResult::NeedPoint)
+            }
+            Step::PickCrossing(handles) if matches!(keyword.as_str(), "R" | "REMOVE") => {
+                Some(Self::remove(handles))
+            }
+            _ => None,
+        }
+    }
+
+    fn on_point(&mut self, point: DVec3) -> CmdResult {
+        match &self.step {
+            Step::ManualFirst(handles) => {
+                self.step = Step::ManualSecond(handles.clone(), point);
+                CmdResult::NeedPoint
+            }
+            Step::ManualSecond(handles, first) => Self::marker(
+                format!(
+                    "__DIMBREAK_MANUAL__{}|{:.15},{:.15},{:.15}|{:.15},{:.15},{:.15}",
+                    Self::handles(handles),
+                    first.x,
+                    first.y,
+                    first.z,
+                    point.x,
+                    point.y,
+                    point.z
+                ),
+                handles[0],
+            ),
+            _ => CmdResult::NeedPoint,
+        }
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        // Auto mode: apply to all crossings
-        if let Step::PickCrossing { dim_handle } = &self.step {
-            let dim_h = *dim_handle;
-            use acadrust::entities::XLine;
-            let mut xl = XLine::default();
-            xl.common.layer = format!("__DIMBREAK_AUTO__{}", dim_h.value());
-            return CmdResult::ReplaceEntity(dim_h, vec![acadrust::EntityType::XLine(xl)]);
+        match &self.step {
+            Step::PickDimensions(handles) if !handles.is_empty() => {
+                self.step = Step::PickCrossing(handles.clone());
+                CmdResult::NeedPoint
+            }
+            Step::PickCrossing(handles) => Self::automatic(handles),
+            _ => CmdResult::Cancel,
         }
-        CmdResult::Cancel
     }
 }
 
-
-// ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIMBREAK"] });  // DimBreakCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMBREAK"] });
