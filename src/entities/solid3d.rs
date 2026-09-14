@@ -7,7 +7,9 @@ use acadrust::xdata::{ExtendedDataRecord, XDataValue};
 use cadkernel::space::polygon;
 use crate::t;
 use crate::command::EntityTransform;
-use crate::entities::common::{center_grip, edit_prop as edit, parse_f64, ro_prop as ro};
+use crate::entities::common::{
+    center_grip, edit_prop as edit, format_area, format_length, parse_f64, ro_prop as ro,
+};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
 
@@ -361,36 +363,20 @@ impl Grippable for Region {
 impl PropertyEditable for Region {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
         let (area, perimeter) = region_area_perimeter(self);
-        let mut sections =
-            acis_sections(&self.acis_data, &self.wires, &self.silhouettes, self.history_handle);
-        sections[0]
-            .props
-            .insert(0, ro(t!("UID").as_ref(), "rgn_uid", self.uid.clone()));
-        let mut geometry = position_section("rgn", &self.point_of_reference);
-        geometry
-            .props
-            .push(ro(t!("Area").as_ref(), "rgn_area", format!("{area:.4}")));
-        geometry
-            .props
-            .push(ro(t!("Perimeter").as_ref(), "rgn_perimeter", format!("{perimeter:.4}")));
-        sections.push(geometry);
-        sections
+        vec![PropSection {
+            title: t!("Geometry").into_owned(),
+            props: vec![
+                ro(t!("Area").as_ref(), "rgn_area", format_area(area)),
+                ro(
+                    t!("Perimeter").as_ref(),
+                    "rgn_perimeter",
+                    format_length(perimeter),
+                ),
+            ],
+        }]
     }
 
-    fn apply_geom_prop(&mut self, field: &str, value: &str) {
-        let Some(v) = parse_f64(value) else {
-            return;
-        };
-        let delta = match field {
-            "rgn_px" => acadrust::types::Vector3::new(v - self.point_of_reference.x, 0.0, 0.0),
-            "rgn_py" => acadrust::types::Vector3::new(0.0, v - self.point_of_reference.y, 0.0),
-            "rgn_pz" => acadrust::types::Vector3::new(0.0, 0.0, v - self.point_of_reference.z),
-            _ => return,
-        };
-        if delta != acadrust::types::Vector3::ZERO {
-            acadrust::Entity::translate(self, delta);
-        }
-    }
+    fn apply_geom_prop(&mut self, _field: &str, _value: &str) {}
 }
 
 // ── Body ──────────────────────────────────────────────────────────────────────

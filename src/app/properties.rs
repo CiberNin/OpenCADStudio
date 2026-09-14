@@ -683,7 +683,6 @@ impl OpenCADStudio {
                     if matches!(
                         entity,
                         acadrust::EntityType::Solid3D(_)
-                            | acadrust::EntityType::Region(_)
                             | acadrust::EntityType::Body(_)
                             | acadrust::EntityType::Surface(_)
                             | acadrust::EntityType::Mesh(_)
@@ -740,7 +739,6 @@ impl OpenCADStudio {
                                 && matches!(
                                     entity,
                                     acadrust::EntityType::Solid3D(_)
-                                        | acadrust::EntityType::Region(_)
                                         | acadrust::EntityType::Body(_)
                                 )
                             {
