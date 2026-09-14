@@ -2949,6 +2949,93 @@ impl OpenCADStudio {
                 self.tabs[i].scene.clear_preview_wire();
                 self.refresh_properties();
             }
+            CmdResult::EditDimensionBreak {
+                dimensions,
+                operation,
+            } => {
+                self.push_undo_snapshot(i, "DIMBREAK");
+                let result = apply_dimbreak(&mut self.tabs[i].scene, &dimensions, operation);
+                if result.changed.is_empty() {
+                    self.command_line.push_info(&result.message);
+                } else {
+                    for handle in &result.changed {
+                        self.tabs[i].scene.invalidate_dim_block_recorded(*handle);
+                    }
+                    let changes = result
+                        .changed
+                        .iter()
+                        .copied()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect::<Vec<_>>();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                    self.command_line.push_output(&result.message);
+                }
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+            }
+            CmdResult::EditDimensionJog { dimension, point } => {
+                let valid = matches!(
+                    self.tabs[i].scene.document.get_entity(dimension),
+                    Some(acadrust::EntityType::Dimension(
+                        acadrust::entities::Dimension::Linear(_)
+                            | acadrust::entities::Dimension::Aligned(_)
+                    ))
+                );
+                if !valid {
+                    self.command_line.push_error(
+                        crate::t!("DIMJOGLINE: select a linear or aligned dimension.").as_ref(),
+                    );
+                } else if !self.reject_locked_edit(i, dimension) {
+                    self.push_undo_snapshot(i, "DIMJOGLINE");
+                    let values = point.map(|point| {
+                        use acadrust::xdata::XDataValue;
+                        vec![
+                            XDataValue::Integer16(387),
+                            XDataValue::Integer16(3),
+                            XDataValue::Integer16(389),
+                            XDataValue::Point3D(acadrust::types::Vector3::new(
+                                point.x, point.y, point.z,
+                            )),
+                        ]
+                    });
+                    crate::scene::view::dispatch::set_entity_xdata(
+                        &mut self.tabs[i].scene.document,
+                        dimension,
+                        "ACAD_DSTYLE_DIMJAG_POSITION",
+                        values,
+                    );
+                    self.tabs[i].scene.invalidate_dim_block_recorded(dimension);
+                    self.tabs[i]
+                        .scene
+                        .bump_entities(&[(dimension, crate::scene::ChangeKind::Modified)]);
+                    self.tabs[i].dirty = true;
+                    self.command_line.push_output(
+                        if point.is_some() {
+                            crate::t!("DIMJOGLINE: jog added.")
+                        } else {
+                            crate::t!("DIMJOGLINE: jog removed.")
+                        }
+                        .as_ref(),
+                    );
+                }
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+            }
+            CmdResult::SpaceDimensions {
+                base,
+                others,
+                spacing,
+            } => {
+                self.push_undo_snapshot(i, "DIMSPACE");
+                if apply_dimspace(&mut self.tabs[i].scene, base, &others, spacing) {
+                    self.tabs[i].dirty = true;
+                    self.command_line
+                        .push_output(crate::t!("DIMSPACE  Spacing adjusted.").as_ref());
+                }
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+            }
             CmdResult::ReplaceEntity(handle, new_entities) => {
                 if self.reject_locked_edit(i, handle) {
                     return Task::none();
@@ -2974,122 +3061,6 @@ impl OpenCADStudio {
                         }
                     }
                 }
-                // Detect DIMBREAK sentinel.
-                if new_entities.len() == 1 {
-                    if let acadrust::EntityType::XLine(ref xl) = new_entities[0] {
-                        let layer = xl.common.layer.clone();
-                        if layer.starts_with("__DIMBREAK_") {
-                            self.push_undo_snapshot(i, "DIMBREAK");
-                            let result = apply_dimbreak(&mut self.tabs[i].scene, &layer);
-                            if result.changed.is_empty() {
-                                self.command_line.push_info(&result.message);
-                                self.tabs[i].active_cmd = None;
-                                self.tabs[i].snap_result = None;
-                                return Task::none();
-                            }
-                            for handle in &result.changed {
-                                self.tabs[i].scene.invalidate_dim_block_recorded(*handle);
-                            }
-                            let changes: Vec<_> = result
-                                .changed
-                                .iter()
-                                .copied()
-                                .map(|handle| (handle, crate::scene::ChangeKind::Modified))
-                                .collect();
-                            self.tabs[i].scene.bump_entities(&changes);
-                            self.tabs[i].dirty = true;
-                            self.command_line.push_output(&result.message);
-                            self.tabs[i].active_cmd = None;
-                            self.tabs[i].snap_result = None;
-                            return Task::none();
-                        }
-                        if layer.starts_with("__DIMSPACE__") {
-                            self.push_undo_snapshot(i, "DIMSPACE");
-                            if let Some(encoded) = layer.strip_prefix("__DIMSPACE__") {
-                                apply_dimspace(&mut self.tabs[i].scene, encoded);
-                            }
-                            self.command_line.push_output(crate::t!("DIMSPACE  Spacing adjusted.").as_ref());
-                            self.tabs[i].dirty = true;
-                            self.tabs[i].active_cmd = None;
-                            self.tabs[i].snap_result = None;
-                            return Task::none();
-                        }
-                        if layer.starts_with("__DIMJOG__")
-                            || layer.starts_with("__DIMJOG_REMOVE__")
-                        {
-                            let remove = layer.starts_with("__DIMJOG_REMOVE__");
-                            let point = layer
-                                .strip_prefix("__DIMJOG__")
-                                .and_then(|encoded| encoded.split_once('|'))
-                                .and_then(|(_, coordinates)| {
-                                    let mut values = coordinates
-                                        .split(',')
-                                        .filter_map(|value| value.parse::<f64>().ok());
-                                    Some(acadrust::types::Vector3::new(
-                                        values.next()?,
-                                        values.next()?,
-                                        values.next()?,
-                                    ))
-                                });
-                            let valid = matches!(
-                                self.tabs[i].scene.document.get_entity(handle),
-                                Some(acadrust::EntityType::Dimension(
-                                    acadrust::entities::Dimension::Linear(_)
-                                        | acadrust::entities::Dimension::Aligned(_)
-                                ))
-                            );
-                            if !valid || (!remove && point.is_none()) {
-                                self.command_line.push_error(
-                                    crate::t!("DIMJOGLINE: select a linear or aligned dimension.")
-                                        .as_ref(),
-                                );
-                                self.tabs[i].active_cmd = None;
-                                self.tabs[i].snap_result = None;
-                                return Task::none();
-                            }
-                            self.push_undo_snapshot(i, "DIMJOGLINE");
-                            if remove {
-                                crate::scene::view::dispatch::set_entity_xdata(
-                                    &mut self.tabs[i].scene.document,
-                                    handle,
-                                    "ACAD_DSTYLE_DIMJAG_POSITION",
-                                    None,
-                                );
-                            } else if let Some(point) = point {
-                                use acadrust::xdata::XDataValue;
-                                crate::scene::view::dispatch::set_entity_xdata(
-                                    &mut self.tabs[i].scene.document,
-                                    handle,
-                                    "ACAD_DSTYLE_DIMJAG_POSITION",
-                                    Some(vec![
-                                        XDataValue::Integer16(387),
-                                        XDataValue::Integer16(3),
-                                        XDataValue::Integer16(389),
-                                        XDataValue::Point3D(point),
-                                    ]),
-                                );
-                            }
-                            self.tabs[i].scene.invalidate_dim_block_recorded(handle);
-                            self.tabs[i].scene.bump_entities(&[(
-                                handle,
-                                crate::scene::ChangeKind::Modified,
-                            )]);
-                            self.tabs[i].dirty = true;
-                            self.command_line.push_output(
-                                if remove {
-                                    crate::t!("DIMJOGLINE: jog removed.")
-                                } else {
-                                    crate::t!("DIMJOGLINE: jog added.")
-                                }
-                                .as_ref(),
-                            );
-                            self.tabs[i].active_cmd = None;
-                            self.tabs[i].snap_result = None;
-                            return Task::none();
-                        }
-                    }
-                }
-
                 let label = self.history_label_from_active_cmd(i, "TRIM");
                 self.push_undo_snapshot(i, label);
                 self.tabs[i].scene.erase_entities(&[handle]);
@@ -6352,56 +6323,6 @@ struct DimBreakResult {
     message: String,
 }
 
-#[derive(Clone, Copy)]
-enum DimBreakOperation {
-    Auto,
-    Object(Handle),
-    Manual(glam::DVec3, glam::DVec3),
-    Remove,
-}
-
-fn parse_dim_break_handles(encoded: &str) -> Vec<Handle> {
-    encoded
-        .split(';')
-        .filter_map(|value| value.parse::<u64>().ok())
-        .map(Handle::from)
-        .filter(|handle| !handle.is_null())
-        .collect()
-}
-
-fn parse_dim_break_point(encoded: &str) -> Option<glam::DVec3> {
-    let mut values = encoded.split(',').map(str::parse::<f64>);
-    Some(glam::DVec3::new(
-        values.next()?.ok()?,
-        values.next()?.ok()?,
-        values.next()?.ok()?,
-    ))
-}
-
-fn parse_dim_break(encoded: &str) -> Option<(Vec<Handle>, DimBreakOperation)> {
-    if let Some(handles) = encoded.strip_prefix("__DIMBREAK_AUTO__") {
-        return Some((parse_dim_break_handles(handles), DimBreakOperation::Auto));
-    }
-    if let Some(handles) = encoded.strip_prefix("__DIMBREAK_REMOVE__") {
-        return Some((parse_dim_break_handles(handles), DimBreakOperation::Remove));
-    }
-    if let Some(rest) = encoded.strip_prefix("__DIMBREAK_OBJECT__") {
-        let (handles, crossing) = rest.split_once('|')?;
-        return Some((
-            parse_dim_break_handles(handles),
-            DimBreakOperation::Object(Handle::from(crossing.parse::<u64>().ok()?)),
-        ));
-    }
-    if let Some(rest) = encoded.strip_prefix("__DIMBREAK_MANUAL__") {
-        let mut parts = rest.split('|');
-        let handles = parse_dim_break_handles(parts.next()?);
-        let first = parse_dim_break_point(parts.next()?)?;
-        let second = parse_dim_break_point(parts.next()?)?;
-        return Some((handles, DimBreakOperation::Manual(first, second)));
-    }
-    None
-}
-
 fn wire_segments(
     models: &[crate::scene::model::wire_model::WireModel],
 ) -> Vec<(glam::DVec3, glam::DVec3)> {
@@ -6435,33 +6356,12 @@ fn segment_intersection_xy(
     first: (glam::DVec3, glam::DVec3),
     second: (glam::DVec3, glam::DVec3),
 ) -> Option<(glam::DVec3, glam::DVec3)> {
-    let p = first.0;
-    let r = first.1 - first.0;
-    let q = second.0;
-    let s = second.1 - second.0;
-    let cross = |a: glam::DVec3, b: glam::DVec3| a.x * b.y - a.y * b.x;
-    let denominator = cross(r, s);
-    if denominator.abs() <= 1.0e-12 {
-        return None;
-    }
-    let qp = q - p;
-    let t = cross(qp, s) / denominator;
-    let u = cross(qp, r) / denominator;
-    if !(-1.0e-9..=1.0 + 1.0e-9).contains(&t)
-        || !(-1.0e-9..=1.0 + 1.0e-9).contains(&u)
-    {
-        return None;
-    }
-    let direction = r.normalize_or_zero();
-    if direction.length_squared() <= 1.0e-18 {
-        return None;
-    }
-    let center = p + r * t.clamp(0.0, 1.0);
-    let half_gap = 0.25_f64.min(first.0.distance(first.1) * 0.2);
-    Some((
-        center - direction * half_gap,
-        center + direction * half_gap,
-    ))
+    let gap = cadkernel::space::segment_break_gap_xy(
+        [first.0.to_array(), first.1.to_array()],
+        [second.0.to_array(), second.1.to_array()],
+        0.25,
+    )?;
+    Some((glam::DVec3::from_array(gap[0]), glam::DVec3::from_array(gap[1])))
 }
 
 fn break_object_handle(document: &acadrust::CadDocument, dimension: Handle) -> Option<Handle> {
@@ -6593,15 +6493,16 @@ fn break_reference(
     }
 }
 
-fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakResult {
-    let Some((requested, operation)) = parse_dim_break(encoded) else {
-        return DimBreakResult {
-            changed: Vec::new(),
-            message: crate::t!("DIMBREAK: invalid operation data.").into_owned(),
-        };
-    };
+fn apply_dimbreak(
+    scene: &mut crate::scene::Scene,
+    requested: &[Handle],
+    operation: crate::command::DimensionBreakOperation,
+) -> DimBreakResult {
+    use crate::command::DimensionBreakOperation;
+
     let dimensions: Vec<_> = requested
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|handle| {
             matches!(
                 scene.document.get_entity(*handle),
@@ -6616,7 +6517,7 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
         };
     }
 
-    if matches!(operation, DimBreakOperation::Remove) {
+    if matches!(operation, DimensionBreakOperation::Remove) {
         let changed: Vec<_> = dimensions
             .into_iter()
             .filter(|handle| remove_dimension_break_data(&mut scene.document, *handle))
@@ -6629,8 +6530,8 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
     }
 
     let crossing_handles: Vec<Handle> = match operation {
-        DimBreakOperation::Object(handle) => vec![handle],
-        DimBreakOperation::Auto => scene
+        DimensionBreakOperation::Object(handle) => vec![handle],
+        DimensionBreakOperation::Auto => scene
             .document
             .entities()
             .map(|entity| entity.common().handle)
@@ -6638,7 +6539,7 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
                 !dimensions.contains(handle) && scene.entity_belongs_to_active_space(*handle)
             })
             .collect(),
-        DimBreakOperation::Manual(_, _) | DimBreakOperation::Remove => Vec::new(),
+        DimensionBreakOperation::Manual(_, _) | DimensionBreakOperation::Remove => Vec::new(),
     };
     let crossing_segments: Vec<_> = crossing_handles
         .iter()
@@ -6659,7 +6560,7 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
                 _ => None,
             })
             .unwrap_or_default();
-        let mut references = if matches!(operation, DimBreakOperation::Manual(_, _)) {
+        let mut references = if matches!(operation, DimensionBreakOperation::Manual(_, _)) {
             existing
         } else {
             existing
@@ -6668,10 +6569,10 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
                 .collect()
         };
         match operation {
-            DimBreakOperation::Manual(first, second) => {
+            DimensionBreakOperation::Manual(first, second) => {
                 references.push(break_reference(references.len() as i32, 2, first, second));
             }
-            DimBreakOperation::Auto | DimBreakOperation::Object(_) => {
+            DimensionBreakOperation::Auto | DimensionBreakOperation::Object(_) => {
                 let dimension_segments = wire_segments(&scene.wire_models_for(&[*dimension]));
                 let mut intersections = Vec::new();
                 for dim_segment in &dimension_segments {
@@ -6697,13 +6598,13 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
                     },
                 ));
             }
-            DimBreakOperation::Remove => {}
+            DimensionBreakOperation::Remove => {}
         }
         pending.push((*dimension, references));
     }
 
     let reserved = match operation {
-        DimBreakOperation::Object(handle) => handle,
+        DimensionBreakOperation::Object(handle) => handle,
         _ => Handle::NULL,
     };
     let changed: Vec<_> = pending
@@ -6723,65 +6624,55 @@ fn apply_dimbreak(scene: &mut crate::scene::Scene, encoded: &str) -> DimBreakRes
     }
 }
 
-/// Parse `base_val,h1;h2;...;hN,spacing` and adjust parallel dimension positions.
-fn apply_dimspace(scene: &mut crate::scene::Scene, encoded: &str) {
-    // Format: "<base_handle>,<h1>;<h2>;...;<hN>,<spacing>"
-    let parts: Vec<&str> = encoded.splitn(3, ',').collect();
-    if parts.len() < 3 {
-        return;
-    }
-    let base_val: u64 = parts[0].parse().unwrap_or(0);
-    let other_vals: Vec<u64> = parts[1]
-        .split(';')
-        .filter_map(|s| s.parse::<u64>().ok())
-        .collect();
-    let requested_spacing = if parts[2].eq_ignore_ascii_case("AUTO") {
-        None
-    } else {
-        parts[2].parse::<f64>().ok()
-    };
-
+fn apply_dimspace(
+    scene: &mut crate::scene::Scene,
+    base_h: Handle,
+    others: &[Handle],
+    requested_spacing: Option<f64>,
+) -> bool {
     use acadrust::entities::Dimension;
-    let base_h = acadrust::Handle::from(base_val);
-    // Base dim: the perpendicular direction (from its rotation / axis) and the
-    // dim line's perpendicular coordinate. Spacing steps each parallel dim along
-    // this perp IN THE DRAWING PLANE — offsetting Z had no effect on the dim
-    // line, which is computed from def·perp with perp.z = 0. (#181 / DIM-021)
-    let (perp, base_coord, auto_spacing) = match scene.document.get_entity(base_h) {
+    let (axis, normal, definition, auto_spacing) = match scene.document.get_entity(base_h) {
         Some(acadrust::EntityType::Dimension(dimension @ Dimension::Linear(d))) => {
-            let (s, c) = d.rotation.sin_cos();
-            let perp = (-s, c);
-            let dp = d.definition_point;
             let spacing = dimension_auto_spacing(&scene.document, dimension, scene.creation_annotation_multiplier());
-            (perp, dp.x * perp.0 + dp.y * perp.1, spacing)
+            (
+                [d.rotation.cos(), d.rotation.sin(), 0.0],
+                [d.base.normal.x, d.base.normal.y, d.base.normal.z],
+                [d.definition_point.x, d.definition_point.y, d.definition_point.z],
+                spacing,
+            )
         }
         Some(acadrust::EntityType::Dimension(dimension @ Dimension::Aligned(d))) => {
-            let dx = d.second_point.x - d.first_point.x;
-            let dy = d.second_point.y - d.first_point.y;
-            let len = (dx * dx + dy * dy).sqrt().max(1e-12);
-            let perp = (-dy / len, dx / len);
-            let dp = d.definition_point;
             let spacing = dimension_auto_spacing(&scene.document, dimension, scene.creation_annotation_multiplier());
-            (perp, dp.x * perp.0 + dp.y * perp.1, spacing)
+            (
+                [
+                    d.second_point.x - d.first_point.x,
+                    d.second_point.y - d.first_point.y,
+                    d.second_point.z - d.first_point.z,
+                ],
+                [d.base.normal.x, d.base.normal.y, d.base.normal.z],
+                [d.definition_point.x, d.definition_point.y, d.definition_point.z],
+                spacing,
+            )
         }
-        _ => return,
+        _ => return false,
+    };
+    let Some(frame) = cadkernel::space::dimension_spacing_frame(axis, normal, definition) else {
+        return false;
     };
 
     let effective_spacing = requested_spacing.unwrap_or(auto_spacing);
     let mut changes = Vec::new();
-    for (idx, &hv) in other_vals.iter().enumerate() {
-        let h = acadrust::Handle::from(hv);
-        let target = base_coord + effective_spacing * (idx + 1) as f64;
+    for (idx, &h) in others.iter().enumerate() {
+        let target = frame.coordinate + effective_spacing * (idx + 1) as f64;
         let mut changed = false;
         if let Some(acadrust::EntityType::Dimension(dim)) = scene.document.get_entity_mut(h) {
-            // Slide this dim's definition point along perp so its perpendicular
-            // coordinate equals `target`; update both the struct field (render)
-            // and base (save).
             let slide = |p: &mut acadrust::types::Vector3| {
-                let cur = p.x * perp.0 + p.y * perp.1;
-                let delta = target - cur;
-                p.x += perp.0 * delta;
-                p.y += perp.1 * delta;
+                let point = cadkernel::space::move_to_dimension_spacing(
+                    [p.x, p.y, p.z],
+                    frame,
+                    target,
+                );
+                *p = acadrust::types::Vector3::new(point[0], point[1], point[2]);
             };
             match dim {
                 Dimension::Linear(d) => {
@@ -6807,6 +6698,7 @@ fn apply_dimspace(scene: &mut crate::scene::Scene, encoded: &str) {
     if !changes.is_empty() {
         scene.bump_entities(&changes);
     }
+    !changes.is_empty()
 }
 
 fn dimension_auto_spacing(

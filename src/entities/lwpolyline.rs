@@ -1195,6 +1195,7 @@ fn move_segment_parallel(polyline: &mut LwPolyline, segment: usize, offset: f64)
     });
 }
 
+#[cfg(test)]
 fn resize_arc_concentrically(polyline: &mut LwPolyline, segment: usize, offset: f64) {
     edit_polyline_geometry(polyline, |geometry| {
         geometry

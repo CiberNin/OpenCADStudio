@@ -39,33 +39,18 @@ impl DimBreakCommand {
         }
     }
 
-    fn marker(layer: String, primary: Handle) -> CmdResult {
-        use acadrust::entities::XLine;
-        let mut marker = XLine::default();
-        marker.common.layer = layer;
-        CmdResult::ReplaceEntity(primary, vec![EntityType::XLine(marker)])
-    }
-
-    fn handles(handles: &[Handle]) -> String {
-        handles
-            .iter()
-            .map(|handle| handle.value().to_string())
-            .collect::<Vec<_>>()
-            .join(";")
-    }
-
     fn automatic(handles: &[Handle]) -> CmdResult {
-        Self::marker(
-            format!("__DIMBREAK_AUTO__{}", Self::handles(handles)),
-            handles[0],
-        )
+        CmdResult::EditDimensionBreak {
+            dimensions: handles.to_vec(),
+            operation: crate::command::DimensionBreakOperation::Auto,
+        }
     }
 
     fn remove(handles: &[Handle]) -> CmdResult {
-        Self::marker(
-            format!("__DIMBREAK_REMOVE__{}", Self::handles(handles)),
-            handles[0],
-        )
+        CmdResult::EditDimensionBreak {
+            dimensions: handles.to_vec(),
+            operation: crate::command::DimensionBreakOperation::Remove,
+        }
     }
 }
 
@@ -155,14 +140,10 @@ impl CadCommand for DimBreakCommand {
                 }
                 CmdResult::NeedPoint
             }
-            Step::PickCrossing(handles) => Self::marker(
-                format!(
-                    "__DIMBREAK_OBJECT__{}|{}",
-                    Self::handles(handles),
-                    handle.value()
-                ),
-                handles[0],
-            ),
+            Step::PickCrossing(handles) => CmdResult::EditDimensionBreak {
+                dimensions: handles.clone(),
+                operation: crate::command::DimensionBreakOperation::Object(handle),
+            },
             Step::ManualFirst(_) | Step::ManualSecond(_, _) => CmdResult::NeedPoint,
         }
     }
@@ -194,19 +175,10 @@ impl CadCommand for DimBreakCommand {
                 self.step = Step::ManualSecond(handles.clone(), point);
                 CmdResult::NeedPoint
             }
-            Step::ManualSecond(handles, first) => Self::marker(
-                format!(
-                    "__DIMBREAK_MANUAL__{}|{:.15},{:.15},{:.15}|{:.15},{:.15},{:.15}",
-                    Self::handles(handles),
-                    first.x,
-                    first.y,
-                    first.z,
-                    point.x,
-                    point.y,
-                    point.z
-                ),
-                handles[0],
-            ),
+            Step::ManualSecond(handles, first) => CmdResult::EditDimensionBreak {
+                dimensions: handles.clone(),
+                operation: crate::command::DimensionBreakOperation::Manual(*first, point),
+            },
             _ => CmdResult::NeedPoint,
         }
     }
@@ -224,3 +196,21 @@ impl CadCommand for DimBreakCommand {
 }
 
 inventory::submit!(crate::command::CommandRegistration { names: &["DIMBREAK"] });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_break_returns_a_typed_edit() {
+        let dimensions = vec![Handle::from(7), Handle::from(9)];
+        let CmdResult::EditDimensionBreak {
+            dimensions: actual,
+            operation: crate::command::DimensionBreakOperation::Auto,
+        } = DimBreakCommand::automatic(&dimensions)
+        else {
+            panic!("expected dimension break edit");
+        };
+        assert_eq!(actual, dimensions);
+    }
+}

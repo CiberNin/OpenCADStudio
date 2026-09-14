@@ -2,7 +2,7 @@
 
 use acadrust::entities::Dimension;
 use acadrust::{EntityType, Handle};
-use glam::{DVec3, Vec3};
+use glam::DVec3;
 
 use crate::command::{CadCommand, CmdOption, CmdResult, InputKind};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -43,16 +43,10 @@ impl DimJogLineCommand {
     }
 
     fn result(handle: Handle, point: Option<DVec3>) -> CmdResult {
-        use acadrust::entities::XLine;
-        let mut marker = XLine::default();
-        marker.common.layer = match point {
-            Some(point) => format!(
-                "__DIMJOG__{}|{:.15},{:.15},{:.15}",
-                handle.value(), point.x, point.y, point.z
-            ),
-            None => format!("__DIMJOG_REMOVE__{}", handle.value()),
-        };
-        CmdResult::ReplaceEntity(handle, vec![EntityType::XLine(marker)])
+        CmdResult::EditDimensionJog {
+            dimension: handle,
+            point,
+        }
     }
 
     fn default_position(dimension: &Dimension) -> Option<DVec3> {
@@ -75,29 +69,23 @@ impl DimJogLineCommand {
             }
             _ => return None,
         };
-        let first = DVec3::new(first.x, first.y, first.z);
-        let second = DVec3::new(second.x, second.y, second.z);
-        let definition = DVec3::new(definition.x, definition.y, definition.z);
-        let axis = axis.try_normalize().unwrap_or(DVec3::X);
-        let perpendicular = DVec3::new(-axis.y, axis.x, 0.0);
-        let offset = definition.dot(perpendicular);
-        let first_on_line = first + perpendicular * (offset - first.dot(perpendicular));
-        let second_on_line = second + perpendicular * (offset - second.dot(perpendicular));
-        let midpoint = (first_on_line + second_on_line) * 0.5;
-
-        let text = dimension.base().text_middle_point;
-        let text = DVec3::new(text.x, text.y, text.z);
-        let line = second_on_line - first_on_line;
-        let length_squared = line.length_squared();
-        if length_squared <= 1.0e-18 {
-            return Some(midpoint);
-        }
-        let parameter = (text - first_on_line).dot(line) / length_squared;
-        if text.is_finite() && (0.0..=1.0).contains(&parameter) {
-            Some((first_on_line + text) * 0.5)
+        let base = dimension.base();
+        let text = base.text_middle_point;
+        let normal = base.normal;
+        let text = if base.text_user_positioned {
+            [text.x, text.y, text.z]
         } else {
-            Some(midpoint)
-        }
+            [f64::NAN; 3]
+        };
+        cadkernel::space::default_dimension_jog_position(
+            [first.x, first.y, first.z],
+            [second.x, second.y, second.z],
+            [definition.x, definition.y, definition.z],
+            axis.to_array(),
+            [normal.x, normal.y, normal.z],
+            text,
+        )
+        .map(DVec3::from_array)
     }
 }
 
@@ -198,34 +186,37 @@ impl CadCommand for DimJogLineCommand {
         if !matches!(self.step, Step::PickJogPos { .. }) {
             return None;
         }
-        let axis = self
-            .dimension
-            .as_ref()
-            .and_then(|dimension| match dimension {
-                Dimension::Linear(value) => {
-                    Some(Vec3::new(value.rotation.cos() as f32, value.rotation.sin() as f32, 0.0))
-                }
-                Dimension::Aligned(value) => Some(Vec3::new(
-                    (value.second_point.x - value.first_point.x) as f32,
-                    (value.second_point.y - value.first_point.y) as f32,
-                    0.0,
-                )),
-                _ => None,
-            })
-            .and_then(Vec3::try_normalize)
-            .unwrap_or(Vec3::X);
-        let perpendicular = Vec3::new(-axis.y, axis.x, 0.0);
-        let center = point.as_vec3();
-        let size = 0.3;
-        let points = vec![
-            center - axis * size,
-            center - axis * size * 0.25 + perpendicular * size,
-            center + axis * size * 0.25 - perpendicular * size,
-            center + axis * size,
-        ];
+        let dimension = self.dimension.as_ref()?;
+        let (segment, normal) = match dimension {
+            Dimension::Linear(value) => {
+                let axis = DVec3::new(value.rotation.cos(), value.rotation.sin(), 0.0);
+                (
+                    [(point - axis).to_array(), (point + axis).to_array()],
+                    [value.base.normal.x, value.base.normal.y, value.base.normal.z],
+                )
+            }
+            Dimension::Aligned(value) => (
+                [
+                    [value.first_point.x, value.first_point.y, value.first_point.z],
+                    [value.second_point.x, value.second_point.y, value.second_point.z],
+                ],
+                [value.base.normal.x, value.base.normal.y, value.base.normal.z],
+            ),
+            _ => return None,
+        };
+        let points = cadkernel::space::dimension_jog_points(
+            segment,
+            point.to_array(),
+            normal,
+            0.3,
+            std::f64::consts::FRAC_PI_2,
+        )?;
         let mut preview = WireModel::default();
         preview.name = "dimjog_preview".into();
-        preview.points = points.into_iter().map(|point| point.to_array()).collect();
+        preview.points = points
+            .into_iter()
+            .map(|point| point.map(|value| value as f32))
+            .collect();
         preview.color = WireModel::CYAN;
         preview.line_weight_px = 1.2;
         Some(preview)
@@ -233,3 +224,22 @@ impl CadCommand for DimJogLineCommand {
 }
 
 inventory::submit!(crate::command::CommandRegistration { names: &["DIMJOGLINE"] });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jog_result_keeps_the_selected_point() {
+        let point = DVec3::new(1.0, 2.0, 3.0);
+        let CmdResult::EditDimensionJog {
+            dimension,
+            point: actual,
+        } = DimJogLineCommand::result(Handle::from(7), Some(point))
+        else {
+            panic!("expected dimension jog edit");
+        };
+        assert_eq!(dimension, Handle::from(7));
+        assert_eq!(actual, Some(point));
+    }
+}

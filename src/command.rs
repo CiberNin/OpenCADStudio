@@ -1322,6 +1322,14 @@ pub enum DimensionEditOperation {
     Oblique(f64),
 }
 
+#[derive(Clone, Copy)]
+pub enum DimensionBreakOperation {
+    Auto,
+    Object(Handle),
+    Manual(DVec3, DVec3),
+    Remove,
+}
+
 /// Returned by every `CadCommand` method to tell main.rs what to do.
 #[allow(dead_code)]
 pub enum CmdResult {
@@ -1487,6 +1495,19 @@ pub enum CmdResult {
         target: Handle,
         source: Handle,
         point: DVec3,
+    },
+    EditDimensionBreak {
+        dimensions: Vec<Handle>,
+        operation: DimensionBreakOperation,
+    },
+    EditDimensionJog {
+        dimension: Handle,
+        point: Option<DVec3>,
+    },
+    SpaceDimensions {
+        base: Handle,
+        others: Vec<Handle>,
+        spacing: Option<f64>,
     },
     /// Cancel: discard any preview and end the command.
     Cancel,

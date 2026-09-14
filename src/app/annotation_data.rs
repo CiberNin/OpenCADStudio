@@ -1396,3 +1396,53 @@ impl OpenCADStudio {
         Task::none()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cell_ranges_are_normalized_and_missing_cells_are_blank() {
+        let rows = vec![
+            vec!["a".into(), "b".into(), "c".into()],
+            vec!["d".into()],
+        ];
+        assert_eq!(
+            crop_range(rows, "C2:A1").unwrap(),
+            vec![
+                vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                vec!["d".to_string(), String::new(), String::new()],
+            ]
+        );
+    }
+
+    #[test]
+    fn named_range_targets_accept_quoted_sheet_names() {
+        assert_eq!(
+            named_range_target("='Sheet One'!$A$1:$D$10"),
+            Some(("Sheet One".into(), "A1:D10".into()))
+        );
+    }
+
+    #[test]
+    fn csv_links_apply_the_selected_cell_range() {
+        let path = std::env::temp_dir().join(format!(
+            "ocs-data-link-{}-{}.csv",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "a,b,c\nd,e,f\n").unwrap();
+        let rows = read_tabular_file(&path, None, LinkRange::CellRange, Some("B1:C2"));
+        let _ = std::fs::remove_file(path);
+        assert_eq!(
+            rows.unwrap(),
+            vec![
+                vec!["b".to_string(), "c".to_string()],
+                vec!["e".to_string(), "f".to_string()],
+            ]
+        );
+    }
+}

@@ -3252,64 +3252,63 @@ fn dimension_jog_point(dimension: &Dimension) -> Option<Vec3> {
         })
 }
 
-fn apply_dimension_jog(lines: &mut Vec<[f32; 3]>, requested: Vec3, size: f32, angle: f32) {
+fn apply_dimension_jog(
+    lines: &mut Vec<[f32; 3]>,
+    requested: Vec3,
+    normal: Vec3,
+    size: f32,
+    angle: f32,
+) {
     if lines.len() < 2 {
         return;
     }
-    let mut best: Option<(usize, Vec3, f32)> = None;
-    for (index, segment) in lines.windows(2).enumerate() {
-        if segment[0][0].is_nan() || segment[1][0].is_nan() {
-            continue;
-        }
-        let first = Vec3::from_array(segment[0]);
-        let second = Vec3::from_array(segment[1]);
-        let delta = second - first;
-        let length_squared = delta.length_squared();
-        if length_squared <= 1.0e-12 {
-            continue;
-        }
-        let parameter = ((requested - first).dot(delta) / length_squared).clamp(0.0, 1.0);
-        let point = first + delta * parameter;
-        let distance = point.distance_squared(requested);
-        if best.is_none_or(|(_, _, current)| distance < current) {
-            best = Some((index, point, distance));
-        }
-    }
-    let Some((target, center, _)) = best else {
+    let segments = lines
+        .windows(2)
+        .enumerate()
+        .filter(|(_, segment)| segment[0][0].is_finite() && segment[1][0].is_finite())
+        .map(|(index, segment)| {
+            (
+                index,
+                [segment[0].map(f64::from), segment[1].map(f64::from)],
+            )
+        })
+        .collect::<Vec<_>>();
+    let coordinates = segments.iter().map(|(_, segment)| *segment).collect::<Vec<_>>();
+    let Some((candidate, center)) = cadkernel::space::nearest_segment_point(
+        &coordinates,
+        requested.to_array().map(f64::from),
+    ) else {
         return;
     };
-    let first = Vec3::from_array(lines[target]);
-    let second = Vec3::from_array(lines[target + 1]);
-    let Some(direction) = (second - first).try_normalize() else {
+    let target = segments[candidate].0;
+    let Some(jog) = cadkernel::space::dimension_jog_points(
+        coordinates[candidate],
+        center,
+        normal.to_array().map(f64::from),
+        size as f64,
+        angle as f64,
+    ) else {
         return;
     };
-    let perpendicular = Vec3::new(-direction.y, direction.x, 0.0);
-    let half = size.max(1.0e-3).min(first.distance(second) * 0.2);
-    let amplitude = (half * (angle * 0.5).tan().abs()).clamp(half * 0.35, half * 1.5);
-    let jog_start = center - direction * half;
-    let jog_end = center + direction * half;
-    let jog = [
-        jog_start,
-        center - direction * half * 0.25 + perpendicular * amplitude,
-        center + direction * half * 0.25 - perpendicular * amplitude,
-        jog_end,
-    ];
+    let jog = jog.map(|point| point.map(|value| value as f32));
+    let first = lines[target];
+    let second = lines[target + 1];
 
     let mut output = Vec::with_capacity(lines.len() + 4);
     output.extend_from_slice(&lines[..target]);
     if !output.is_empty() && !output.last().is_some_and(|point| point[0].is_nan()) {
         output.push([f32::NAN; 3]);
     }
-    if first.distance_squared(jog_start) > 1.0e-12 {
-        output.push(first.to_array());
-        output.push(jog_start.to_array());
+    if first != jog[0] {
+        output.push(first);
+        output.push(jog[0]);
         output.push([f32::NAN; 3]);
     }
-    output.extend(jog.into_iter().map(|point| point.to_array()));
-    if jog_end.distance_squared(second) > 1.0e-12 {
+    output.extend(jog);
+    if jog[3] != second {
         output.push([f32::NAN; 3]);
-        output.push(jog_end.to_array());
-        output.push(second.to_array());
+        output.push(jog[3]);
+        output.push(second);
     }
     if target + 2 < lines.len() {
         if !output.last().is_some_and(|point| point[0].is_nan())
@@ -3664,7 +3663,13 @@ fn tessellate_dimension_inner(
         let jog_angle = style
             .map(|style| style.dimjogang as f32)
             .unwrap_or(std::f32::consts::FRAC_PI_4);
-        apply_dimension_jog(&mut geom.dim_lines, point, dim_txt as f32 * 0.6, jog_angle);
+        apply_dimension_jog(
+            &mut geom.dim_lines,
+            point,
+            vec3_local(dim.base().normal),
+            dim_txt as f32 * 0.6,
+            jog_angle,
+        );
     }
     apply_dimension_breaks(document, handle, &mut geom.dim_lines);
     apply_dimension_breaks(document, handle, &mut geom.ext_lines);

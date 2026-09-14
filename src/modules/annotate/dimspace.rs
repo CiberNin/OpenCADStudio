@@ -164,7 +164,7 @@ impl CadCommand for DimSpaceCommand {
         if let Step::EnterSpacing { base, others } = &self.step {
             let token = text.trim();
             let spacing = if matches!(token.to_ascii_uppercase().as_str(), "A" | "AUTO") {
-                "AUTO".to_string()
+                None
             } else {
                 let Ok(value) = token.parse::<f64>() else {
                     return Some(CmdResult::ReportError(
@@ -176,24 +176,13 @@ impl CadCommand for DimSpaceCommand {
                         t!("DIMSPACE: spacing value cannot be negative.").into_owned(),
                     ));
                 }
-                value.to_string()
+                Some(value)
             };
-            let b = *base;
-            let o = others.clone();
-            // Emit sentinel for commands.rs to handle
-            use acadrust::entities::XLine;
-            let mut xl = XLine::default();
-            let handles_str: Vec<String> = o.iter().map(|h| h.value().to_string()).collect();
-            xl.common.layer = format!(
-                "__DIMSPACE__{},{},{}",
-                b.value(),
-                handles_str.join(";"),
-                spacing
-            );
-            return Some(CmdResult::ReplaceEntity(
-                b,
-                vec![acadrust::EntityType::XLine(xl)],
-            ));
+            return Some(CmdResult::SpaceDimensions {
+                base: *base,
+                others: others.clone(),
+                spacing,
+            });
         }
         None
     }
@@ -211,7 +200,31 @@ impl CadCommand for DimSpaceCommand {
         CmdResult::Cancel
     }
 }
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMSPACE", "DSPACE"] });
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-// ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIMSPACE", "DSPACE"] });  // DimSpaceCommand
+    #[test]
+    fn auto_spacing_returns_a_typed_edit() {
+        let mut command = DimSpaceCommand {
+            step: Step::EnterSpacing {
+                base: Handle::from(2),
+                others: vec![Handle::from(3)],
+            },
+            picked_entity: None,
+        };
+        let Some(CmdResult::SpaceDimensions {
+            base,
+            others,
+            spacing,
+        }) = command.on_text_input("Auto")
+        else {
+            panic!("expected dimension spacing edit");
+        };
+        assert_eq!(base, Handle::from(2));
+        assert_eq!(others, vec![Handle::from(3)]);
+        assert_eq!(spacing, None);
+    }
+}
