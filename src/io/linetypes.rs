@@ -299,10 +299,10 @@ fn parse(src: &str) -> Vec<LineType> {
         }
 
         if let Some(rest) = line.strip_prefix('*') {
-            // New pattern header: *NAME,Description
-            if let Some((name, desc)) = rest.split_once(',') {
-                current = Some((name.trim().to_string(), desc.trim().to_string()));
-            }
+            // New pattern header: *NAME[,Description]. The description is
+            // optional, and the comma goes with it.
+            let (name, desc) = rest.split_once(',').unwrap_or((rest, ""));
+            current = Some((name.trim().to_string(), desc.trim().to_string()));
         } else if line.to_ascii_uppercase().starts_with('A') {
             // Element line: A,v1,v2,...
             let Some((name, desc)) = current.take() else {
@@ -606,5 +606,34 @@ fn push_lt_segment(token: &str, out: &mut Vec<LtSegment>) {
             LtSegment::Dot
         };
         out.push(seg);
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::{parse, populate_document_from_source};
+    use acadrust::CadDocument;
+
+    /// A `.lin` header's description is optional, and without one the comma
+    /// goes too: `*PLAIN` followed by its `A,` line is a whole definition.
+    #[test]
+    fn a_linetype_without_a_description_is_loaded() {
+        let mut doc = CadDocument::new();
+        let added = populate_document_from_source(&mut doc, "*PLAIN\nA,.5,-.25\n");
+        assert_eq!(added, 1, "the definition was dropped");
+        assert!(doc.line_types.contains("PLAIN"));
+
+        let types = parse("*PLAIN\nA,.5,-.25\n");
+        assert_eq!(types[0].description, "");
+        let lengths: Vec<f64> = types[0].elements.iter().map(|e| e.length).collect();
+        assert_eq!(lengths, vec![0.5, -0.25]);
+    }
+
+    /// A header with a description still splits at the first comma.
+    #[test]
+    fn a_description_after_the_comma_is_kept() {
+        let types = parse("*DASHED,Dashed __ __\nA,.5,-.25\n");
+        assert_eq!(types[0].name, "DASHED");
+        assert_eq!(types[0].description, "Dashed __ __");
     }
 }
