@@ -39,16 +39,20 @@ pub fn build_stl(meshes: &[&MeshModel]) -> Option<Vec<u8>> {
             let b = verts[i1];
             let c = verts[i2];
 
-            // Compute face normal.
-            let normal = if !mesh.normals.is_empty() && i0 < mesh.normals.len() {
+            // The facet normal is the triangle's own. A smoothed vertex normal
+            // leans off it, so only a triangle whose cross product is zero
+            // falls back to the normal the mesh gives it. Small facets have a
+            // tiny cross product but still a normal of their own.
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let nx = ab[1] * ac[2] - ab[2] * ac[1];
+            let ny = ab[2] * ac[0] - ab[0] * ac[2];
+            let nz = ab[0] * ac[1] - ab[1] * ac[0];
+            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            let normal = if len == 0.0 && i0 < mesh.normals.len() {
                 mesh.normals[i0]
             } else {
-                let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-                let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-                let nx = ab[1] * ac[2] - ab[2] * ac[1];
-                let ny = ab[2] * ac[0] - ab[0] * ac[2];
-                let nz = ab[0] * ac[1] - ab[1] * ac[0];
-                let len = (nx * nx + ny * ny + nz * nz).sqrt().max(f32::EPSILON);
+                let len = len.max(f32::MIN_POSITIVE);
                 [nx / len, ny / len, nz / len]
             };
 
@@ -90,4 +94,80 @@ pub fn build_stl(meshes: &[&MeshModel]) -> Option<Vec<u8>> {
     }
 
     Some(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_stl;
+    use crate::scene::model::mesh_model::MeshModel;
+
+    fn triangle(verts: Vec<[f32; 3]>, normals: Vec<[f32; 3]>) -> MeshModel {
+        MeshModel {
+            name: String::new(),
+            verts,
+            verts_low: Vec::new(),
+            normals,
+            indices: vec![0, 1, 2],
+            triangle_material_handles: Vec::new(),
+            triangle_colors: Vec::new(),
+            color: [1.0; 4],
+            selected: false,
+        }
+    }
+
+    /// The first facet's normal: the 12 bytes after the 80-byte header and
+    /// the 4-byte triangle count.
+    fn first_facet_normal(stl: &[u8]) -> [f32; 3] {
+        [0, 1, 2].map(|k| {
+            let at = 84 + 4 * k;
+            f32::from_le_bytes(stl[at..at + 4].try_into().expect("4 bytes"))
+        })
+    }
+
+    /// A curved surface shares smoothed normals across its facets, so a
+    /// vertex normal leans away from the triangle. STL stores the facet's
+    /// own normal.
+    #[test]
+    fn the_facet_normal_is_the_triangles_own() {
+        let leaning = [
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        let mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![leaning; 3],
+        );
+        let stl = build_stl(&[&mesh]).expect("stl");
+        assert_eq!(first_facet_normal(&stl), [0.0, 0.0, 1.0]);
+    }
+
+    /// A small facet still has a normal of its own. Its cross product is tiny
+    /// (1e-8 here), far below f32::EPSILON, but it is not zero.
+    #[test]
+    fn a_small_facet_keeps_its_own_normal() {
+        let leaning = [
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        let mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1e-4, 0.0, 0.0], [0.0, 1e-4, 0.0]],
+            vec![leaning; 3],
+        );
+        let stl = build_stl(&[&mesh]).expect("stl");
+        assert_eq!(first_facet_normal(&stl), [0.0, 0.0, 1.0]);
+    }
+
+    /// A facet with no area has no normal of its own, so it keeps the one
+    /// the mesh gives it rather than a zero vector.
+    #[test]
+    fn a_degenerate_facet_keeps_its_vertex_normal() {
+        let mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            vec![[0.0, 1.0, 0.0]; 3],
+        );
+        let stl = build_stl(&[&mesh]).expect("stl");
+        assert_eq!(first_facet_normal(&stl), [0.0, 1.0, 0.0]);
+    }
 }
