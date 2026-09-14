@@ -11,7 +11,9 @@
 use acadrust::entities::{Dimension, DimensionLinear, Text};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
-use OpenCADStudio::io::pdf_export::{export_pdf, PdfPlotOptions, PlotWire};
+use OpenCADStudio::io::pdf_export::{
+    export_pdf, PdfPageInput, PdfPlotOptions, PlotContent, PlotWire,
+};
 use OpenCADStudio::scene::Scene;
 
 #[test]
@@ -60,49 +62,38 @@ fn text_and_dim_reach_pdf_export() {
         .collect();
 
     let p_text = dir.join("with_text.pdf");
-    export_pdf(
-        &plot_wires,
-        &[],
-        &[],
-        210.0,
-        297.0,
-        0.0,
-        0.0,
-        0,
-        1.0,
-        None,
-        &p_text,
-        None,
-        PdfPlotOptions::default(),
-    )
-    .expect("export with text");
+    let mut page = PdfPageInput {
+        content: PlotContent {
+            wires: std::sync::Arc::new(plot_wires),
+            ..Default::default()
+        },
+        paper_w: 210.0,
+        paper_h: 297.0,
+        offset_x: 0.0,
+        offset_y: 0.0,
+        rotation_deg: 0,
+        scale: 1.0,
+        clip: None,
+        options: PdfPlotOptions::default(),
+        plot_style: None,
+    };
+    export_pdf(&page, &p_text).expect("export with text");
     let with_text = std::fs::read(&p_text).expect("read pdf");
     assert!(with_text.starts_with(b"%PDF"), "not a PDF");
 
-    let stripped: Vec<_> = plot_wires
-        .into_iter()
+    let stripped: Vec<_> = page
+        .content
+        .wires
+        .iter()
+        .cloned()
         .map(|mut w| {
             w.wire.text_verts.clear();
             w
         })
         .collect();
     let p_bare = dir.join("no_text.pdf");
-    export_pdf(
-        &stripped,
-        &[],
-        &[],
-        210.0,
-        297.0,
-        0.0,
-        0.0,
-        0,
-        1.0,
-        None,
-        &p_bare,
-        None,
-        PdfPlotOptions::default(),
-    )
-    .expect("export without text");
+    page.content.wires = std::sync::Arc::new(stripped);
+    export_pdf(&page, &p_bare).expect("export without text");
     let no_text = std::fs::read(&p_bare).expect("read pdf");
 
     assert!(

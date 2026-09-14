@@ -6648,6 +6648,49 @@ impl Scene {
         all_visible: bool,
         viewport: Option<Handle>,
     ) -> Vec<ImageModel> {
+        self.collect_images(target_block, frozen, annotation_scale_handle, all_visible,
+            viewport, false, |image, _| image)
+    }
+
+    pub fn paper_plot_images(&self) -> Vec<crate::io::pdf_export::PlotImage> {
+        let scale = if self.current_layout == "Model" {
+            self.displayed_annotation_scale_handle()
+        } else {
+            self.paper_annotation_scale_handle()
+        };
+        self.placed_images(self.current_layout_block_handle(), None,
+            scale, self.annotation_all_visible(), None, true)
+    }
+
+    fn placed_images(
+        &self,
+        target_block: Handle,
+        frozen: Option<&HashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
+        viewport: Option<Handle>,
+        plotting: bool,
+    ) -> Vec<crate::io::pdf_export::PlotImage> {
+        self.collect_images(target_block, frozen, annotation_scale_handle, all_visible,
+            viewport, plotting, |image, context| crate::io::pdf_export::PlotImage {
+                image,
+                clips: context.clips.clone(),
+            })
+    }
+
+    fn collect_images<T>(
+        &self,
+        target_block: Handle,
+        frozen: Option<&HashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
+        viewport: Option<Handle>,
+        plotting: bool,
+        mut collect: impl FnMut(ImageModel, &render_graph::InstanceContext) -> T,
+    ) -> Vec<T> {
+        if self.images.is_empty() {
+            return Vec::new();
+        }
         let depth_map = self.draw_depth_map();
         let graph = render_graph::RenderSceneGraph::new(
             &self.document,
@@ -6673,8 +6716,10 @@ impl Scene {
         graph.walk_root(
             root,
             |entity, context| {
-                context.is_instanced()
-                    || !self.entity_temporarily_hidden(entity.common().handle)
+                (!plotting || self.document.layers.get(&entity.common().layer)
+                    .is_none_or(|layer| layer.is_plottable))
+                    && (context.is_instanced()
+                        || !self.entity_temporarily_hidden(entity.common().handle))
             },
             |entity, context| {
                 let handle = entity.common().handle;
@@ -6734,7 +6779,7 @@ impl Scene {
                     );
                 }
                 placed.draw_depth = context.draw_depth(handle, depth_map.as_ref());
-                models.push(placed);
+                models.push(collect(placed, context));
             },
         );
         models
