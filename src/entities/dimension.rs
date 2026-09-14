@@ -882,12 +882,21 @@ fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
                     d.rotation += *angle_rad;
                 }
             } else {
-                crate::scene::view::transform::apply_standard_transform(
-                    dim,
-                    *center,
-                    *axis,
+                // acadrust only moves a non-ordinate dimension by where the
+                // origin goes, so turn it through the affine path below.
+                use acadrust::types::Transform;
+                let unit = axis.normalize_or(DVec3::Z);
+                let rotation = Transform::from_translation(Vector3::new(
+                    -center.x, -center.y, -center.z,
+                ))
+                .then(&Transform::from_rotation(
+                    Vector3::new(unit.x, unit.y, unit.z),
                     *angle_rad,
-                );
+                ))
+                .then(&Transform::from_translation(Vector3::new(
+                    center.x, center.y, center.z,
+                )));
+                apply_transform(dim, &EntityTransform::Affine(rotation));
             }
         }
         EntityTransform::Scale { center, factor } => {
@@ -903,14 +912,13 @@ fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
                     }
                 }
             } else {
-                acadrust::Entity::apply_transform(
-                    dim,
-                    &crate::scene::view::transform::reflection_about_working_line(
-                        *p1,
-                        *p2,
-                        *working_normal,
-                    ),
+                // Same as ROTATE: reflect points, plane and angles together.
+                let reflection = crate::scene::view::transform::reflection_about_working_line(
+                    *p1,
+                    *p2,
+                    *working_normal,
                 );
+                apply_transform(dim, &EntityTransform::Affine(reflection));
             }
         }
         EntityTransform::Affine(transform) => {
@@ -7741,6 +7749,72 @@ mod linear_transform_tests {
             },
         );
         assert_eq!(rotation(&dim), 0.0);
+        assert_measures_ten(&dim);
+    }
+
+    /// The point the dimension line passes through.
+    fn definition_point(dim: &Dimension) -> DVec3 {
+        let p = dimension_definition_point(dim);
+        DVec3::new(p.x, p.y, p.z)
+    }
+
+    fn assert_near(actual: DVec3, expected: DVec3, what: &str) {
+        assert!(
+            actual.abs_diff_eq(expected, 1e-9),
+            "{what}: expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    /// ROTATE about an axis off world Z (a working plane other than world XY)
+    /// turns the dimension like the geometry it measures. It used to only move
+    /// by where the origin went, leaving the dimension line and plane unturned.
+    #[test]
+    fn rotate_off_world_z_turns_the_dimension() {
+        let center = DVec3::new(0.0, 10.0, 0.0);
+        let turn = glam::DQuat::from_axis_angle(DVec3::X, FRAC_PI_2);
+        let mut dim = horizontal();
+        apply_transform(
+            &mut dim,
+            &EntityTransform::Rotate {
+                center,
+                axis: DVec3::X,
+                angle_rad: FRAC_PI_2,
+            },
+        );
+        assert_near(
+            definition_point(&dim),
+            turn * (DVec3::new(0.0, 5.0, 0.0) - center) + center,
+            "definition point",
+        );
+        let normal = dim.base().normal;
+        assert_near(
+            DVec3::new(normal.x, normal.y, normal.z),
+            turn * DVec3::Z,
+            "normal",
+        );
+        assert_measures_ten(&dim);
+    }
+
+    /// MIRROR in a working plane off world Z reflects the dimension through
+    /// the mirror plane instead of only moving it.
+    #[test]
+    fn mirror_off_world_z_reflects_the_dimension() {
+        // Working plane YZ; the line runs along Z at y = 2, so the mirror
+        // plane is y = 2.
+        let mut dim = horizontal();
+        apply_transform(
+            &mut dim,
+            &EntityTransform::Mirror {
+                p1: DVec3::new(0.0, 2.0, 0.0),
+                p2: DVec3::new(0.0, 2.0, 1.0),
+                working_normal: DVec3::X,
+            },
+        );
+        assert_near(
+            definition_point(&dim),
+            DVec3::new(0.0, -1.0, 0.0),
+            "definition point",
+        );
         assert_measures_ten(&dim);
     }
 }
