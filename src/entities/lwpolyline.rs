@@ -1198,37 +1198,86 @@ fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
         let t = (delta.x * selected.y - delta.y * selected.x) / cross;
         Some(a + direction * t)
     };
+    let intersect_circle = |center: Vec2, radius: f64, near: Vec2| -> Option<Vec2> {
+        let relative = q0 - center;
+        let aa = selected.dot(selected);
+        let bb = 2.0 * relative.dot(selected);
+        let cc = relative.dot(relative) - radius * radius;
+        let discriminant = bb * bb - 4.0 * aa * cc;
+        if discriminant < -Tolerance::default().linear() {
+            return None;
+        }
+        let root = discriminant.max(0.0).sqrt();
+        let first = q0 + selected * ((-bb - root) / (2.0 * aa));
+        let second = q0 + selected * ((-bb + root) / (2.0 * aa));
+        Some(if first.distance(near) <= second.distance(near) { first } else { second })
+    };
+    let bulge_on_circle = |center: Vec2, start: Vec2, end: Vec2, sign: f64| {
+        let a0 = (start.y - center.y).atan2(start.x - center.x);
+        let a1 = (end.y - center.y).atan2(end.x - center.x);
+        let sweep = if sign >= 0.0 {
+            (a1 - a0).rem_euclid(TAU)
+        } else {
+            -(a0 - a1).rem_euclid(TAU)
+        };
+        let bulge = (sweep * 0.25).tan();
+        bulge.is_finite().then_some(bulge.clamp(-1.0e6, 1.0e6))
+    };
 
+    let mut previous_arc_bulge = None;
     let new0 = if pline.is_closed || seg > 0 {
         let previous = (i0 + n - 1) % n;
         let a = Vec2::new(
             pline.vertices[previous].location.x,
             pline.vertices[previous].location.y,
         );
-        let direction = p0 - a;
-        let Some(point) = intersect(a, direction) else {
-            return;
-        };
-        point
+        if pline.vertices[previous].bulge.abs() >= 1.0e-9 {
+            let Some(neighbor) = crate::entities::common::BulgeArc::from_bulge(
+                a.into(), p0.into(), pline.vertices[previous].bulge,
+            ) else { return; };
+            let center = Vec2::from(neighbor.center);
+            let Some(point) = intersect_circle(center, neighbor.radius, p0) else { return; };
+            let Some(bulge) = bulge_on_circle(center, a, point, neighbor.sweep.signum()) else { return; };
+            previous_arc_bulge = Some((previous, bulge));
+            point
+        } else {
+            let Some(point) = intersect(a, p0 - a) else { return; };
+            point
+        }
     } else {
         q0
     };
+    let mut next_arc_bulge = None;
     let new1 = if pline.is_closed || seg + 1 < count {
         let next = (i1 + 1) % n;
         let d = Vec2::new(
             pline.vertices[next].location.x,
             pline.vertices[next].location.y,
         );
-        let direction = d - p1;
-        let Some(point) = intersect(p1, direction) else {
-            return;
-        };
-        point
+        if pline.vertices[i1].bulge.abs() >= 1.0e-9 {
+            let Some(neighbor) = crate::entities::common::BulgeArc::from_bulge(
+                p1.into(), d.into(), pline.vertices[i1].bulge,
+            ) else { return; };
+            let center = Vec2::from(neighbor.center);
+            let Some(point) = intersect_circle(center, neighbor.radius, p1) else { return; };
+            let Some(bulge) = bulge_on_circle(center, point, d, neighbor.sweep.signum()) else { return; };
+            next_arc_bulge = Some((i1, bulge));
+            point
+        } else {
+            let Some(point) = intersect(p1, d - p1) else { return; };
+            point
+        }
     } else {
         p1 + normal * offset
     };
     pline.vertices[i0].location = acadrust::types::Vector2::new(new0.x, new0.y);
     pline.vertices[i1].location = acadrust::types::Vector2::new(new1.x, new1.y);
+    if let Some((previous, bulge)) = previous_arc_bulge {
+        pline.vertices[previous].bulge = bulge;
+    }
+    if let Some((next, bulge)) = next_arc_bulge {
+        pline.vertices[next].bulge = bulge;
+    }
 }
 
 fn move_arc_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
@@ -1570,12 +1619,6 @@ impl crate::entities::traits::Grippable for LwPolyline {
             label: "Move Parallel",
             action: GripMenuAction::MoveParallel,
         });
-        if is_arc {
-            items.push(GripMenuItem {
-                label: "Radius",
-                action: GripMenuAction::Radius,
-            });
-        }
         if is_rectangle(self) && seg < 4 {
             // Moving an edge changes the dimension perpendicular to it.
             items.push(GripMenuItem {
@@ -1598,6 +1641,12 @@ impl crate::entities::traits::Grippable for LwPolyline {
             },
             convert,
         ]);
+        if is_arc {
+            items.push(GripMenuItem {
+                label: "Radius",
+                action: GripMenuAction::Radius,
+            });
+        }
         items
     }
 
@@ -2071,6 +2120,29 @@ mod tests {
         assert_eq!(pl.vertices[1].location, Vector2::new(4.0, 4.0));
         assert_eq!(pl.vertices[2].location, Vector2::new(6.0, 4.0));
         assert_eq!(pl.vertices[3].location, Vector2::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn moving_a_line_parallel_only_changes_the_connected_arcs_length() {
+        let mut pl = polyline(&[(-5.0, 0.0), (0.0, 0.0), (5.0, 5.0)], false);
+        pl.vertices[1].bulge = -(std::f64::consts::FRAC_PI_2 * 0.25).tan();
+        let before = crate::entities::common::BulgeArc::from_bulge(
+            [0.0, 0.0], [5.0, 5.0], pl.vertices[1].bulge,
+        ).unwrap();
+
+        move_segment_parallel(&mut pl, 0, 1.0);
+
+        let after = crate::entities::common::BulgeArc::from_bulge(
+            [pl.vertices[1].location.x, pl.vertices[1].location.y],
+            [pl.vertices[2].location.x, pl.vertices[2].location.y],
+            pl.vertices[1].bulge,
+        ).unwrap();
+        assert!(Vec2::from(after.center).distance(Vec2::from(before.center)) < 1.0e-9);
+        assert!((after.radius - before.radius).abs() < 1.0e-9);
+        assert_eq!(pl.vertices[2].location, Vector2::new(5.0, 5.0));
+        assert!((after.sweep - before.sweep).abs() > 1.0e-6);
+        assert!((pl.vertices[0].location.y - 1.0).abs() < 1.0e-9);
+        assert!((pl.vertices[1].location.y - 1.0).abs() < 1.0e-9);
     }
 
     #[test]
