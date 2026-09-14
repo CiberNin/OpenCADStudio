@@ -48,15 +48,21 @@ impl CadModule for ParametricModule {
                             "AUTOCONSTRAIN", "Auto Constrain",
                             include_bytes!("../../../assets/icons/constrain/auto.svg"),
                         )),
-                        RibbonItem::ToolGrid { columns: vec![
-                            vec![coincident_tool::tool(), parallel::tool(), tangent::tool()],
-                            vec![
-                                colinear::tool(), perpendicular::tool(),
-                                command("SMOOTHCONSTRAINT", "Smooth", include_bytes!("../../../assets/icons/constrain/smooth.svg")),
-                            ],
-                            vec![concentric::tool(), horizontal::tool(), symmetric::tool()],
-                            vec![fixed::tool(), vertical::tool(), equal::tool()],
-                        ] },
+                        RibbonItem::LargeTool(coincident_tool::tool()),
+                        RibbonItem::LargeTool(parallel::tool()),
+                        RibbonItem::LargeTool(tangent::tool()),
+                        RibbonItem::LargeTool(colinear::tool()),
+                        RibbonItem::LargeTool(perpendicular::tool()),
+                        RibbonItem::LargeTool(command(
+                            "SMOOTHCONSTRAINT", "Smooth",
+                            include_bytes!("../../../assets/icons/constrain/smooth.svg"),
+                        )),
+                        RibbonItem::LargeTool(concentric::tool()),
+                        RibbonItem::LargeTool(horizontal::tool()),
+                        RibbonItem::LargeTool(symmetric::tool()),
+                        RibbonItem::LargeTool(fixed::tool()),
+                        RibbonItem::LargeTool(vertical::tool()),
+                        RibbonItem::LargeTool(equal::tool()),
                         RibbonItem::LabeledDropdown {
                             id: "GCVISIBILITY", label: "Show/Hide",
                             icon: IconKind::Svg(include_bytes!("../../../assets/icons/constrain/show.svg")),
@@ -84,10 +90,10 @@ impl CadModule for ParametricModule {
                             default: "DCLINEAR",
                         },
                         RibbonItem::LargeTool(dimensional_tools::aligned()),
-                        RibbonItem::ToolGrid { columns: vec![
-                            vec![dimensional_tools::angular(), dimensional_tools::diameter()],
-                            vec![dimensional_tools::radius(), dimensional_tools::convert()],
-                        ] },
+                        RibbonItem::LargeTool(dimensional_tools::angular()),
+                        RibbonItem::LargeTool(dimensional_tools::diameter()),
+                        RibbonItem::LargeTool(dimensional_tools::radius()),
+                        RibbonItem::LargeTool(dimensional_tools::convert()),
                         RibbonItem::LabeledDropdown {
                             id: "DCVISIBILITY", label: "Show/Hide",
                             icon: IconKind::Svg(include_bytes!("../../../assets/icons/constrain/show.svg")),
@@ -152,11 +158,19 @@ mod tests {
         );
         assert_eq!(
             groups[0].tools.iter().map(item_id).collect::<Vec<_>>(),
-            ["AUTOCONSTRAIN", "GRID", "GCVISIBILITY", "GCSHOWALL", "GCHIDEALL"]
+            [
+                "AUTOCONSTRAIN", "CCONSTRAINT", "PCONSTRAINT", "TCONSTRAINT",
+                "LCONSTRAINT", "QCONSTRAINT", "SMOOTHCONSTRAINT", "NCONSTRAINT",
+                "HCONSTRAINT", "SYCONSTRAINT", "FXCONSTRAINT", "VCONSTRAINT",
+                "ECONSTRAINT", "GCVISIBILITY", "GCSHOWALL", "GCHIDEALL",
+            ]
         );
         assert_eq!(
             groups[1].tools.iter().map(item_id).collect::<Vec<_>>(),
-            ["DC_LINEAR_MENU", "DCALIGNED", "GRID", "DCVISIBILITY", "DCSHOWALL", "DCHIDEALL"]
+            [
+                "DC_LINEAR_MENU", "DCALIGNED", "DCANGULAR", "DCDIAMETER",
+                "DCRADIUS", "DCCONVERT", "DCVISIBILITY", "DCSHOWALL", "DCHIDEALL",
+            ]
         );
         assert_eq!(groups[2].tools.iter().map(item_id).collect::<Vec<_>>(), ["DELCONSTRAINT", "PARAMETERS"]);
 
@@ -168,14 +182,11 @@ mod tests {
             items.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
             ["DCLINEAR", "DCHORIZONTAL", "DCVERTICAL"]
         );
-        let RibbonItem::ToolGrid { columns } = &groups[0].tools[1] else { panic!("geometry grid") };
-        assert_eq!(columns.iter().flatten().map(|tool| tool.id).collect::<Vec<_>>(), [
-            "CCONSTRAINT", "PCONSTRAINT", "TCONSTRAINT", "LCONSTRAINT", "QCONSTRAINT", "SMOOTHCONSTRAINT",
-            "NCONSTRAINT", "HCONSTRAINT", "SYCONSTRAINT", "FXCONSTRAINT", "VCONSTRAINT", "ECONSTRAINT",
-        ]);
-        let RibbonItem::ToolGrid { columns } = &groups[1].tools[2] else { panic!("dimension grid") };
-        assert_eq!(columns.iter().flatten().map(|tool| tool.id).collect::<Vec<_>>(), [
-            "DCANGULAR", "DCDIAMETER", "DCRADIUS", "DCCONVERT",
-        ]);
+        assert!(groups[0].tools[1..13]
+            .iter()
+            .all(|item| matches!(item, RibbonItem::LargeTool(_))));
+        assert!(groups[1].tools[2..6]
+            .iter()
+            .all(|item| matches!(item, RibbonItem::LargeTool(_))));
     }
 }
