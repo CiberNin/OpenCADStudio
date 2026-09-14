@@ -1176,7 +1176,6 @@ fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
     let i0 = seg;
     let i1 = (seg + 1) % n;
     if pline.vertices[i0].bulge.abs() >= 1.0e-9 {
-        move_arc_segment_parallel(pline, seg, offset);
         return;
     }
     let p0 = Vec2::new(pline.vertices[i0].location.x, pline.vertices[i0].location.y);
@@ -1280,7 +1279,9 @@ fn move_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
     }
 }
 
-fn move_arc_segment_parallel(pline: &mut LwPolyline, seg: usize, offset: f64) {
+/// Resize an arc concentrically while preserving its neighboring geometry.
+/// This is used exclusively by the Radius grip-menu action.
+fn resize_arc_concentrically(pline: &mut LwPolyline, seg: usize, offset: f64) {
     let n = pline.vertices.len();
     let i0 = seg;
     let i1 = (seg + 1) % n;
@@ -1534,7 +1535,7 @@ fn resize_arc_segment_radius(pline: &mut LwPolyline, seg: usize, radius: f64) {
     // Ordinary arcs keep their centre. Connected endpoints slide along the
     // infinite lines of their adjacent straight segments, preserving those
     // lines' angles; only free open endpoints move radially.
-    move_arc_segment_parallel(pline, seg, radius - original.radius);
+    resize_arc_concentrically(pline, seg, radius - original.radius);
 }
 
 fn apply_transform(pline: &mut LwPolyline, t: &EntityTransform) {
@@ -1615,10 +1616,17 @@ impl crate::entities::traits::Grippable for LwPolyline {
             }
         };
         let mut items = Vec::new();
-        items.push(GripMenuItem {
-            label: "Move Parallel",
-            action: GripMenuAction::MoveParallel,
-        });
+        if is_arc {
+            items.push(GripMenuItem {
+                label: "Radius",
+                action: GripMenuAction::Radius,
+            });
+        } else {
+            items.push(GripMenuItem {
+                label: "Move Parallel",
+                action: GripMenuAction::MoveParallel,
+            });
+        }
         if is_rectangle(self) && seg < 4 {
             // Moving an edge changes the dimension perpendicular to it.
             items.push(GripMenuItem {
@@ -1641,12 +1649,6 @@ impl crate::entities::traits::Grippable for LwPolyline {
             },
             convert,
         ]);
-        if is_arc {
-            items.push(GripMenuItem {
-                label: "Radius",
-                action: GripMenuAction::Radius,
-            });
-        }
         items
     }
 
@@ -1664,7 +1666,8 @@ impl crate::entities::traits::Grippable for LwPolyline {
             } else {
                 n.saturating_sub(1)
             };
-            return (seg < count).then_some("Parallel offset");
+            return (seg < count && self.vertices[seg].bulge.abs() < 1.0e-9)
+                .then_some("Parallel offset");
         }
         if action == A::Radius && grip_id >= n {
             let seg = grip_id - n;
@@ -1721,7 +1724,7 @@ impl crate::entities::traits::Grippable for LwPolyline {
             } else {
                 n.saturating_sub(1)
             };
-            if seg >= count {
+            if seg >= count || self.vertices[seg].bulge.abs() >= 1.0e-9 {
                 return None;
             }
             let plane = crate::entities::curve::lwpolyline_curve(self)?.plane;
@@ -1785,7 +1788,9 @@ impl crate::entities::traits::Grippable for LwPolyline {
         }
         if action == A::MoveParallel {
             if let Some(seg) = grip_id.checked_sub(self.vertices.len()) {
-                move_segment_parallel(self, seg, value);
+                if self.vertices.get(seg).is_some_and(|vertex| vertex.bulge.abs() < 1.0e-9) {
+                    move_segment_parallel(self, seg, value);
+                }
             }
             return;
         }
@@ -2048,12 +2053,13 @@ mod tests {
     }
 
     #[test]
-    fn arc_midpoint_offers_move_parallel_first() {
+    fn arc_midpoint_offers_radius_first_without_move_parallel() {
         let mut pl = make_test_lwpolyline(2, 0.0);
         pl.vertices[0].bulge = 0.5;
         let menu = pl.grip_menu(2);
-        assert_eq!(menu[0].action, GripMenuAction::MoveParallel);
+        assert_eq!(menu[0].action, GripMenuAction::Radius);
         assert_eq!(menu[1].action, GripMenuAction::Stretch);
+        assert!(!menu.iter().any(|item| item.action == GripMenuAction::MoveParallel));
     }
 
     #[test]
@@ -2146,7 +2152,7 @@ mod tests {
     }
 
     #[test]
-    fn move_parallel_offsets_arc_concentrically() {
+    fn radius_offsets_arc_concentrically() {
         let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0)], false);
         pl.vertices[0].bulge = 1.0;
         let original = crate::entities::common::BulgeArc::from_bulge(
@@ -2156,7 +2162,7 @@ mod tests {
         )
         .unwrap();
 
-        move_segment_parallel(&mut pl, 0, 2.0);
+        resize_arc_concentrically(&mut pl, 0, 2.0);
 
         let moved = crate::entities::common::BulgeArc::from_bulge(
             [pl.vertices[0].location.x, pl.vertices[0].location.y],
@@ -2170,11 +2176,11 @@ mod tests {
     }
 
     #[test]
-    fn move_parallel_allows_an_open_arc_with_a_duplicate_end_vertex() {
+    fn radius_allows_an_open_arc_with_a_duplicate_end_vertex() {
         let mut pl = polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 0.0)], false);
         pl.vertices[0].bulge = 1.0;
 
-        move_segment_parallel(&mut pl, 0, 2.0);
+        resize_arc_concentrically(&mut pl, 0, 2.0);
 
         let moved = crate::entities::common::BulgeArc::from_bulge(
             [pl.vertices[0].location.x, pl.vertices[0].location.y],
@@ -2200,7 +2206,7 @@ mod tests {
             [shared.x, shared.y], [11.0, 0.0], pl.vertices[1].bulge,
         ).unwrap();
 
-        move_segment_parallel(&mut pl, 0, 1.0);
+        resize_arc_concentrically(&mut pl, 0, 1.0);
 
         let after = crate::entities::common::BulgeArc::from_bulge(
             [pl.vertices[1].location.x, pl.vertices[1].location.y],
