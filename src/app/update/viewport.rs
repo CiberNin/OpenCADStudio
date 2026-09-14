@@ -1687,16 +1687,36 @@ impl OpenCADStudio {
                         snapped,
                     );
                     if let Some(value) = value {
+                        let origin_value =
+                            crate::scene::view::dispatch::grip_menu_point_value(
+                                &original,
+                                grip.grip_id,
+                                action,
+                                grip.origin_world,
+                            );
+                        let mut candidate = original.clone();
+                        crate::entities::traits::EntityTypeOps::apply_grip_menu_value(
+                            &mut candidate,
+                            grip.grip_id,
+                            action,
+                            value,
+                        );
+                        let returns_to_origin = origin_value.is_some_and(|origin_value| {
+                            (value - origin_value).abs()
+                                <= 1.0e-9 * value.abs().max(origin_value.abs()).max(1.0)
+                        });
                         if let Some(current) =
                             self.tabs[i].scene.document.get_entity_mut(grip.handle)
                         {
-                            *current = original;
-                            crate::entities::traits::EntityTypeOps::apply_grip_menu_value(
-                                current,
-                                grip.grip_id,
-                                action,
-                                value,
-                            );
+                            // Some radius/parallel positions have no geometric
+                            // solution. Their entity edit is deliberately a
+                            // no-op; retain the last valid preview instead of
+                            // flashing back to the drag-start geometry. The
+                            // exact origin remains reachable when the cursor
+                            // moves back there.
+                            if candidate != original || returns_to_origin {
+                                *current = candidate;
+                            }
                         }
                     }
                 }
