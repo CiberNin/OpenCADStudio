@@ -284,7 +284,7 @@ impl CadCommand for HelixCommand {
                 CmdResult::NeedPoint
             }
             Step::Final => {
-                let height = (point - self.center).dot(self.plane.z);
+                let height = point.distance(self.center);
                 self.commit(height, self.plane.z)
             }
             Step::AxisEndpoint => {
@@ -487,7 +487,7 @@ impl CadCommand for HelixCommand {
                 self.top_radius = old;
                 preview
             }
-            Step::Final => self.preview((point - self.center).dot(self.plane.z), self.plane.z),
+            Step::Final => self.preview(point.distance(self.center), self.plane.z),
             Step::AxisEndpoint => {
                 let vector = point - self.center;
                 let height = vector.length();
