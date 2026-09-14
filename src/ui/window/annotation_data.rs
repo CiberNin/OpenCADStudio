@@ -561,6 +561,10 @@ fn wizard_nav(state: &DataExtractionState) -> iced::widget::Row<'_, Message> {
 }
 
 pub fn data_extraction_view(state: &DataExtractionState, sizing: crate::ui::modal::ModalSizing) -> Element<'_, Message> {
+    let add_folder = button(text(t!("Add folder…")).size(12)).padding([5, 10]);
+    #[cfg(not(target_arch = "wasm32"))]
+    let add_folder = add_folder.on_press(Message::DataExtractionAddFolder);
+
     let body: Element<'_, Message> = match state.page {
         ExtractionPage::Begin => group(t!("Begin"), column![
             radio_button(state.begin == ExtractionBegin::New, t!("Create a new data extraction"), Message::DataExtractionField(DataExtractionField::Begin(ExtractionBegin::New))),
@@ -576,7 +580,7 @@ pub fn data_extraction_view(state: &DataExtractionState, sizing: crate::ui::moda
             checkbox(state.include_subfolders).label(t!("Include subfolders")).on_toggle(|v| Message::DataExtractionField(DataExtractionField::IncludeSubfolders(v))).size(14),
             row![
                 button(text(t!("Add drawings…")).size(12)).on_press(Message::DataExtractionAddDrawings).padding([5, 10]),
-                button(text(t!("Add folder…")).size(12)).on_press(Message::DataExtractionAddFolder).padding([5, 10]),
+                add_folder,
                 button(text(t!("Clear")).size(12)).on_press(Message::DataExtractionClearSources).padding([5, 10]),
             ].spacing(6),
             text(state.source_files.join("\n")).size(10),

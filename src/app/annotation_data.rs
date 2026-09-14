@@ -1300,6 +1300,7 @@ impl OpenCADStudio {
         Task::none()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn on_data_extraction_add_folder(&mut self) -> Task<Message> {
         Task::perform(
             async {
@@ -1311,6 +1312,11 @@ impl OpenCADStudio {
             },
             Message::DataExtractionAddFolderResult,
         )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn on_data_extraction_add_folder(&mut self) -> Task<Message> {
+        Task::none()
     }
 
     pub(super) fn on_data_extraction_add_folder_result(
