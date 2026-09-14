@@ -247,28 +247,63 @@ impl OpenCADStudio {
                                 .then(|| header.stylesheet.clone())
                         })
                         .unwrap_or_else(|| "None".to_string());
-                    let ucs_per_viewport = scene
+                    let active_model_vport = doc.vports.iter().find(|viewport| {
+                        viewport
+                            .name
+                            .trim_start_matches('*')
+                            .eq_ignore_ascii_case("active")
+                    });
+                    let active_entity_viewport = scene
                         .active_viewport
                         .and_then(|handle| doc.get_entity(handle))
                         .and_then(|entity| match entity {
-                            acadrust::EntityType::Viewport(viewport) => {
-                                Some(viewport.ucs_per_viewport)
-                            }
+                            acadrust::EntityType::Viewport(viewport) => Some(viewport),
                             _ => None,
-                        })
-                        .unwrap_or(false);
+                        });
+                    let ucs_icon_on = active_entity_viewport
+                        .map(|viewport| viewport.ucs_icon_visible)
+                        .or_else(|| active_model_vport.map(|viewport| viewport.ucsicon_lower))
+                        .unwrap_or(self.show_ucs_icon);
+                    let ucs_icon_at_origin = active_entity_viewport
+                        .map(|viewport| viewport.ucs_icon_at_origin)
+                        .or_else(|| active_model_vport.map(|viewport| viewport.ucsicon_origin))
+                        .unwrap_or(self.ucs_icon_at_origin);
+                    let ucs_per_viewport = active_entity_viewport
+                        .map(|viewport| viewport.ucs_per_viewport)
+                        .or_else(|| active_model_vport.map(|viewport| viewport.ucs_per_viewport))
+                        .unwrap_or(true);
                     let ucs_name = tab
                         .active_ucs
                         .as_ref()
                         .map(|ucs| ucs.name.trim())
                         .filter(|name| !name.is_empty())
-                        .unwrap_or("World")
+                        .unwrap_or("")
                         .to_string();
                     let annotation_scale = if header.current_annotation_scale.trim().is_empty() {
                         "1:1".to_string()
                     } else {
                         header.current_annotation_scale.clone()
                     };
+                    let annotation_scale_options = scene
+                        .scale_list()
+                        .into_iter()
+                        .map(|(name, _, _)| name)
+                        .collect();
+                    let mut plot_table_options = vec!["None".to_string()];
+                    plot_table_options.extend(crate::io::plot_style::available_ctb_names());
+                    let visual_style = match tab.visual_style.as_str() {
+                        "Wireframe 2D" => t!("2D Wireframe").into_owned(),
+                        "Wireframe 3D" => t!("3D Wireframe").into_owned(),
+                        value => value.to_string(),
+                    };
+                    let visual_style_options = crate::modules::view::visual_style::VISUAL_STYLES
+                        .iter()
+                        .map(|style| match style.label {
+                            "Wireframe 2D" => t!("2D Wireframe").into_owned(),
+                            "Wireframe 3D" => t!("3D Wireframe").into_owned(),
+                            value => value.to_string(),
+                        })
+                        .collect();
                     let sections = vec![
                         PropSection {
                             title: t!("General").into_owned(),
@@ -356,18 +391,23 @@ impl OpenCADStudio {
                                         }
                                     },
                                 },
-                                read_only(t!("Plot style table").as_ref(), plot_table.clone()),
+                                Property {
+                                    label: t!("Plot style table").into_owned(),
+                                    field: "view_plot_style_table",
+                                    value: PropValue::Choice {
+                                        selected: plot_table.clone(),
+                                        options: plot_table_options,
+                                    },
+                                },
                                 read_only(
                                     t!("Plot table attached to").as_ref(),
-                                    if plot_table == "None" {
-                                        "None".to_string()
-                                    } else {
-                                        scene.current_layout.clone()
-                                    },
+                                    scene.current_layout.clone(),
                                 ),
                                 read_only(
                                     t!("Plot table type").as_ref(),
-                                    if header.plotstyle_mode {
+                                    if plot_table == "None" {
+                                        t!("Not available").into_owned()
+                                    } else if header.plotstyle_mode {
                                         t!("Color-dependent plot styles").into_owned()
                                     } else {
                                         t!("Named plot styles").into_owned()
@@ -388,54 +428,48 @@ impl OpenCADStudio {
                         PropSection {
                             title: t!("Misc").into_owned(),
                             props: vec![
-                                read_only(t!("Annotation scale").as_ref(), annotation_scale),
-                                read_only(
-                                    t!("UCS icon On").as_ref(),
-                                    if self.show_ucs_icon { "Yes" } else { "No" }.to_string(),
-                                ),
-                                read_only(
-                                    t!("UCS icon at origin").as_ref(),
-                                    if self.ucs_icon_at_origin { "Yes" } else { "No" }
-                                        .to_string(),
-                                ),
-                                read_only(
-                                    t!("UCS per viewport").as_ref(),
-                                    if ucs_per_viewport { "Yes" } else { "No" }.to_string(),
-                                ),
+                                Property {
+                                    label: t!("Annotation scale").into_owned(),
+                                    field: "view_annotation_scale",
+                                    value: PropValue::Choice {
+                                        selected: annotation_scale,
+                                        options: annotation_scale_options,
+                                    },
+                                },
+                                Property {
+                                    label: t!("UCS icon On").into_owned(),
+                                    field: "view_ucs_icon_on",
+                                    value: PropValue::Choice {
+                                        selected: if ucs_icon_on { "Yes" } else { "No" }.to_string(),
+                                        options: vec!["Yes".to_string(), "No".to_string()],
+                                    },
+                                },
+                                Property {
+                                    label: t!("UCS icon at origin").into_owned(),
+                                    field: "view_ucs_icon_at_origin",
+                                    value: PropValue::Choice {
+                                        selected: if ucs_icon_at_origin { "Yes" } else { "No" }.to_string(),
+                                        options: vec!["Yes".to_string(), "No".to_string()],
+                                    },
+                                },
+                                Property {
+                                    label: t!("UCS per viewport").into_owned(),
+                                    field: "view_ucs_per_viewport",
+                                    value: PropValue::Choice {
+                                        selected: if ucs_per_viewport { "Yes" } else { "No" }.to_string(),
+                                        options: vec!["Yes".to_string(), "No".to_string()],
+                                    },
+                                },
                                 read_only(t!("UCS Name").as_ref(), ucs_name),
-                                read_only(t!("Visual Style").as_ref(), tab.visual_style.clone()),
+                                Property {
+                                    label: t!("Visual Style").into_owned(),
+                                    field: "view_visual_style",
+                                    value: PropValue::Choice {
+                                        selected: visual_style,
+                                        options: visual_style_options,
+                                    },
+                                },
                             ],
-                        },
-                        // Document-wide named-parameter table embedded here
-                        // instead of a separate modal — see `PropValue::
-                        // ParamRow`'s doc comment. Belongs on the no-
-                        // selection (drawing-level) page, not a per-entity
-                        // one: a parameter isn't owned by any one entity.
-                        PropSection {
-                            title: t!("Parameters").into_owned(),
-                            props: {
-                                let mut props: Vec<Property> = scene
-                                    .named_parameters()
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(index, p)| Property {
-                                        label: String::new(),
-                                        field: "named_parameter",
-                                        value: PropValue::ParamRow {
-                                            index,
-                                            name: p.name.clone(),
-                                            formula: p.source.clone(),
-                                            resolved: scene.named_parameters().resolve(&p.name).map_err(|e| e.to_string()),
-                                        },
-                                    })
-                                    .collect();
-                                props.push(Property {
-                                    label: String::new(),
-                                    field: "named_parameter_add",
-                                    value: PropValue::ParamAddRow,
-                                });
-                                props
-                            },
                         },
                     ];
                     ui::PropertiesPanel {
