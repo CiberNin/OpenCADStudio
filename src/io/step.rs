@@ -49,18 +49,19 @@ pub fn build_step(meshes: &[&MeshModel]) -> Option<String> {
             let b = point(i1);
             let c = point(i2);
             // The face is placed on the triangle's own plane. A smoothed vertex
-            // normal leans off it, so only a triangle with no area falls back
-            // to the normal the mesh gives it.
+            // normal leans off it, so only a triangle whose cross product is
+            // zero falls back to the normal the mesh gives it. Small triangles
+            // have a tiny cross product but still a plane of their own.
             let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
             let nx = ab[1] * ac[2] - ab[2] * ac[1];
             let ny = ab[2] * ac[0] - ab[0] * ac[2];
             let nz = ab[0] * ac[1] - ab[1] * ac[0];
             let len = (nx * nx + ny * ny + nz * nz).sqrt();
-            let n = if len <= f64::EPSILON && i0 < normals.len() {
+            let n = if len == 0.0 && i0 < normals.len() {
                 normals[i0]
             } else {
-                let len = len.max(f64::EPSILON);
+                let len = len.max(f64::MIN_POSITIVE);
                 [(nx / len) as f32, (ny / len) as f32, (nz / len) as f32]
             };
             tris.push(Tri { v: [a, b, c], n });
@@ -367,6 +368,24 @@ mod tests {
     fn a_face_plane_follows_the_triangle_not_its_vertex_normal() {
         let mut mesh = triangle(
             vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            Vec::new(),
+        );
+        let leaning = [
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        mesh.normals = vec![leaning; 3];
+        let step = build_step(&[&mesh]).expect("step");
+        assert_eq!(plane_normals(&step), vec![[0.0, 0.0, 1.0]]);
+    }
+
+    /// A small triangle still has a plane of its own. Its cross product is
+    /// tiny (1e-18 here), far below f64::EPSILON, but it is not zero.
+    #[test]
+    fn a_small_triangle_keeps_its_own_plane() {
+        let mut mesh = triangle(
+            vec![[0.0, 0.0, 0.0], [1e-9, 0.0, 0.0], [0.0, 1e-9, 0.0]],
             Vec::new(),
         );
         let leaning = [
