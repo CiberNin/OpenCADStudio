@@ -144,14 +144,14 @@ fn cell_ref(text: &str) -> Option<(usize, usize)> {
     Some((row, column))
 }
 
-fn crop_range(rows: Vec<Vec<String>>, range: &str) -> Vec<Vec<String>> {
+fn crop_range(rows: Vec<Vec<String>>, range: &str) -> Result<Vec<Vec<String>>, String> {
     let (start, end) = range.split_once(':').unwrap_or((range, range));
     let (Some((r0, c0)), Some((r1, c1))) = (cell_ref(start), cell_ref(end)) else {
-        return rows;
+        return Err(crate::t!("Enter a valid cell range such as A1:D10.").into_owned());
     };
     let (r0, r1) = (r0.min(r1), r0.max(r1));
     let (c0, c1) = (c0.min(c1), c0.max(c1));
-    rows.into_iter()
+    Ok(rows.into_iter()
         .skip(r0)
         .take(r1 - r0 + 1)
         .map(|row| {
@@ -159,7 +159,7 @@ fn crop_range(rows: Vec<Vec<String>>, range: &str) -> Vec<Vec<String>> {
                 .map(|column| row.get(column).cloned().unwrap_or_default())
                 .collect()
         })
-        .collect()
+        .collect())
 }
 
 fn workbook_metadata(path: &Path) -> Result<(Vec<String>, Vec<String>), String> {
@@ -252,7 +252,7 @@ pub(crate) fn read_tabular_file(
         )
     };
     let rows = match cell_range.as_deref().filter(|value| !value.trim().is_empty()) {
-        Some(value) => crop_range(rows, value),
+        Some(value) => crop_range(rows, value)?,
         None => rows,
     };
     if rows.is_empty() || rows.iter().all(Vec::is_empty) {
