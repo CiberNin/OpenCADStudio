@@ -110,7 +110,12 @@ pub fn format_length(value: f64) -> String {
 /// rotation leaves coordinates like -1e-15 behind, which read as `-0.0000`.
 fn without_negative_zero(text: String) -> String {
     match text.strip_prefix('-') {
-        Some(rest) if !rest.chars().any(|c| matches!(c, '1'..='9')) => rest.to_string(),
+        Some(rest)
+            if rest.chars().any(|c| c.is_ascii_digit())
+                && !rest.chars().any(|c| matches!(c, '1'..='9')) =>
+        {
+            rest.to_string()
+        }
         _ => text,
     }
 }
@@ -1275,5 +1280,11 @@ mod negative_zero_format_tests {
         assert_eq!(length(2, 0, -0.6), "-1");
         assert_eq!(angle(0, 0, -45f64.to_radians()), "-45°");
         assert_eq!(angle(1, 1, -0.0001f64.to_radians()), "-0d0'0.4\"");
+    }
+
+    #[test]
+    fn a_negative_infinite_value_keeps_its_sign() {
+        assert_eq!(length(2, 4, f64::NEG_INFINITY), "-inf");
+        assert_eq!(angle(0, 0, f64::NEG_INFINITY), "-inf°");
     }
 }

@@ -75,7 +75,12 @@ pub fn parse_obj(src: &str, color: [f32; 4]) -> Option<MeshModel> {
     for (vi, (pos_i, norm_i)) in face_verts.iter().enumerate() {
         let pos = *positions.get(*pos_i).unwrap_or(&[0.0; 3]);
         verts.push(pos);
-        let norm = norm_i.and_then(|ni| normals_raw.get(ni).copied());
+        let norm = norm_i
+            .and_then(|ni| normals_raw.get(ni).copied())
+            .filter(|n| {
+                n.iter().all(|value| value.is_finite())
+                    && n.iter().map(|value| value * value).sum::<f32>() > 1e-12
+            });
         has_normal.push(norm.is_some());
         norms.push(norm.unwrap_or([0.0, 0.0, 0.0]));
         indices.push(vi as u32);
@@ -149,6 +154,13 @@ mod tests {
     #[test]
     fn an_out_of_range_normal_index_gets_the_face_normal() {
         let src = format!("{SQUARE}vn 0 1 0\nf 1//7 2//7 3//7\n");
+        let mesh = parse_obj(&src, COLOR).expect("mesh");
+        assert_normals(&mesh.normals, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_zero_normal_gets_the_face_normal() {
+        let src = format!("{SQUARE}vn 0 0 0\nf 1//1 2//1 3//1\n");
         let mesh = parse_obj(&src, COLOR).expect("mesh");
         assert_normals(&mesh.normals, [0.0, 0.0, 1.0]);
     }
