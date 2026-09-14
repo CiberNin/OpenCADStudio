@@ -1,19 +1,14 @@
-// PDF underlay rasterisation.
-//
-// No PDF crate: the page renders through the system `pdftoppm` (poppler-utils
-// — present on virtually every Linux desktop, installable on Windows/macOS)
-// into a temp PNG, which decodes through the existing `image` dependency.
-// When the tool is missing the caller falls back to the underlay's outline
-// placeholder, so the feature degrades instead of failing the load.
-//
-// Pages are cached per (resolved path, page name): underlays re-tessellate on
-// every geometry bump, but the expensive external render runs once.
+//! Cross-platform PDF underlay rasterisation.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
-/// One rasterised PDF page. `dpi` ties the pixel size back to the page's
-/// physical size: `inches = px / dpi`, which is what the underlay's world
-/// quad is sized from (1 underlay unit = 1 PDF inch, AutoCAD's convention).
+use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_syntax::Pdf;
+use hayro::vello_cpu::color::palette::css::WHITE;
+use hayro::{RenderCache, RenderSettings};
+
+/// One rasterised PDF page. `dpi` ties its pixel size to its physical size.
 pub struct PdfPage {
     pub pixels: Arc<Vec<u8>>,
     pub width: u32,
@@ -21,98 +16,119 @@ pub struct PdfPage {
     pub dpi: f32,
 }
 
-/// Raster resolution. 150 dpi puts an A4 page at ~1240×1754 px — crisp for
-/// normal zooms without ballooning texture memory.
-#[cfg(not(target_arch = "wasm32"))]
-const RASTER_DPI: u32 = 150;
+const RASTER_DPI: f32 = 150.0;
 
-/// Rasterise `page` (a 1-based page name, e.g. "1") of the PDF at `path`.
-/// `None` when the file/page can't be rendered (missing file, no pdftoppm,
-/// bad page) — negative results are cached too, so a missing tool doesn't
-/// re-spawn a process per tessellation.
-#[cfg(not(target_arch = "wasm32"))]
+type PageKey = (String, String);
+
+fn page_cache() -> &'static Mutex<HashMap<PageKey, Option<Arc<PdfPage>>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PageKey, Option<Arc<PdfPage>>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn source_cache() -> &'static Mutex<HashMap<String, Arc<Vec<u8>>>> {
+    static SOURCES: OnceLock<Mutex<HashMap<String, Arc<Vec<u8>>>>> = OnceLock::new();
+    SOURCES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Keep bytes selected through a file dialog. Browsers expose no reusable path,
+/// while native builds also benefit by avoiding a second disk read.
+pub fn register_source(path: &str, bytes: Arc<Vec<u8>>) {
+    source_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(path.to_string(), bytes);
+    page_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|(cached_path, _), _| cached_path != path);
+}
+
+/// Rasterise a 1-based PDF page, memoised by source path and page name.
 pub fn rasterize_page(path: &str, page: &str) -> Option<Arc<PdfPage>> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-
-    static CACHE: OnceLock<Mutex<HashMap<(String, String), Option<Arc<PdfPage>>>>> =
-        OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
     let key = (path.to_string(), page.to_string());
-    if let Ok(c) = cache.lock() {
-        if let Some(hit) = c.get(&key) {
-            return hit.clone();
-        }
+    if let Some(hit) = page_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return hit;
     }
+
     let built = rasterize_uncached(path, page);
-    if let Ok(mut c) = cache.lock() {
-        c.insert(key, built.clone());
-    }
+    page_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(key, built.clone());
     built
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn rasterize_uncached(path: &str, page: &str) -> Option<Arc<PdfPage>> {
-    use std::process::Command;
-
-    if !std::path::Path::new(path).is_file() {
-        return None;
-    }
-    let page_no: u32 = page.trim().parse().unwrap_or(1).max(1);
-
-    // Unique output prefix in the system temp dir; pdftoppm appends
-    // `-<page>` (with version-dependent zero padding) and `.png`.
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    use std::hash::{Hash, Hasher};
-    (path, page_no).hash(&mut hasher);
-    let prefix = std::env::temp_dir().join(format!("ocs_pdf_{:016x}", hasher.finish()));
-    let prefix_str = prefix.to_string_lossy().into_owned();
-
-    let status = Command::new("pdftoppm")
-        .args([
-            "-png",
-            "-r",
-            &RASTER_DPI.to_string(),
-            "-f",
-            &page_no.to_string(),
-            "-l",
-            &page_no.to_string(),
-            path,
-            &prefix_str,
-        ])
-        .status()
-        .ok()?;
-    if !status.success() {
-        return None;
-    }
-
-    // Find the produced file: `<prefix>-1.png`, `-01.png`, … depending on the
-    // poppler version's padding.
-    let dir = prefix.parent()?;
-    let stem = prefix.file_name()?.to_string_lossy().into_owned();
-    let mut produced: Option<std::path::PathBuf> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&stem) && name.ends_with(".png") {
-            produced = Some(entry.path());
-            break;
-        }
-    }
-    let png = produced?;
-    let decoded = image::open(&png).ok()?.to_rgba8();
-    let _ = std::fs::remove_file(&png);
-    let (width, height) = decoded.dimensions();
+    let bytes = source_bytes(path)?;
+    let pdf = Pdf::new(bytes).ok()?;
+    let page_no = page.trim().parse::<usize>().unwrap_or(1).max(1);
+    let page = pdf.pages().get(page_no - 1)?;
+    let scale = RASTER_DPI / 72.0;
+    let pixmap = hayro::render(
+        page,
+        &RenderCache::new(),
+        &InterpreterSettings::default(),
+        &RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: WHITE,
+            ..Default::default()
+        },
+    );
+    let width = u32::from(pixmap.width());
+    let height = u32::from(pixmap.height());
     Some(Arc::new(PdfPage {
-        pixels: Arc::new(decoded.into_raw()),
+        pixels: Arc::new(pixmap.data_as_u8_slice().to_vec()),
         width,
         height,
-        dpi: RASTER_DPI as f32,
+        dpi: RASTER_DPI,
     }))
 }
 
-/// wasm: no external process — underlays keep their outline placeholder.
-#[cfg(target_arch = "wasm32")]
-pub fn rasterize_page(_path: &str, _page: &str) -> Option<Arc<PdfPage>> {
-    None
+fn source_bytes(path: &str) -> Option<Arc<Vec<u8>>> {
+    if let Some(bytes) = source_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(path)
+        .cloned()
+    {
+        return Some(bytes);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::read(path).ok().map(Arc::new)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use printpdf::{Mm, PdfDocument, PdfPage as OutputPage, PdfSaveOptions};
+
+    use super::*;
+
+    #[test]
+    fn registered_pdf_bytes_render_without_a_filesystem_path() {
+        let mut document = PdfDocument::new("PDF underlay test");
+        document
+            .pages
+            .push(OutputPage::new(Mm(25.4), Mm(25.4), Vec::new()));
+        let bytes = document.save(&PdfSaveOptions::default(), &mut Vec::new());
+        let path = "memory://pdf-underlay-test.pdf";
+
+        register_source(path, Arc::new(bytes));
+        let page = rasterize_page(path, "1").expect("registered PDF should render");
+
+        assert_eq!((page.width, page.height), (150, 150));
+        assert_eq!(page.pixels.len(), 150 * 150 * 4);
+    }
 }

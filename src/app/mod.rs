@@ -3397,7 +3397,7 @@ pub enum Message {
     /// Open file-picker dialog for PDFATTACH command (async).
     PdfAttachPick,
     /// Result of the PDFATTACH file picker.
-    PdfAttachPickResult(Result<std::path::PathBuf, String>),
+    PdfAttachPickResult(Result<(std::path::PathBuf, std::sync::Arc<Vec<u8>>), String>),
 
     // ── XREF ──────────────────────────────────────────────────────────────
     /// Open file-picker dialog for XATTACH command (async).

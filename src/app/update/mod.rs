@@ -953,20 +953,25 @@ impl OpenCADStudio {
                         .await;
 
                     match handle {
-                        Some(h) => Ok(crate::sys::handle_path(&h)),
+                        Some(h) => {
+                            let path = crate::sys::handle_path(&h);
+                            let bytes = std::sync::Arc::new(h.read().await);
+                            Ok((path, bytes))
+                        }
                         None => Err("Cancelled".to_string()),
                     }
                 },
                 Message::PdfAttachPickResult,
             ),
 
-            Message::PdfAttachPickResult(Ok(path)) => {
+            Message::PdfAttachPickResult(Ok((path, bytes))) => {
                 use acadrust::objects::{ObjectType, UnderlayDefinition};
                 use crate::command::CadCommand;
                 use crate::modules::insert::pdf_attach::PdfAttachCommand;
 
                 let i = self.active_tab;
                 let path_str = path.to_string_lossy().into_owned();
+                crate::scene::model::pdf_raster::register_source(&path_str, bytes);
 
                 let definition_handle = self.tabs[i].scene.document.allocate_handle();
 
