@@ -116,9 +116,15 @@ thread_local! {
 // `(address, length)`. See the doc comment on [`themed_handle`]
 // below for the cache key rationale, the sub-slice guard, the
 // mirror of `SemanticCacheKey`, and the threading choice.
+#[derive(Default)]
+struct ThemedCache {
+    mru: [Option<((usize, usize), svg::Handle)>; 2],
+    map: FxHashMap<(usize, usize), svg::Handle>,
+}
+
 thread_local! {
-    static THEMED_CACHE: RefCell<FxHashMap<(usize, usize), svg::Handle>> =
-        RefCell::new(FxHashMap::default());
+    static THEMED_CACHE: RefCell<ThemedCache> =
+        RefCell::new(ThemedCache::default());
 }
 
 /// Look up (or build and cache) the `svg::Handle` for a `&'static [u8]`
@@ -159,16 +165,42 @@ thread_local! {
 /// trigger a `RefCell` panic on the second `borrow_mut`, because
 /// no `borrow_mut` is held while parsing runs. (The same
 /// `thread_local!` + `RefCell` shape is used by `SEMANTIC_CACHE`.)
+#[inline]
 #[doc(hidden)]
 pub fn themed_handle(bytes: &'static [u8]) -> svg::Handle {
     let key = (bytes.as_ptr() as usize, bytes.len());
-    if let Some(handle) = THEMED_CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+    let hit = THEMED_CACHE.with(|cache| {
+        let mut c = cache.borrow_mut();
+        if let Some((k, ref handle)) = c.mru[0] {
+            if k == key {
+                return Some(handle.clone());
+            }
+        }
+        if let Some((k, _)) = c.mru[1] {
+            if k == key {
+                c.mru.swap(0, 1);
+                return Some(c.mru[0].as_ref().unwrap().1.clone());
+            }
+        }
+        if let Some(handle) = c.map.get(&key) {
+            let handle = handle.clone();
+            c.mru[1] = c.mru[0].take();
+            c.mru[0] = Some((key, handle.clone()));
+            return Some(handle);
+        }
+        None
+    });
+    if let Some(handle) = hit {
         return handle;
     }
+
     // Miss: build the handle with no cache borrow held, then insert.
     let handle = svg::Handle::from_memory(bytes);
     THEMED_CACHE.with(|cache| {
-        cache.borrow_mut().insert(key, handle.clone());
+        let mut c = cache.borrow_mut();
+        c.mru[1] = c.mru[0].take();
+        c.mru[0] = Some((key, handle.clone()));
+        c.map.insert(key, handle.clone());
     });
     handle
 }
@@ -733,20 +765,20 @@ mod themed_cache_tests {
     /// Number of `svg::Handle` entries currently in the `THEMED_CACHE`.
     /// Test-only inspection helper; the cache is private production state.
     fn themed_cache_size_for_test() -> usize {
-        THEMED_CACHE.with(|c| c.borrow().len())
+        THEMED_CACHE.with(|c| c.borrow().map.len())
     }
 
     /// True when `(ptr, len)` (the address and length of a
     /// `&'static [u8]`) has an entry in the `THEMED_CACHE`.
     /// Test-only inspection helper.
     fn themed_cache_contains_for_test(ptr: *const u8, len: usize) -> bool {
-        THEMED_CACHE.with(|c| c.borrow().contains_key(&(ptr as usize, len)))
+        THEMED_CACHE.with(|c| c.borrow().map.contains_key(&(ptr as usize, len)))
     }
 
     /// Returns a clone of the cached `svg::Handle` for `(ptr, len)`,
     /// or `None` if no entry is cached. Test-only inspection helper.
     fn themed_cache_get_handle_for_test(ptr: *const u8, len: usize) -> Option<svg::Handle> {
-        THEMED_CACHE.with(|c| c.borrow().get(&(ptr as usize, len)).cloned())
+        THEMED_CACHE.with(|c| c.borrow().map.get(&(ptr as usize, len)).cloned())
     }
 
     /// Removes the cache entry for `(ptr, len)`. Test-only helper so
@@ -755,7 +787,16 @@ mod themed_cache_tests {
     /// run on the same thread).
     fn themed_cache_remove_for_test(ptr: *const u8, len: usize) {
         THEMED_CACHE.with(|c| {
-            c.borrow_mut().remove(&(ptr as usize, len));
+            let mut c = c.borrow_mut();
+            let key = (ptr as usize, len);
+            c.map.remove(&key);
+            for slot in &mut c.mru {
+                if let Some((k, _)) = slot {
+                    if *k == key {
+                        *slot = None;
+                    }
+                }
+            }
         })
     }
 

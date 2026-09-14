@@ -768,14 +768,70 @@ pub fn bulge_arc_to_tangent(
 ///
 /// An arc band is an annular sector — concave on its inner edge — so this ear
 /// clips rather than fans.
+/// Directly triangulates a band polygon (either a 4-vertex straight trapezoid or
+/// a 2m-vertex annular sector quad strip) into non-overlapping triangles.
+/// Falls back to `triangulate_planar` if the vertex count is odd or less than 4.
+pub(crate) fn triangulate_band_ring(ring: &[[f64; 3]]) -> Vec<[f64; 3]> {
+    let n = ring.len();
+    if n >= 4 && n % 2 == 0 {
+        let m = n / 2;
+        let mut tris = Vec::with_capacity((m - 1) * 6);
+        for j in 0..m - 1 {
+            let p0 = ring[j];
+            let p1 = ring[j + 1];
+            let p2 = ring[2 * m - 2 - j];
+            let p3 = ring[2 * m - 1 - j];
+            tris.push(p0);
+            tris.push(p1);
+            tris.push(p2);
+            tris.push(p0);
+            tris.push(p2);
+            tris.push(p3);
+        }
+        tris
+    } else {
+        crate::entities::mesh::triangulate_planar(ring)
+    }
+}
+
 pub(crate) fn wide_band_tris(origin: [f64; 2], fills: &[Vec<[f32; 2]>]) -> Vec<[f64; 3]> {
-    let mut out = Vec::new();
+    let mut total_verts = 0;
     for poly in fills {
-        let ring: Vec<[f64; 3]> = poly
-            .iter()
-            .map(|&[x, y]| [origin[0] + x as f64, origin[1] + y as f64, 0.0])
-            .collect();
-        out.extend(crate::entities::mesh::triangulate_planar(&ring));
+        let n = poly.len();
+        if n >= 4 && n % 2 == 0 {
+            total_verts += (n / 2 - 1) * 6;
+        }
+    }
+    let mut out = Vec::with_capacity(total_verts);
+    let ox = origin[0];
+    let oy = origin[1];
+    for poly in fills {
+        let n = poly.len();
+        if n >= 4 && n % 2 == 0 {
+            let m = n / 2;
+            for j in 0..m - 1 {
+                let v0 = poly[j];
+                let v1 = poly[j + 1];
+                let v2 = poly[2 * m - 2 - j];
+                let v3 = poly[2 * m - 1 - j];
+                let p0 = [ox + v0[0] as f64, oy + v0[1] as f64, 0.0];
+                let p1 = [ox + v1[0] as f64, oy + v1[1] as f64, 0.0];
+                let p2 = [ox + v2[0] as f64, oy + v2[1] as f64, 0.0];
+                let p3 = [ox + v3[0] as f64, oy + v3[1] as f64, 0.0];
+                out.push(p0);
+                out.push(p1);
+                out.push(p2);
+                out.push(p0);
+                out.push(p2);
+                out.push(p3);
+            }
+        } else {
+            let ring: Vec<[f64; 3]> = poly
+                .iter()
+                .map(|&[x, y]| [ox + x as f64, oy + y as f64, 0.0])
+                .collect();
+            out.extend(crate::entities::mesh::triangulate_planar(&ring));
+        }
     }
     out
 }
@@ -832,8 +888,8 @@ pub(crate) fn thick_band_tube(
             push_seg(&mut lines, top[k], top[kn]);
             fill_tris.extend_from_slice(&[bot[k], bot[kn], top[kn], bot[k], top[kn], top[k]]);
         }
-        fill_tris.extend(crate::entities::mesh::triangulate_planar(&bot));
-        fill_tris.extend(crate::entities::mesh::triangulate_planar(&top));
+        fill_tris.extend(triangulate_band_ring(&bot));
+        fill_tris.extend(triangulate_band_ring(&top));
     }
     (fill_tris, lines)
 }
@@ -1089,19 +1145,17 @@ pub(crate) fn polyline_segment_fill(
         let r = r as f32;
         let r_outer = |t: f32| r + (hw0 + (hw1 - hw0) * t);
         let r_inner = |t: f32| (r - (hw0 + (hw1 - hw0) * t)).max(0.0);
-        let mut boundary = Vec::with_capacity((segs as usize + 1) * 2);
+        let segs_u = segs as usize;
+        let mut boundary = vec![[0.0_f32; 2]; (segs_u + 1) * 2];
         let inv = 1.0 / segs as f32;
-        for j in 0..=segs {
+        for j in 0..=segs_u {
             let t = j as f32 * inv;
             let ang = sa + span * t;
+            let (sin, cos) = ang.sin_cos();
             let ro = r_outer(t);
-            boundary.push([cx + ro * ang.cos(), cy + ro * ang.sin()]);
-        }
-        for j in (0..=segs).rev() {
-            let t = j as f32 * inv;
-            let ang = sa + span * t;
             let ri = r_inner(t);
-            boundary.push([cx + ri * ang.cos(), cy + ri * ang.sin()]);
+            boundary[j] = [cx + ro * cos, cy + ro * sin];
+            boundary[2 * segs_u + 1 - j] = [cx + ri * cos, cy + ri * sin];
         }
         Some(boundary)
     }

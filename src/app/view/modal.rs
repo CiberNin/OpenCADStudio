@@ -286,25 +286,28 @@ impl OpenCADStudio {
                     )
                 },
             ),
-            super::super::ModalKind::DraftingSettings => sized_flow(
-                ex,
-                520,
-                560,
-                |flow| {
-                    crate::ui::window::drafting_settings::view_window(
-                        &self.snapper,
-                        self.show_grid,
-                        self.snapper.grid_snap(),
-                        self.ortho_mode,
-                        self.polar_mode,
-                        self.snapper.otrack_enabled,
-                        self.isometric_drafting,
-                        self.iso_plane,
-                        self.snap_angle_deg,
-                        flow,
-                    )
-                },
-            ),
+            super::super::ModalKind::DraftingSettings => {
+                let state = self.drafting_settings_state.as_ref();
+                let dirty = self.drafting_settings_dirty();
+                let confirm = self.drafting_settings_close_confirm;
+                sized_flow(
+                    ex,
+                    700,
+                    480,
+                    |flow| {
+                        if let Some(state) = state {
+                            crate::ui::window::drafting_settings::view_window(
+                                state,
+                                dirty,
+                                confirm,
+                                flow,
+                            )
+                        } else {
+                            iced::widget::Space::new().into()
+                        }
+                    },
+                )
+            }
             super::super::ModalKind::FindReplace => automatic_flow(ex, |flow| {
                 crate::ui::window::find_replace::view_window(
                     &self.find_replace.search,

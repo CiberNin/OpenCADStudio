@@ -627,8 +627,8 @@ pub struct InteractionHandleIndex {
     handles: SpatialSet<u64>,
 }
 
-struct WireIndexEntries {
-    wire: Option<Entry3<u32>>,
+struct WireIndexBatch {
+    wire_entries: Vec<Entry3<u32>>,
     segments: Vec<Entry3<SegmentRef>>,
     snap_points: Vec<Entry3<SnapPointRef>>,
     key_vertices: Vec<Entry3<KeyVertexRef>>,
@@ -636,37 +636,64 @@ struct WireIndexEntries {
     fill_triangles: Vec<Entry3<TriangleRef>>,
     pick_triangles: Vec<Entry3<TriangleRef>>,
     glyphs: Vec<Entry3<GlyphRef>>,
-    unbounded: bool,
-    screen_unbounded: bool,
+    unbounded_wires: Vec<u32>,
+    screen_unbounded_wires: Vec<u32>,
     max_line_half_width_px: f32,
     max_marker_radius_fraction: f32,
 }
 
-fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntries {
-    let mut entries = WireIndexEntries {
-        wire: finite_wire_aabb3(wire).map(|aabb| Entry3 {
+impl WireIndexBatch {
+    fn with_capacity_for_chunk(chunk: &[WireModel]) -> Self {
+        let total_segs: usize = chunk.iter().map(|w| w.points.len().saturating_sub(1)).sum();
+        let total_snaps: usize = chunk.iter().map(|w| w.snap_pts.len()).sum();
+        let total_key_verts: usize = chunk.iter().map(|w| w.key_vertices.len()).sum();
+        let total_key_segs: usize = chunk
+            .iter()
+            .map(|w| w.key_vertices.len().saturating_sub(1))
+            .sum();
+        let total_fills: usize = chunk.iter().map(|w| w.fill_tris.len() / 3).sum();
+        let total_picks: usize = chunk.iter().map(|w| w.pick_tris.len() / 3).sum();
+        let total_glyphs: usize = chunk.iter().map(|w| w.text_verts.len() / 6).sum();
+
+        Self {
+            wire_entries: Vec::with_capacity(chunk.len()),
+            segments: Vec::with_capacity(total_segs),
+            snap_points: Vec::with_capacity(total_snaps),
+            key_vertices: Vec::with_capacity(total_key_verts),
+            key_segments: Vec::with_capacity(total_key_segs),
+            fill_triangles: Vec::with_capacity(total_fills),
+            pick_triangles: Vec::with_capacity(total_picks),
+            glyphs: Vec::with_capacity(total_glyphs),
+            unbounded_wires: Vec::new(),
+            screen_unbounded_wires: Vec::new(),
+            max_line_half_width_px: 0.0,
+            max_marker_radius_fraction: 0.0,
+        }
+    }
+}
+
+fn append_wire_index_entries(wire_idx: u32, wire: &WireModel, batch: &mut WireIndexBatch) {
+    if let Some(aabb) = finite_wire_aabb3(wire) {
+        batch.wire_entries.push(Entry3 {
             aabb,
             value: wire_idx,
-        }),
-        segments: Vec::with_capacity(wire.points.len().saturating_sub(1)),
-        snap_points: Vec::with_capacity(wire.snap_pts.len()),
-        key_vertices: Vec::with_capacity(wire.key_vertices.len()),
-        key_segments: Vec::with_capacity(wire.key_vertices.len().saturating_sub(1)),
-        fill_triangles: Vec::with_capacity(wire.fill_tris.len() / 3),
-        pick_triangles: Vec::with_capacity(wire.pick_tris.len() / 3),
-        glyphs: Vec::with_capacity(wire.text_verts.len() / 6),
-        unbounded: false,
-        screen_unbounded: wire.point_marker.is_some(),
-        max_line_half_width_px: if wire.line_weight_px.is_finite() {
-            (wire.line_weight_px * 0.5).max(0.0)
-        } else {
-            0.0
-        },
-        max_marker_radius_fraction: wire.point_marker.map_or(0.0, |marker| {
-            marker.viewport_percent.max(0.0) * 0.01 * std::f32::consts::SQRT_2
-        }),
-    };
-    entries.unbounded = entries.wire.is_none();
+        });
+    } else {
+        batch.unbounded_wires.push(wire_idx);
+    }
+    if wire.point_marker.is_some() {
+        batch.screen_unbounded_wires.push(wire_idx);
+    }
+    if wire.line_weight_px.is_finite() {
+        batch.max_line_half_width_px = batch
+            .max_line_half_width_px
+            .max((wire.line_weight_px * 0.5).max(0.0));
+    }
+    if let Some(marker) = wire.point_marker {
+        batch.max_marker_radius_fraction = batch.max_marker_radius_fraction.max(
+            marker.viewport_percent.max(0.0) * 0.01 * std::f32::consts::SQRT_2,
+        );
+    }
 
     if wire.point_marker.is_none() {
         for start in 0..wire.points.len().saturating_sub(1) {
@@ -676,7 +703,7 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
             ]) else {
                 continue;
             };
-            entries.segments.push(Entry3 {
+            batch.segments.push(Entry3 {
                 aabb,
                 value: SegmentRef {
                     wire: wire_idx,
@@ -687,7 +714,7 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
     }
     for (index, (point, _)) in wire.snap_pts.iter().enumerate() {
         if point.is_finite() {
-            entries.snap_points.push(Entry3 {
+            batch.snap_points.push(Entry3 {
                 aabb: [point.x, point.y, point.z, point.x, point.y, point.z],
                 value: SnapPointRef {
                     wire: wire_idx,
@@ -698,7 +725,7 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
     }
     for (index, &point) in wire.key_vertices.iter().enumerate() {
         if point.iter().all(|value| value.is_finite()) {
-            entries.key_vertices.push(Entry3 {
+            batch.key_vertices.push(Entry3 {
                 aabb: [point[0], point[1], point[2], point[0], point[1], point[2]],
                 value: KeyVertexRef {
                     wire: wire_idx,
@@ -713,7 +740,7 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
         else {
             continue;
         };
-        entries.key_segments.push(Entry3 {
+        batch.key_segments.push(Entry3 {
             aabb,
             value: KeySegmentRef {
                 wire: wire_idx,
@@ -725,13 +752,13 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
         wire_idx,
         &wire.fill_tris,
         &wire.fill_tris_low,
-        &mut entries.fill_triangles,
+        &mut batch.fill_triangles,
     );
     append_triangle_entries(
         wire_idx,
         &wire.pick_tris,
         &wire.pick_tris_low,
-        &mut entries.pick_triangles,
+        &mut batch.pick_triangles,
     );
     for start in (0..wire.text_verts.len()).step_by(6) {
         let Some(quad) = wire.text_verts.get(start..start + 6) else {
@@ -746,7 +773,7 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
         })) else {
             continue;
         };
-        entries.glyphs.push(Entry3 {
+        batch.glyphs.push(Entry3 {
             aabb,
             value: GlyphRef {
                 wire: wire_idx,
@@ -754,20 +781,6 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
             },
         });
     }
-    entries
-}
-
-fn flatten_entry_parts<T>(mut parts: Vec<Vec<T>>) -> Vec<T> {
-    let Some((largest, _)) = parts.iter().enumerate().max_by_key(|(_, part)| part.len()) else {
-        return Vec::new();
-    };
-    let mut output = parts.swap_remove(largest);
-    let remaining: usize = parts.iter().map(Vec::len).sum();
-    output.reserve(remaining);
-    for mut part in parts {
-        output.append(&mut part);
-    }
-    output
 }
 
 impl InteractionHandleIndex {
@@ -822,127 +835,105 @@ impl InteractionIndex {
         let perf = crate::perf::enabled();
         #[cfg(not(target_arch = "wasm32"))]
         let build_started = iced::time::Instant::now();
-        let wire_handles: Vec<Option<u64>> = wires
-            .iter()
-            .map(|wire| wire.name.parse::<u64>().ok())
-            .collect();
+        let n_wires = wires.len();
+        let mut wire_handles = Vec::with_capacity(n_wires);
+        let mut wire_ordinals = Vec::with_capacity(n_wires);
         let mut next_ordinal: rustc_hash::FxHashMap<u64, u32> =
-            rustc_hash::FxHashMap::default();
-        let wire_ordinals: Vec<Option<u32>> = wire_handles
-            .iter()
-            .map(|handle| {
-                let handle = (*handle)?;
-                let ordinal = next_ordinal.entry(handle).or_default();
-                let current = *ordinal;
-                *ordinal += 1;
-                Some(current)
-            })
-            .collect();
+            rustc_hash::FxHashMap::with_capacity_and_hasher(n_wires.min(4096), Default::default());
+        for wire in wires {
+            let handle = wire.name.parse::<u64>().ok();
+            wire_handles.push(handle);
+            wire_ordinals.push(handle.map(|h| {
+                let entry = next_ordinal.entry(h).or_default();
+                let ord = *entry;
+                *entry += 1;
+                ord
+            }));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let handles_elapsed = build_started.elapsed();
         #[cfg(not(target_arch = "wasm32"))]
         let collect_started = iced::time::Instant::now();
-        let mut wire_entries = Vec::with_capacity(wires.len());
-        let mut unbounded_wires = Vec::new();
-        let mut screen_unbounded_wires = Vec::new();
-        let mut max_line_half_width_px = 0.0f32;
-        let mut max_marker_radius_fraction = 0.0f32;
+
+        const CHUNK_SIZE: usize = 256;
 
         #[cfg(not(target_arch = "wasm32"))]
-        let per_wire: Vec<WireIndexEntries> = {
+        let batches: Vec<WireIndexBatch> = {
             use crate::par::prelude::*;
             wires
-                .par_iter()
+                .par_chunks(CHUNK_SIZE)
                 .enumerate()
-                .map(|(index, wire)| collect_wire_index_entries(index as u32, wire))
+                .map(|(chunk_idx, chunk)| {
+                    let mut batch = WireIndexBatch::with_capacity_for_chunk(chunk);
+                    let base_idx = (chunk_idx * CHUNK_SIZE) as u32;
+                    for (i, wire) in chunk.iter().enumerate() {
+                        append_wire_index_entries(base_idx + i as u32, wire, &mut batch);
+                    }
+                    batch
+                })
                 .collect()
         };
         #[cfg(target_arch = "wasm32")]
-        let per_wire: Vec<WireIndexEntries> = wires
-            .iter()
+        let batches: Vec<WireIndexBatch> = wires
+            .chunks(CHUNK_SIZE)
             .enumerate()
-            .map(|(index, wire)| collect_wire_index_entries(index as u32, wire))
+            .map(|(chunk_idx, chunk)| {
+                let mut batch = WireIndexBatch::with_capacity_for_chunk(chunk);
+                let base_idx = (chunk_idx * CHUNK_SIZE) as u32;
+                for (i, wire) in chunk.iter().enumerate() {
+                    append_wire_index_entries(base_idx + i as u32, wire, &mut batch);
+                }
+                batch
+            })
             .collect();
+
         #[cfg(not(target_arch = "wasm32"))]
         let collect_elapsed = collect_started.elapsed();
         #[cfg(not(target_arch = "wasm32"))]
         let flatten_started = iced::time::Instant::now();
-        let mut segment_parts = Vec::with_capacity(per_wire.len());
-        let mut snap_point_parts = Vec::with_capacity(per_wire.len());
-        let mut key_vertex_parts = Vec::with_capacity(per_wire.len());
-        let mut key_segment_parts = Vec::with_capacity(per_wire.len());
-        let mut fill_triangle_parts = Vec::with_capacity(per_wire.len());
-        let mut pick_triangle_parts = Vec::with_capacity(per_wire.len());
-        let mut glyph_parts = Vec::with_capacity(per_wire.len());
-        for (wire_idx, entries) in per_wire.into_iter().enumerate() {
+
+        let total_wires: usize = batches.iter().map(|b| b.wire_entries.len()).sum();
+        let total_segments: usize = batches.iter().map(|b| b.segments.len()).sum();
+        let total_snaps: usize = batches.iter().map(|b| b.snap_points.len()).sum();
+        let total_key_verts: usize = batches.iter().map(|b| b.key_vertices.len()).sum();
+        let total_key_segs: usize = batches.iter().map(|b| b.key_segments.len()).sum();
+        let total_fills: usize = batches.iter().map(|b| b.fill_triangles.len()).sum();
+        let total_picks: usize = batches.iter().map(|b| b.pick_triangles.len()).sum();
+        let total_glyphs: usize = batches.iter().map(|b| b.glyphs.len()).sum();
+        let total_unbounded: usize = batches.iter().map(|b| b.unbounded_wires.len()).sum();
+        let total_screen_unbounded: usize =
+            batches.iter().map(|b| b.screen_unbounded_wires.len()).sum();
+
+        let mut wire_entries = Vec::with_capacity(total_wires);
+        let mut segment_entries = Vec::with_capacity(total_segments);
+        let mut snap_point_entries = Vec::with_capacity(total_snaps);
+        let mut key_vertex_entries = Vec::with_capacity(total_key_verts);
+        let mut key_segment_entries = Vec::with_capacity(total_key_segs);
+        let mut fill_triangle_entries = Vec::with_capacity(total_fills);
+        let mut pick_triangle_entries = Vec::with_capacity(total_picks);
+        let mut glyph_entries = Vec::with_capacity(total_glyphs);
+        let mut unbounded_wires = Vec::with_capacity(total_unbounded);
+        let mut screen_unbounded_wires = Vec::with_capacity(total_screen_unbounded);
+        let mut max_line_half_width_px = 0.0f32;
+        let mut max_marker_radius_fraction = 0.0f32;
+
+        for mut batch in batches {
             max_line_half_width_px =
-                max_line_half_width_px.max(entries.max_line_half_width_px);
+                max_line_half_width_px.max(batch.max_line_half_width_px);
             max_marker_radius_fraction =
-                max_marker_radius_fraction.max(entries.max_marker_radius_fraction);
-            if let Some(entry) = entries.wire {
-                wire_entries.push(entry);
-            }
-            if entries.unbounded {
-                unbounded_wires.push(wire_idx as u32);
-            }
-            if entries.screen_unbounded {
-                screen_unbounded_wires.push(wire_idx as u32);
-            }
-            segment_parts.push(entries.segments);
-            snap_point_parts.push(entries.snap_points);
-            key_vertex_parts.push(entries.key_vertices);
-            key_segment_parts.push(entries.key_segments);
-            fill_triangle_parts.push(entries.fill_triangles);
-            pick_triangle_parts.push(entries.pick_triangles);
-            glyph_parts.push(entries.glyphs);
+                max_marker_radius_fraction.max(batch.max_marker_radius_fraction);
+            wire_entries.append(&mut batch.wire_entries);
+            segment_entries.append(&mut batch.segments);
+            snap_point_entries.append(&mut batch.snap_points);
+            key_vertex_entries.append(&mut batch.key_vertices);
+            key_segment_entries.append(&mut batch.key_segments);
+            fill_triangle_entries.append(&mut batch.fill_triangles);
+            pick_triangle_entries.append(&mut batch.pick_triangles);
+            glyph_entries.append(&mut batch.glyphs);
+            unbounded_wires.append(&mut batch.unbounded_wires);
+            screen_unbounded_wires.append(&mut batch.screen_unbounded_wires);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let (
-            ((segment_entries, snap_point_entries), (key_vertex_entries, key_segment_entries)),
-            ((fill_triangle_entries, pick_triangle_entries), glyph_entries),
-        ) = crate::par::join(
-            || {
-                crate::par::join(
-                    || {
-                        crate::par::join(
-                            || flatten_entry_parts(segment_parts),
-                            || flatten_entry_parts(snap_point_parts),
-                        )
-                    },
-                    || {
-                        crate::par::join(
-                            || flatten_entry_parts(key_vertex_parts),
-                            || flatten_entry_parts(key_segment_parts),
-                        )
-                    },
-                )
-            },
-            || {
-                let (fill, pick) = crate::par::join(
-                    || flatten_entry_parts(fill_triangle_parts),
-                    || flatten_entry_parts(pick_triangle_parts),
-                );
-                ((fill, pick), flatten_entry_parts(glyph_parts))
-            },
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (
-            segment_entries,
-            snap_point_entries,
-            key_vertex_entries,
-            key_segment_entries,
-            fill_triangle_entries,
-            pick_triangle_entries,
-            glyph_entries,
-        ) = (
-            flatten_entry_parts(segment_parts),
-            flatten_entry_parts(snap_point_parts),
-            flatten_entry_parts(key_vertex_parts),
-            flatten_entry_parts(key_segment_parts),
-            flatten_entry_parts(fill_triangle_parts),
-            flatten_entry_parts(pick_triangle_parts),
-            flatten_entry_parts(glyph_parts),
-        );
+
         #[cfg(not(target_arch = "wasm32"))]
         let flatten_elapsed = flatten_started.elapsed();
         #[cfg(not(target_arch = "wasm32"))]
