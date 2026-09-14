@@ -64,6 +64,21 @@ pub enum GripEditMode {
     MoveParallel,
 }
 
+impl GripEditMode {
+    /// Whether typed text belongs in the grip's single dynamic-input field.
+    pub fn uses_scalar_dynamic_input(self) -> bool {
+        matches!(
+            self,
+            Self::Lengthen
+                | Self::Radius
+                | Self::ArcLength
+                | Self::RectangleWidth
+                | Self::RectangleHeight
+                | Self::MoveParallel
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GripTarget {
     pub handle: Handle,
@@ -348,4 +363,17 @@ pub fn find_hit_grip_rte(
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GripEditMode;
+
+    #[test]
+    fn scalar_dynamic_input_modes_include_move_parallel() {
+        assert!(GripEditMode::MoveParallel.uses_scalar_dynamic_input());
+        assert!(GripEditMode::Radius.uses_scalar_dynamic_input());
+        assert!(!GripEditMode::Stretch.uses_scalar_dynamic_input());
+        assert!(!GripEditMode::RectangleResize.uses_scalar_dynamic_input());
+    }
 }

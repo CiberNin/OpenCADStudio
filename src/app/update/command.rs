@@ -203,17 +203,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             .buffer
                             .get_or_insert_with(String::new)
                             .push_str(&s);
-                        if self.tabs[i].active_grip.as_ref().is_some_and(|grip| {
-                            matches!(
-                                grip.mode,
-                                GripEditMode::Lengthen
-                                    | GripEditMode::Radius
-                                    | GripEditMode::ArcLength
-                                    | GripEditMode::RectangleWidth
-                                    | GripEditMode::RectangleHeight
-                                    | GripEditMode::MoveParallel
-                            )
-                        }) {
+                        if self.tabs[i]
+                            .active_grip
+                            .as_ref()
+                            .is_some_and(|grip| grip.mode.uses_scalar_dynamic_input())
+                        {
                             self.command_line.input.push_str(&s);
                         }
                     } else {
@@ -259,17 +253,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         if buf.is_empty() {
                             self.tabs[i].dyn_fields[a].buffer = None;
                         }
-                        if self.tabs[i].active_grip.as_ref().is_some_and(|grip| {
-                            matches!(
-                                grip.mode,
-                                GripEditMode::Lengthen
-                                    | GripEditMode::Radius
-                                    | GripEditMode::ArcLength
-                                    | GripEditMode::RectangleWidth
-                                    | GripEditMode::RectangleHeight
-                                    | GripEditMode::MoveParallel
-                            )
-                        }) {
+                        if self.tabs[i]
+                            .active_grip
+                            .as_ref()
+                            .is_some_and(|grip| grip.mode.uses_scalar_dynamic_input())
+                        {
                             self.command_line.input.pop();
                         }
                         return self.focus_cmd_input();

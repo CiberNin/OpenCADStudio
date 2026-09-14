@@ -1609,16 +1609,10 @@ impl OpenCADStudio {
                 self.command_line.input = live_input.clone();
                 let i = self.active_tab;
                 if self.dyn_input
-                    && self.tabs[i].active_grip.as_ref().is_some_and(|grip| {
-                        matches!(
-                            grip.mode,
-                            crate::scene::pick::grip::GripEditMode::Lengthen
-                                | crate::scene::pick::grip::GripEditMode::Radius
-                                | crate::scene::pick::grip::GripEditMode::ArcLength
-                                | crate::scene::pick::grip::GripEditMode::RectangleWidth
-                                | crate::scene::pick::grip::GripEditMode::RectangleHeight
-                        )
-                    })
+                    && self.tabs[i]
+                        .active_grip
+                        .as_ref()
+                        .is_some_and(|grip| grip.mode.uses_scalar_dynamic_input())
                     && !self.tabs[i].dyn_fields.is_empty()
                 {
                     let a = self.tabs[i]
