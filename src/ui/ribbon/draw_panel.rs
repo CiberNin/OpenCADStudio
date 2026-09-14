@@ -140,6 +140,12 @@ const PANELS: &[Panel] = &[
         title: "Modify",
         tools: super::modify_panel::TOOLS,
     },
+    Panel {
+        id: "annotation_extension",
+        title_id: "annotation_extension_title",
+        title: "Annotation",
+        tools: super::annotation_panel::TOOLS,
+    },
 ];
 
 fn panel_for_dropdown(id: &str) -> Option<Panel> {
