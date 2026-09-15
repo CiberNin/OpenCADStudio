@@ -1669,4 +1669,15 @@ mod tests {
             Some("MTP")
         );
     }
+
+    #[test]
+    fn test_open_color_dropdown() {
+        use crate::app::Message;
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let wid = app.main_window.unwrap_or_else(iced::window::Id::unique);
+        let _ = app.view(wid);
+        let _ = app.update(Message::ToggleRibbonDropdown("PROP_COLOR".to_string()));
+        let _ = app.view(wid);
+    }
 }

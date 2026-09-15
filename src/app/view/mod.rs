@@ -2218,6 +2218,7 @@ bg={bg_ms:.1}ms n={view_count}"
                 &history_dropdown_labels(&self.tabs[self.active_tab].history.redo_stack),
                 self.win_size,
                 self.tabs[self.active_tab].is_start,
+                &self.recent_colors,
             )
             .unwrap_or_else(|| iced::widget::Space::new().width(0).height(0).into());
 

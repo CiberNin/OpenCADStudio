@@ -9131,24 +9131,27 @@ impl OpenCADStudio {
             }
 
             Message::ColorWindowPick(color) => {
-                // Keep only real colours in the recent list. ByLayer / ByBlock / None
-                // are logical CAD states rather than reusable colours.
-                if matches!(
-                    &color,
-                    acadrust::types::Color::Index(_) | acadrust::types::Color::Rgb { .. }
-                ) {
-                    // No duplicates: selecting an existing colour moves it to the front.
-                    if let Some(pos) = self.recent_colors.iter().position(|c| c == &color) {
-                        self.recent_colors.remove(pos);
-                    }
-
-                    self.recent_colors.insert(0, color.clone());
-                    self.recent_colors.truncate(12);
-                }
-
+                self.note_recent_color(color);
                 self.on_color_window_pick(color)
             }
             Message::DsSetHandle { field, value } => self.on_ds_set_handle(field, value),
+        }
+    }
+
+    pub(crate) fn note_recent_color(&mut self, color: acadrust::types::Color) {
+        // Keep only real colours in the recent list. ByLayer / ByBlock / None
+        // are logical CAD states rather than reusable colours.
+        if matches!(
+            &color,
+            acadrust::types::Color::Index(_) | acadrust::types::Color::Rgb { .. }
+        ) {
+            // No duplicates: selecting an existing colour moves it to the front.
+            if let Some(pos) = self.recent_colors.iter().position(|c| c == &color) {
+                self.recent_colors.remove(pos);
+            }
+
+            self.recent_colors.insert(0, color);
+            self.recent_colors.truncate(12);
         }
     }
 

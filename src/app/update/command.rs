@@ -1999,10 +1999,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     }
 
     pub(super) fn on_ribbon_color_changed(&mut self, color: AcadColor) -> Task<Message> {
-                let i = self.active_tab;
-                self.ribbon.prop_color_palette_open = false;
-                self.ribbon.close_dropdown();
-                let handles = self.property_target_handles(i);
+        let i = self.active_tab;
+        self.ribbon.prop_color_palette_open = false;
+        self.ribbon.close_dropdown();
+        self.note_recent_color(color);
+        let handles = self.property_target_handles(i);
                 if handles.is_empty() {
                     if self.has_property_selection(i) {
                         return Task::none();
