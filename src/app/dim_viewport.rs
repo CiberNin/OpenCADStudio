@@ -208,7 +208,9 @@ impl OpenCADStudio {
         i: usize,
         dimension: Handle,
     ) -> Vec<Option<AcceptedSnap>> {
-        let slots = self.tabs[i].scene.dimension_association_slot_points(dimension);
+        let slots = self.tabs[i]
+            .scene
+            .dimension_association_slot_points(dimension);
         if slots.is_empty() {
             return Vec::new();
         }
@@ -220,7 +222,12 @@ impl OpenCADStudio {
                 let snap = measuring.get(index)?.clone();
                 let frame = snap.frame?;
                 let slot = DVec3::new(slot.x, slot.y, slot.z);
-                if snap.paper_point.truncate().distance_squared(slot.truncate()) <= 1e-12 {
+                if snap
+                    .paper_point
+                    .truncate()
+                    .distance_squared(slot.truncate())
+                    <= 1e-12
+                {
                     return Some(snap);
                 }
                 Some(AcceptedSnap {
@@ -235,9 +242,8 @@ impl OpenCADStudio {
     /// Record the viewport association for a dimension that has just been
     /// committed while measuring through a layout viewport.
     ///
-    /// Announces the whole chain — the viewport, every INSERT on the block
-    /// path and the source entity — so the dependency index picks the new
-    /// association up immediately.
+    /// The stored reference chains establish dependencies. Only the new
+    /// dimension needs a render update; its sources have not changed.
     pub(crate) fn attach_viewport_dimension_association(&mut self, i: usize, dimension: Handle) {
         let snaps = self.viewport_dimension_snaps(i, dimension);
         if snaps.iter().flatten().all(|snap| snap.source.is_none()) {
@@ -246,17 +252,8 @@ impl OpenCADStudio {
         self.tabs[i]
             .scene
             .attach_viewport_dimension_association(dimension, &snaps);
-        let mut changes = vec![(dimension, crate::scene::ChangeKind::Modified)];
-        changes.extend(
-            self.tabs[i]
-                .scene
-                .dimension_association_sources(dimension)
-                .into_iter()
-                .map(|handle| (handle, crate::scene::ChangeKind::Modified)),
-        );
-        changes.sort_by_key(|(handle, _)| handle.value());
-        changes.dedup_by_key(|(handle, _)| handle.value());
-        self.tabs[i].scene.bump_entities(&changes);
+        self.tabs[i]
+            .scene
+            .bump_entities(&[(dimension, crate::scene::ChangeKind::Modified)]);
     }
-
 }

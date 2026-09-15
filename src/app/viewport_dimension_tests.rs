@@ -239,11 +239,20 @@ fn viewport_dimension_linear_aligned_and_radial_object_picks() {
 #[test]
 fn viewport_dimension_angular_preserves_angle_without_length_factor() {
     let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    app.tabs[i].scene.set_current_layout("Model".into());
+    let vertical = app.tabs[i]
+        .scene
+        .add_entity(EntityType::Line(Line::from_points(
+            Vector3::ZERO,
+            Vector3::new(0.0, 100.0, 0.0),
+        )));
+    app.tabs[i].scene.set_current_layout("Dimensions".into());
     let _ = app.dispatch_command("DIMANGULAR");
     let _ = app.feed_command(StepInput::Enter);
     point(&mut app, frame, line, DVec3::ZERO);
     point(&mut app, frame, line, DVec3::X * 100.0);
-    point(&mut app, frame, line, DVec3::Y * 100.0);
+    point(&mut app, frame, vertical, DVec3::Y * 100.0);
     let _ = app.feed_command(StepInput::Point(DVec3::new(70.0, 70.0, 0.0)));
     let doc = &app.tabs[app.active_tab].scene.document;
     assert!((dimension(doc).measurement() - 90.0).abs() < 1e-5);
@@ -376,4 +385,713 @@ fn viewport_dimension_exploded_commit_uses_compensated_text_and_undo() {
         .document
         .entities()
         .any(|e| matches!(e, EntityType::Text(_) | EntityType::MText(_))));
+}
+
+#[test]
+fn viewport_dimension_association_scale_edit_picture_and_history() {
+    use crate::scene::ChangeKind;
+    let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    finish_aligned(&mut app, line, frame);
+    let handle = dimension(&app.tabs[i].scene.document).base().common.handle;
+    assert_eq!(
+        app.tabs[i].scene.dimension_association_status(handle).len(),
+        2
+    );
+    let Some(EntityType::Dimension(d)) = app.tabs[i].scene.document.get_entity_mut(handle) else {
+        panic!()
+    };
+    d.base_mut().text_user_positioned = true;
+    d.base_mut().text_middle_point = Vector3::new(250.0, 200.0, 0.0);
+    d.base_mut().block_name = "*SavedPicture".into();
+    let pending = app.begin_undo(i, "Viewport scale", 1, true).unwrap();
+    let before = app.tabs[i].scene.document.get_entity_arc(frame.viewport);
+    app.tabs[i].scene.record_undo_before(frame.viewport, before);
+    let Some(EntityType::Viewport(vp)) = app.tabs[i].scene.document.get_entity_mut(frame.viewport)
+    else {
+        panic!()
+    };
+    vp.view_height = 500.0;
+    vp.custom_scale = 0.2;
+    app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+    app.commit_undo_delta(i, pending);
+    assert!((displayed(&app.tabs[i].scene.document) - 100.0).abs() < 1e-5);
+    assert!((dimension(&app.tabs[i].scene.document).measurement() - 20.0).abs() < 1e-5);
+    assert!(dimension(&app.tabs[i].scene.document)
+        .base()
+        .block_name
+        .is_empty());
+    assert_eq!(
+        dimension(&app.tabs[i].scene.document)
+            .base()
+            .text_middle_point,
+        Vector3::new(250.0, 200.0, 0.0)
+    );
+    app.undo_steps(1);
+    assert!((dimension(&app.tabs[i].scene.document).measurement() - 10.0).abs() < 1e-5);
+    assert_eq!(
+        dimension(&app.tabs[i].scene.document).base().block_name,
+        "*SavedPicture"
+    );
+    app.redo_steps(1);
+    assert!((displayed(&app.tabs[i].scene.document) - 100.0).abs() < 1e-5);
+    let pending = app.begin_undo(i, "Edit source", 1, true).unwrap();
+    let before = app.tabs[i].scene.document.get_entity_arc(line);
+    app.tabs[i].scene.record_undo_before(line, before);
+    let Some(EntityType::Line(source)) = app.tabs[i].scene.document.get_entity_mut(line) else {
+        panic!()
+    };
+    source.end.x = 175.0;
+    app.tabs[i]
+        .scene
+        .bump_entities(&[(line, ChangeKind::Modified)]);
+    app.commit_undo_delta(i, pending);
+    assert!((displayed(&app.tabs[i].scene.document) - 175.0).abs() < 1e-5);
+    let pieces = crate::modules::draw::modify::explode::explode_entity(
+        app.tabs[i].scene.document.get_entity(handle).unwrap(),
+        &app.tabs[i].scene.document,
+    );
+    assert!(
+        pieces.iter().any(
+            |e| matches!(e,EntityType::Text(t) if t.value.contains("175"))
+                || matches!(e,EntityType::MText(t) if t.value.contains("175"))
+        ),
+        "{pieces:?}"
+    );
+    for ext in ["dxf", "dwg"] {
+        let doc = &app.tabs[i].scene.document;
+        let bytes = crate::io::save_to_bytes(doc, ext, doc.version).unwrap();
+        let mut loaded = Scene::new();
+        loaded.document = crate::io::load_bytes(&format!("assoc.{ext}"), bytes).unwrap();
+        loaded.notify_viewport_changed(frame.viewport);
+        assert!((displayed(&loaded.document) - 175.0).abs() < 1e-5, "{ext}");
+        assert_eq!(loaded.dimension_association_status(handle).len(), 2);
+    }
+    app.undo_steps(1);
+    assert!((displayed(&app.tabs[i].scene.document) - 100.0).abs() < 1e-5);
+}
+
+#[test]
+fn viewport_dimension_unsupported_and_erased_sources_keep_last_picture() {
+    use crate::scene::dimension_assoc::{resolve_reference_chain, ReferenceStatus};
+    use acadrust::objects::AssocDimensionReference;
+    let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    finish_aligned(&mut app, line, frame);
+    let handle = dimension(&app.tabs[i].scene.document).base().common.handle;
+    let reference = AssocDimensionReference {
+        xrefs: vec![frame.viewport, line],
+        osnap_type: 255,
+        ..Default::default()
+    };
+    assert!(matches!(
+        resolve_reference_chain(&app.tabs[i].scene, &reference, None),
+        Err(ReferenceStatus::Unresolved)
+    ));
+    let previous = app.tabs[i]
+        .scene
+        .document
+        .get_entity(handle)
+        .unwrap()
+        .clone();
+    let Some(EntityType::Viewport(vp)) = app.tabs[i].scene.document.get_entity_mut(frame.viewport)
+    else {
+        panic!()
+    };
+    vp.status.perspective = true;
+    app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+    assert_eq!(
+        app.tabs[i].scene.document.get_entity(handle).unwrap(),
+        &previous
+    );
+    assert!(app.tabs[i]
+        .scene
+        .dimension_association_status(handle)
+        .iter()
+        .all(|(_, s)| *s == ReferenceStatus::Unresolved));
+    let Some(EntityType::Viewport(vp)) = app.tabs[i].scene.document.get_entity_mut(frame.viewport)
+    else {
+        panic!()
+    };
+    vp.status.perspective = false;
+    let pending = app.begin_undo(i, "Erase source", 1, false).unwrap();
+    app.tabs[i].scene.erase_entities(&[line]);
+    app.commit_undo_delta(i, pending);
+    assert_eq!(
+        app.tabs[i].scene.document.get_entity(handle).unwrap(),
+        &previous
+    );
+    assert!(app.tabs[i]
+        .scene
+        .dimension_association_status(handle)
+        .iter()
+        .all(|(_, s)| *s == ReferenceStatus::Broken(line)));
+    app.undo_steps(1);
+    assert!(app.tabs[i]
+        .scene
+        .dimension_association_status(handle)
+        .iter()
+        .all(|(_, s)| *s == ReferenceStatus::Resolved));
+}
+
+#[test]
+fn viewport_dimension_intersection_tracks_both_entities() {
+    use crate::scene::ChangeKind;
+    let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    app.tabs[i].scene.set_current_layout("Model".into());
+    let other = app.tabs[i]
+        .scene
+        .add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(60.0, -50.0, 0.0),
+            Vector3::new(60.0, 50.0, 0.0),
+        )));
+    app.tabs[i].scene.set_current_layout("Dimensions".into());
+    let _ = app.dispatch_command("DIMALIGNED");
+    point(&mut app, frame, line, DVec3::ZERO);
+    let mut intersection = hit(frame, line, DVec3::X * 60.0);
+    intersection.snap_type = SnapType::Intersection;
+    intersection.secondary_source = Some(DimensionAssociationSource::inferred(other));
+    assert!(app.record_accepted_snap(i, Some(intersection), Some(frame), intersection.world));
+    let result = app.tabs[i]
+        .active_cmd
+        .as_mut()
+        .unwrap()
+        .on_point(intersection.world);
+    app.sync_dimension_snaps(i);
+    let _ = app.apply_cmd_result(result);
+    let _ = app.feed_command(StepInput::Point(DVec3::new(80.0, 80.0, 0.0)));
+    let handle = dimension(&app.tabs[i].scene.document).base().common.handle;
+    assert!(app.tabs[i]
+        .scene
+        .dimension_association_sources(handle)
+        .contains(&other));
+    assert!((displayed(&app.tabs[i].scene.document) - 60.0).abs() < 1e-5);
+    let Some(EntityType::Line(source)) = app.tabs[i].scene.document.get_entity_mut(other) else {
+        panic!()
+    };
+    source.start.x = 80.0;
+    source.end.x = 80.0;
+    app.tabs[i]
+        .scene
+        .bump_entities(&[(other, ChangeKind::Modified)]);
+    assert!((displayed(&app.tabs[i].scene.document) - 80.0).abs() < 1e-5);
+}
+
+#[test]
+fn viewport_dimension_spline_tangency_is_parallel_and_validated() {
+    use crate::scene::dimension_assoc_chain::{feature_point, osnap, FeatureContext};
+    use acadrust::objects::AssocDimensionReference;
+    let mut spline = acadrust::entities::Spline::new();
+    spline.degree = 2;
+    spline.control_points = vec![
+        Vector3::ZERO,
+        Vector3::new(0.5, 0.0, 0.0),
+        Vector3::new(1.0, 1.0, 0.0),
+    ];
+    spline.knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let entity = EntityType::Spline(spline);
+    let reference = AssocDimensionReference {
+        osnap_type: osnap::TAN,
+        osnap_distance: 0.8,
+        ..Default::default()
+    };
+    let result = feature_point(
+        &CadDocument::new(),
+        &entity,
+        &reference,
+        FeatureContext {
+            hint: Some(Vector3::new(1.0, 1.0, 0.0)),
+            from: Some(Vector3::new(0.0, -1.0, 0.0)),
+        },
+    )
+    .unwrap();
+    assert!(
+        (result.x - 1.0).abs() < 1e-6 && (result.y - 1.0).abs() < 1e-6,
+        "{result:?}"
+    );
+    assert!(feature_point(
+        &CadDocument::new(),
+        &entity,
+        &reference,
+        FeatureContext {
+            hint: None,
+            from: Some(Vector3::new(0.0, 1.0, 0.0))
+        }
+    )
+    .is_none());
+}
+
+#[test]
+#[ignore = "Set OPENCAD_VIEWPORT_REGRESSION_DXF to the original local regression drawing"]
+fn viewport_dimension_original_drawing_keeps_unchanged_measurements() {
+    use crate::scene::ChangeKind;
+    let path = std::env::var("OPENCAD_VIEWPORT_REGRESSION_DXF").expect("regression drawing path");
+    let doc = acadrust::DxfReader::from_file(std::path::Path::new(&path))
+        .unwrap()
+        .read()
+        .unwrap();
+    let mut scene = Scene::new();
+    scene.document = doc;
+    let dimensions: Vec<_> = scene
+        .document
+        .entities()
+        .filter_map(|entity| match entity {
+            EntityType::Dimension(dim) => {
+                Some((dim.base().common.handle, dim.base().actual_measurement))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut sources: Vec<_> = dimensions
+        .iter()
+        .flat_map(|(h, _)| scene.dimension_association_sources(*h))
+        .collect();
+    sources.sort();
+    sources.dedup();
+    scene.bump_entities(
+        &sources
+            .into_iter()
+            .map(|h| (h, ChangeKind::Modified))
+            .collect::<Vec<_>>(),
+    );
+    for (handle, saved) in dimensions {
+        if scene.dimension_association_status(handle).is_empty() {
+            continue;
+        }
+        let EntityType::Dimension(dim) = scene.document.get_entity(handle).unwrap() else {
+            panic!()
+        };
+        let factor = dim_override::real(&dim.base().common.extended_data, dim_override::DIMLFAC)
+            .unwrap_or(1.0)
+            .abs();
+        let result = dim.measurement() * factor;
+        println!(
+            "{:X}: saved={saved:.9}, current={result:.9}, status={:?}",
+            handle.value(),
+            scene.dimension_association_status(handle)
+        );
+        assert!(
+            (result - saved).abs() < 1e-3,
+            "{:X}: {saved} -> {result}",
+            handle.value()
+        );
+    }
+}
+
+#[test]
+fn viewport_dimension_fixture_regenerates_and_tracks_an_intersection() {
+    use crate::scene::ChangeKind;
+    let bytes = include_bytes!("../../tests/fixtures/dim_assoc/viewport_associations.dxf").to_vec();
+    let mut scene = Scene::new();
+    scene.document = crate::io::load_bytes("viewport_associations.dxf", bytes).unwrap();
+    scene.notify_viewport_changed(Handle::new(0x200));
+    // The cubic's tangent from (0,300) touches at u=.75, C=(90,283.125).
+    let EntityType::Spline(spline) = scene.document.get_entity(Handle::new(0x104)).unwrap() else {
+        panic!()
+    };
+    let curve = crate::entities::spline::nurbs3(spline).unwrap();
+    let c = DVec3::from_array(curve.point_at_knot(0.75));
+    let tangent = DVec3::from_array(curve.derivative_at_knot(0.75));
+    assert!((c - DVec3::new(0.0, 300.0, 0.0)).cross(tangent).length() < 1e-8);
+    let measured = |scene: &Scene, handle| {
+        let EntityType::Dimension(d) = scene.document.get_entity(Handle::new(handle)).unwrap()
+        else {
+            panic!()
+        };
+        d.measurement()
+            * dim_override::real(&d.base().common.extended_data, dim_override::DIMLFAC)
+                .unwrap_or(1.0)
+                .abs()
+    };
+    for (handle, expected) in [
+        (0x201, 100.0),
+        (0x202, 50.0),
+        (0x203, 35.355339),
+        (0x204, 141.421356),
+        (0x205, 90.0_f64.hypot(16.875)),
+        (0x206, 80.0),
+        (0x207, 60.0),
+    ] {
+        assert!(
+            (measured(&scene, handle) - expected).abs() < 1e-4,
+            "{handle:X}: {}",
+            measured(&scene, handle)
+        );
+    }
+    let Some(EntityType::Line(line)) = scene.document.get_entity_mut(Handle::new(0x107)) else {
+        panic!()
+    };
+    line.start.x = 80.0;
+    line.end.x = 80.0;
+    scene.bump_entities(&[(Handle::new(0x107), ChangeKind::Modified)]);
+    assert!((measured(&scene, 0x207) - 80.0).abs() < 1e-5);
+    let before = scene
+        .document
+        .get_entity(Handle::new(0x205))
+        .unwrap()
+        .clone();
+    for types in [(1, 255), (8, 9)] {
+        let acadrust::objects::ObjectType::Associative(object) =
+            scene.document.objects.get_mut(&Handle::new(0x304)).unwrap()
+        else {
+            panic!()
+        };
+        let acadrust::objects::AssociativeData::DimensionAssociation(assoc) = &mut object.data
+        else {
+            panic!()
+        };
+        assoc.references[0][0].osnap_type = types.0;
+        assoc.references[1][0].osnap_type = types.1;
+        scene.notify_viewport_changed(Handle::new(0x200));
+        assert_eq!(
+            scene.document.get_entity(Handle::new(0x205)).unwrap(),
+            &before
+        );
+        assert!(scene
+            .dimension_association_status(Handle::new(0x205))
+            .iter()
+            .any(|(_, s)| *s == crate::scene::ReferenceStatus::Unresolved));
+    }
+}
+
+#[test]
+fn viewport_dimension_nearest_parameter_survives_source_stretch() {
+    use crate::scene::ChangeKind;
+    let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    let _ = app.dispatch_command("DIMALIGNED");
+    point(&mut app, frame, line, DVec3::ZERO);
+    let mut near = hit(frame, line, DVec3::X * 75.0);
+    near.snap_type = SnapType::Nearest;
+    assert!(app.record_accepted_snap(i, Some(near), Some(frame), near.world));
+    let result = app.tabs[i]
+        .active_cmd
+        .as_mut()
+        .unwrap()
+        .on_point(near.world);
+    app.sync_dimension_snaps(i);
+    let _ = app.apply_cmd_result(result);
+    let _ = app.feed_command(StepInput::Point(DVec3::new(55.0, 80.0, 0.0)));
+    assert!((displayed(&app.tabs[i].scene.document) - 75.0).abs() < 1e-5);
+    let Some(EntityType::Line(source)) = app.tabs[i].scene.document.get_entity_mut(line) else {
+        panic!()
+    };
+    source.end.x = 200.0;
+    app.tabs[i]
+        .scene
+        .bump_entities(&[(line, ChangeKind::Modified)]);
+    assert!((displayed(&app.tabs[i].scene.document) - 150.0).abs() < 1e-5);
+}
+
+#[test]
+fn viewport_dimension_nested_block_path_survives_edit_and_copy() {
+    use crate::scene::ChangeKind;
+    use acadrust::entities::Insert;
+    use acadrust::tables::BlockRecord;
+    let (mut app, _, frame) = fixture();
+    let i = app.active_tab;
+    let scene = &mut app.tabs[i].scene;
+    let mut inner = BlockRecord::new("Inner");
+    inner.handle = scene.document.allocate_handle();
+    let inner_h = inner.handle;
+    scene.document.block_records.add(inner).unwrap();
+    let mut leaf = Line::from_points(Vector3::ZERO, Vector3::new(20.0, 0.0, 0.0));
+    leaf.common.owner_handle = inner_h;
+    let leaf = scene.document.add_entity(EntityType::Line(leaf)).unwrap();
+    let mut outer = BlockRecord::new("Outer");
+    outer.handle = scene.document.allocate_handle();
+    let outer_h = outer.handle;
+    scene.document.block_records.add(outer).unwrap();
+    let mut nested = Insert::new("Inner", Vector3::new(30.0, 0.0, 0.0));
+    nested.common.owner_handle = outer_h;
+    nested.set_x_scale(3.0);
+    nested.set_y_scale(3.0);
+    nested.rotation = 0.4;
+    let nested = scene
+        .document
+        .add_entity(EntityType::Insert(nested))
+        .unwrap();
+    scene.set_current_layout("Model".into());
+    let mut root = Insert::new("Outer", Vector3::new(20.0, 50.0, 0.0));
+    root.set_x_scale(2.0);
+    root.set_y_scale(2.0);
+    root.rotation = 0.3;
+    let root = scene.add_entity(EntityType::Insert(root));
+    scene.set_current_layout("Dimensions".into());
+    let transform =
+        crate::scene::dimension_assoc_chain::block_transform(&scene.document, &[root, nested]);
+    let model = |x| {
+        let v = transform.apply(Vector3::new(x, 0.0, 0.0));
+        DVec3::new(v.x, v.y, v.z)
+    };
+    let _ = app.dispatch_command("DIMALIGNED");
+    point(&mut app, frame, root, model(0.0));
+    let accepted = app.accepted_snaps()[0].source.as_ref().unwrap();
+    assert_eq!(accepted.source.handle, leaf);
+    assert_eq!(accepted.block_path, vec![root, nested]);
+    point(&mut app, frame, root, model(20.0));
+    let _ = app.feed_command(StepInput::Point(DVec3::new(90.0, 90.0, 0.0)));
+    let handle = dimension(&app.tabs[i].scene.document).base().common.handle;
+    assert!((displayed(&app.tabs[i].scene.document) - 120.0).abs() < 1e-5);
+    let Some(EntityType::Line(source)) = app.tabs[i].scene.document.get_entity_mut(leaf) else {
+        panic!()
+    };
+    source.end.x = 40.0;
+    app.tabs[i]
+        .scene
+        .bump_entities(&[(leaf, ChangeKind::Modified)]);
+    assert!((displayed(&app.tabs[i].scene.document) - 240.0).abs() < 1e-5);
+    let copied = app.tabs[i].scene.copy_entities(
+        &[handle],
+        &crate::command::EntityTransform::Translate(DVec3::new(10.0, 10.0, 0.0)),
+    );
+    assert_eq!(copied.len(), 1);
+    assert!(app.tabs[i].scene.dimension_association(copied[0]).is_none());
+    assert!(app.tabs[i].scene.dimension_association(handle).is_some());
+}
+
+#[test]
+fn viewport_dimension_hidden_border_and_lock_keep_content_available() {
+    let (mut app, _, frame) = fixture();
+    let scene = &mut app.tabs[app.active_tab].scene;
+    let mut layer = acadrust::tables::Layer::new("Viewport frames");
+    layer.flags.off = true;
+    scene.document.layers.add(layer).unwrap();
+    let Some(EntityType::Viewport(vp)) = scene.document.get_entity_mut(frame.viewport) else {
+        panic!()
+    };
+    vp.common.layer = "Viewport frames".into();
+    vp.status.locked = true;
+    let pick = scene
+        .dimension_pick_through_viewport(DVec3::new(55.0, 50.0, 0.0), 0.2)
+        .unwrap();
+    assert!(pick.frame.locked);
+    assert_eq!(pick.frame.viewport, frame.viewport);
+}
+
+#[test]
+fn viewport_dimension_perpendicular_uses_transformed_geometry() {
+    use crate::scene::dimension_assoc::{resolve_reference_chain, ReferenceStatus};
+    use acadrust::entities::Insert;
+    use acadrust::objects::AssocDimensionReference;
+    use acadrust::tables::BlockRecord;
+    let mut scene = Scene::new();
+    let mut block = BlockRecord::new("Stretched");
+    block.handle = scene.document.allocate_handle();
+    let owner = block.handle;
+    scene.document.block_records.add(block).unwrap();
+    let mut source = Line::from_points(Vector3::ZERO, Vector3::new(10.0, 10.0, 0.0));
+    source.common.owner_handle = owner;
+    let source = scene.document.add_entity(EntityType::Line(source)).unwrap();
+    let mut insert = Insert::new("Stretched", Vector3::ZERO);
+    insert.set_x_scale(2.0);
+    let root = scene.add_entity(EntityType::Insert(insert));
+    let reference = AssocDimensionReference {
+        xrefs: vec![root, source],
+        osnap_type: 8,
+        osnap_point: Vector3::new(4.0, 2.0, 0.0),
+        ..Default::default()
+    };
+    let result =
+        resolve_reference_chain(&scene, &reference, Some(Vector3::new(0.0, 10.0, 0.0))).unwrap();
+    assert!(
+        (result.model.x - 4.0).abs() < 1e-8 && (result.model.y - 2.0).abs() < 1e-8,
+        "{result:?}"
+    );
+    let unrelated = scene.add_entity(EntityType::Line(Line::from_points(
+        Vector3::ZERO,
+        Vector3::UNIT_X,
+    )));
+    let invalid = AssocDimensionReference {
+        xrefs: vec![root, unrelated],
+        ..reference
+    };
+    assert!(matches!(
+        resolve_reference_chain(&scene, &invalid, None),
+        Err(ReferenceStatus::Unresolved)
+    ));
+}
+
+#[test]
+fn viewport_dimension_refresh_preserves_explicit_overrides() {
+    use acadrust::xdata::XDataValue;
+    let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    finish_aligned(&mut app, line, frame);
+    let handle = dimension(&app.tabs[i].scene.document).base().common.handle;
+    let entity = app.tabs[i].scene.document.get_entity_mut(handle).unwrap();
+    dim_override::set_on_entity(
+        entity,
+        dim_override::DIMLFAC,
+        Some(XDataValue::Real(-254.0)),
+    );
+    dim_override::set_on_entity(entity, dim_override::DIMTOL, Some(XDataValue::Integer16(1)));
+    dim_override::set_on_entity(entity, dim_override::DIMTP, Some(XDataValue::Real(0.05)));
+    dim_override::set_on_entity(entity, dim_override::DIMTM, Some(XDataValue::Real(0.02)));
+    if let EntityType::Dimension(d) = entity {
+        crate::entities::dimension::set_dimension_text_override(d.base_mut(), Some("L=<>".into()));
+    }
+    let expected = displayed(&app.tabs[i].scene.document);
+    let Some(EntityType::Viewport(vp)) = app.tabs[i].scene.document.get_entity_mut(frame.viewport)
+    else {
+        panic!()
+    };
+    vp.view_height = 500.0;
+    vp.custom_scale = 0.2;
+    app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+    let d = dimension(&app.tabs[i].scene.document);
+    assert!(
+        (displayed(&app.tabs[i].scene.document) - expected).abs() < 1e-5,
+        "{} vs {expected}",
+        displayed(&app.tabs[i].scene.document)
+    );
+    assert_eq!(
+        crate::entities::dimension::dimension_text_override(d.base()),
+        Some("L=<>")
+    );
+    assert_eq!(
+        dim_override::real(&d.base().common.extended_data, dim_override::DIMTP),
+        Some(0.05)
+    );
+    assert_eq!(
+        dim_override::real(&d.base().common.extended_data, dim_override::DIMTM),
+        Some(0.02)
+    );
+}
+
+#[test]
+fn viewport_dimension_block_center_keeps_the_circle_source() {
+    use acadrust::entities::Insert;
+    use acadrust::tables::BlockRecord;
+    let (mut app, _, frame) = fixture();
+    let i = app.active_tab;
+    let scene = &mut app.tabs[i].scene;
+    let mut block = BlockRecord::new("Circle block");
+    block.handle = scene.document.allocate_handle();
+    let owner = block.handle;
+    scene.document.block_records.add(block).unwrap();
+    let mut circle = Circle::new();
+    circle.radius = 10.0;
+    circle.common.owner_handle = owner;
+    let circle = scene
+        .document
+        .add_entity(EntityType::Circle(circle))
+        .unwrap();
+    // This line is closer to the circle center than its circumference is.
+    let mut line = Line::from_points(Vector3::new(-2.0, 1.0, 0.0), Vector3::new(2.0, 1.0, 0.0));
+    line.common.owner_handle = owner;
+    scene.document.add_entity(EntityType::Line(line)).unwrap();
+    scene.set_current_layout("Model".into());
+    let root = scene.add_entity(EntityType::Insert(Insert::new(
+        "Circle block",
+        Vector3::new(40.0, 20.0, 0.0),
+    )));
+    scene.set_current_layout("Dimensions".into());
+    let mut center = hit(frame, root, DVec3::new(40.0, 20.0, 0.0));
+    center.snap_type = SnapType::Center;
+    assert!(app.record_accepted_snap(i, Some(center), Some(frame), center.world));
+    let source = app
+        .accepted_snaps()
+        .last()
+        .unwrap()
+        .source
+        .as_ref()
+        .unwrap();
+    assert_eq!(source.source.handle, circle);
+    assert_eq!(source.block_path, vec![root]);
+}
+
+#[test]
+fn viewport_dimension_angular_object_picks_follow_arc_features() {
+    use crate::scene::{ChangeKind, ReferenceStatus};
+    use acadrust::entities::{Arc, LwPolyline};
+    use acadrust::types::Vector2;
+    for bulged in [false, true] {
+        let (mut app, _, frame) = fixture();
+        let i = app.active_tab;
+        app.tabs[i].scene.set_current_layout("Model".into());
+        let entity = if bulged {
+            let mut poly =
+                LwPolyline::from_points(vec![Vector2::new(100.0, 200.0), Vector2::new(0.0, 300.0)]);
+            poly.vertices[0].bulge = (std::f64::consts::PI / 8.0).tan();
+            EntityType::LwPolyline(poly)
+        } else {
+            let mut arc = Arc::new();
+            arc.center = Vector3::new(0.0, 200.0, 0.0);
+            arc.radius = 100.0;
+            arc.start_angle = 0.0;
+            arc.end_angle = std::f64::consts::FRAC_PI_2;
+            EntityType::Arc(arc)
+        };
+        let source = app.tabs[i].scene.add_entity(entity);
+        app.tabs[i].scene.set_current_layout("Dimensions".into());
+        let _ = app.dispatch_command("DIMANGULAR");
+        let model = DVec3::new(100.0 / 2.0_f64.sqrt(), 200.0 + 100.0 / 2.0_f64.sqrt(), 0.0);
+        let result = app
+            .try_dimension_viewport_entity_pick(i, frame.model_to_paper(model), 0.5)
+            .unwrap();
+        let _ = app.apply_cmd_result(result);
+        assert_eq!(app.accepted_snaps().len(), 3);
+        let _ = app.feed_command(StepInput::Point(DVec3::new(65.0, 85.0, 0.0)));
+        assert!((displayed(&app.tabs[i].scene.document) - 90.0).abs() < 1e-5);
+        let dim = dimension(&app.tabs[i].scene.document).base().common.handle;
+        app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+        assert!((displayed(&app.tabs[i].scene.document) - 90.0).abs() < 1e-5);
+        let status = app.tabs[i].scene.dimension_association_status(dim);
+        assert_eq!(status.len(), 3);
+        assert!(
+            status.iter().all(|(_, s)| *s == ReferenceStatus::Resolved),
+            "{bulged}: {status:?}"
+        );
+        match app.tabs[i].scene.document.get_entity_mut(source).unwrap() {
+            EntityType::Arc(arc) => arc.end_angle = std::f64::consts::PI / 3.0,
+            EntityType::LwPolyline(poly) => {
+                poly.vertices[0].bulge = (std::f64::consts::PI / 12.0).tan()
+            }
+            _ => unreachable!(),
+        }
+        app.tabs[i]
+            .scene
+            .bump_entities(&[(source, ChangeKind::Modified)]);
+        assert!(
+            (displayed(&app.tabs[i].scene.document) - 60.0).abs() < 1e-5,
+            "{bulged}: {}",
+            displayed(&app.tabs[i].scene.document)
+        );
+    }
+}
+
+#[test]
+fn viewport_dimension_quadrant_keeps_its_feature_after_translation() {
+    use crate::scene::ChangeKind;
+    let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    app.tabs[i].scene.set_current_layout("Model".into());
+    let mut circle = Circle::new();
+    circle.radius = 100.0;
+    let source = app.tabs[i].scene.add_entity(EntityType::Circle(circle));
+    app.tabs[i].scene.set_current_layout("Dimensions".into());
+    let _ = app.dispatch_command("DIMALIGNED");
+    point(&mut app, frame, line, DVec3::ZERO);
+    let mut quadrant = hit(frame, source, DVec3::X * 100.0);
+    quadrant.snap_type = SnapType::Quadrant;
+    assert!(app.record_accepted_snap(i, Some(quadrant), Some(frame), quadrant.world));
+    let result = app.tabs[i]
+        .active_cmd
+        .as_mut()
+        .unwrap()
+        .on_point(quadrant.world);
+    app.sync_dimension_snaps(i);
+    let _ = app.apply_cmd_result(result);
+    let _ = app.feed_command(StepInput::Point(DVec3::new(60.0, 80.0, 0.0)));
+    let EntityType::Circle(circle) = app.tabs[i].scene.document.get_entity_mut(source).unwrap()
+    else {
+        panic!()
+    };
+    circle.center.x = 300.0;
+    app.tabs[i]
+        .scene
+        .bump_entities(&[(source, ChangeKind::Modified)]);
+    assert!((displayed(&app.tabs[i].scene.document) - 400.0).abs() < 1e-5);
 }

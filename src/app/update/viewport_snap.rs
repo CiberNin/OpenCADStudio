@@ -137,35 +137,73 @@ impl OpenCADStudio {
         true
     }
 
-    /// Replace a snap source that is a block INSTANCE with the entity inside
-    /// it that actually owns the snapped feature, plus the INSERT path.
-    ///
-    /// The snap engine can only report what the wire carries, and the
-    /// renderer stamps every wire of an expanded block with the *top-level
-    /// INSERT's* handle — nested inserts included. `SnapSourceRef` promises
-    /// the innermost entity in `source.handle` and the instance chain in
-    /// `block_path`, so the descent happens here, once, at accept time (not
-    /// per pointer move).
-    ///
-    /// When the descent cannot identify the inner entity the source stays the
-    /// INSERT with an empty path. See
-    /// [`crate::scene::Scene::resolve_block_snap_source`] for exactly when
-    /// that happens; the resulting association is coarser (it tracks the whole
-    /// block instance) but never wrong.
+    /// Resolve the instance path once, when a feature is accepted. Failure
+    /// drops source identity so a failed descent cannot attach to the insert's
+    /// origin. Ambiguous intersections within one batched block remain unlinked.
     fn resolve_source_block_path(&self, tab: usize, accepted: &mut AcceptedSnap) {
+        let resolve = |source: &mut crate::scene::viewport_ref::SnapSourceRef| {
+            if !source.block_path.is_empty() {
+                return true;
+            }
+            if !matches!(
+                self.tabs[tab]
+                    .scene
+                    .document
+                    .get_entity(source.source.handle),
+                Some(acadrust::EntityType::Insert(_))
+            ) {
+                return true;
+            }
+            if source.snap_type == SnapType::Insertion {
+                let Some(acadrust::EntityType::Insert(insert)) = self.tabs[tab]
+                    .scene
+                    .document
+                    .get_entity(source.source.handle)
+                else {
+                    return false;
+                };
+                let origin = glam::DVec3::new(
+                    insert.insert_point.x,
+                    insert.insert_point.y,
+                    insert.insert_point.z,
+                );
+                return origin.distance(accepted.model_point) < 1e-5;
+            }
+            let Some((entity, path)) = self.tabs[tab].scene.resolve_measurable_feature(
+                source.source.handle,
+                accepted.model_point,
+                accepted.viewport,
+                Some(source.snap_type),
+            ) else {
+                return false;
+            };
+            let distance = crate::scene::viewport_dim_seam::feature_pick_distance(
+                &entity,
+                accepted.model_point,
+                Some(source.snap_type),
+            );
+            if !distance.is_some_and(|distance| distance < 1e-5) {
+                return false;
+            }
+            source.source =
+                crate::command::DimensionAssociationSource::inferred(entity.common().handle);
+            source.block_path = path;
+            true
+        };
         let Some(source) = accepted.source.as_mut() else {
             return;
         };
-        if !source.block_path.is_empty() {
+        if !resolve(source) {
+            accepted.source = None;
             return;
         }
-        if let Some((entity, path)) = self.tabs[tab]
-            .scene
-            .resolve_block_snap_source(source.source.handle, accepted.model_point)
-        {
-            source.source =
-                crate::command::DimensionAssociationSource::inferred(entity);
-            source.block_path = path;
+        if let Some(other) = source.intersection.as_mut() {
+            if !resolve(other)
+                || (other.source.handle == source.source.handle
+                    && other.block_path == source.block_path)
+            {
+                source.intersection = None;
+            }
         }
     }
 

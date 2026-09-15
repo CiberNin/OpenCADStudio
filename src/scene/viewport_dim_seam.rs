@@ -84,6 +84,9 @@ impl Scene {
                 continue;
             };
 
+            if !planar_pick_distance(&entity, model_point).is_some_and(|d| d <= aperture_model) {
+                continue;
+            }
             let mut paper_entity = entity;
             crate::scene::view::dispatch::apply_transform(
                 &mut paper_entity,
@@ -104,39 +107,6 @@ impl Scene {
             });
         }
         None
-    }
-
-    /// Resolve a snapped INSERT handle into the innermost entity that owns the
-    /// geometry, plus the INSERT path down to it.
-    ///
-    /// The renderer names every wire of an expanded block with the **top-level
-    /// INSERT's** handle (see `block_cache`), including wires belonging to
-    /// nested inserts, so a snap inside a block reports the INSERT and nothing
-    /// finer. This walks the block definition from that INSERT looking for the
-    /// nearest measurable entity to `model_point`, which recovers the real
-    /// source handle and the instance path for the association chain.
-    ///
-    /// Returns `None` — and the caller then keeps the INSERT itself as the
-    /// source, which still gives a correct, if coarse, association — when:
-    /// * `top` is not an INSERT (the common case: `Some((top, vec![]))`);
-    /// * the geometry is a type [`planar_pick_distance`] does not handle
-    ///   (text, hatch, spline, solid, 3-D geometry);
-    /// * the nesting is deeper than eight levels.
-    ///
-    /// Depth is not limited to one level: [`Scene::descend_block_instance`]
-    /// recurses, and the returned path lists every INSERT from the outermost
-    /// down to the one that directly contains the entity.
-    pub fn resolve_block_snap_source(
-        &self,
-        top: Handle,
-        model_point: DVec3,
-    ) -> Option<(Handle, Vec<Handle>)> {
-        if !matches!(self.document.get_entity(top), Some(EntityType::Insert(_))) {
-            return None;
-        }
-        let (entity, path) = self.resolve_measurable_entity(top, model_point, None)?;
-        let handle = entity.as_entity().handle();
-        handle.is_valid().then_some((handle, path))
     }
 
     /// Nearest resident model wire of `viewport` to `model_point`, within
@@ -206,6 +176,16 @@ impl Scene {
         model_point: DVec3,
         viewport: Option<Handle>,
     ) -> Option<(EntityType, Vec<Handle>)> {
+        self.resolve_measurable_feature(handle, model_point, viewport, None)
+    }
+
+    pub(crate) fn resolve_measurable_feature(
+        &self,
+        handle: Handle,
+        model_point: DVec3,
+        viewport: Option<Handle>,
+        kind: Option<crate::snap::SnapType>,
+    ) -> Option<(EntityType, Vec<Handle>)> {
         let entity = self.document.get_entity(handle)?;
         match entity {
             EntityType::Insert(_) => {
@@ -217,11 +197,12 @@ impl Scene {
                     &mut path,
                     0,
                     viewport,
+                    kind,
                 )?;
                 Some((found.0, found.1))
             }
             other => {
-                planar_pick_distance(other, model_point)?;
+                feature_pick_distance(other, model_point, kind)?;
                 Some((other.clone(), Vec::new()))
             }
         }
@@ -237,6 +218,7 @@ impl Scene {
         path: &mut Vec<Handle>,
         depth: usize,
         viewport: Option<Handle>,
+        kind: Option<crate::snap::SnapType>,
     ) -> Option<(EntityType, Vec<Handle>)> {
         const MAX_DEPTH: usize = 8;
         if depth > MAX_DEPTH {
@@ -245,6 +227,9 @@ impl Scene {
         let EntityType::Insert(insert) = &insert_entity else {
             return None;
         };
+        if insert.row_count > 1 || insert.column_count > 1 {
+            return None;
+        }
         let insert_handle = insert.common.handle;
         let local = crate::scene::render_graph::insert_transform(&self.document, insert);
         let combined = local.then(&outer);
@@ -273,8 +258,9 @@ impl Scene {
                     &mut nested,
                     depth + 1,
                     viewport,
+                    kind,
                 ) {
-                    if let Some(distance) = planar_pick_distance(&entity, model_point) {
+                    if let Some(distance) = feature_pick_distance(&entity, model_point, kind) {
                         if best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
                             let mut full = vec![insert_handle];
                             full.append(&mut nested_path);
@@ -294,6 +280,7 @@ impl Scene {
             let y = DVec3::new(m[0][1], m[1][1], m[2][1]);
             let magnitude = x.length_squared().max(y.length_squared());
             if curved
+                && kind != Some(crate::snap::SnapType::Center)
                 && (magnitude < 1e-24
                     || (x.length_squared() - y.length_squared()).abs() > magnitude * 1e-10
                     || x.dot(y).abs() > magnitude * 1e-10)
@@ -305,7 +292,7 @@ impl Scene {
                 &mut placed,
                 &EntityTransform::Affine(combined),
             );
-            let Some(distance) = planar_pick_distance(&placed, model_point) else {
+            let Some(distance) = feature_pick_distance(&placed, model_point, kind) else {
                 continue;
             };
             if best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
@@ -437,4 +424,46 @@ mod tests {
             );
         }
     }
+}
+
+/// Distance to the particular feature accepted by a snap, rather than to the
+/// nearest curve. A circle's center is deliberately not on its circumference.
+pub(crate) fn feature_pick_distance(
+    entity: &EntityType,
+    point: DVec3,
+    kind: Option<crate::snap::SnapType>,
+) -> Option<f64> {
+    use crate::snap::SnapType as S;
+    let points: Vec<acadrust::types::Vector3> = match kind {
+        Some(S::Center) => match entity {
+            EntityType::Circle(c) => vec![c.center_wcs()],
+            EntityType::Arc(a) => vec![a.center_wcs()],
+            EntityType::Ellipse(e) => vec![e.center],
+            _ => return None,
+        },
+        Some(S::Endpoint) => crate::scene::dimension_assoc::source_points(entity),
+        Some(S::Node) => match entity {
+            EntityType::Point(p) => vec![p.location],
+            _ => return None,
+        },
+        Some(S::Midpoint | S::Quadrant) => {
+            let planar = crate::entities::curve::entity_curve(entity)?;
+            cadkernel::geom2d::snap::characteristic_points(&planar.curve)
+                .into_iter()
+                .filter(|p| match kind {
+                    Some(S::Midpoint) => p.kind == cadkernel::geom2d::snap::SnapKind::Midpoint,
+                    _ => p.kind == cadkernel::geom2d::snap::SnapKind::Quadrant,
+                })
+                .map(|p| {
+                    let p = planar.plane.point_at(p.point);
+                    acadrust::types::Vector3::new(p[0], p[1], p[2])
+                })
+                .collect()
+        }
+        _ => return planar_pick_distance(entity, point),
+    };
+    points
+        .into_iter()
+        .map(|p| (DVec3::new(p.x, p.y, p.z) - point).truncate().length())
+        .min_by(f64::total_cmp)
 }

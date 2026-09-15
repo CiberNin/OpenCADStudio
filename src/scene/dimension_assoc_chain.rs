@@ -37,7 +37,7 @@
 use acadrust::objects::AssocDimensionReference;
 use acadrust::types::{Handle, Matrix4, Transform, Vector3};
 use acadrust::{CadDocument, EntityType};
-use cadkernel::geom2d::{closest_point, Curve as KernelCurve, DEFAULT_SEGMENTS_PER_RADIAN};
+use cadkernel::geom2d::{closest_point, Curve as KernelCurve};
 use cadkernel::space::Plane;
 
 use crate::entities::curve::entity_curve;
@@ -50,7 +50,7 @@ use crate::entities::curve::entity_curve;
 /// and `NEAR` for a point taken at a parameter on a circle, so those two keep
 /// meaning exactly what they used to.
 #[allow(dead_code)] // The full code table is kept so a reader can see what a
-// stored `osnap_type` means, including the modes we pass through untouched.
+                    // stored `osnap_type` means, including the modes we pass through untouched.
 pub(crate) mod osnap {
     pub const NONE: u8 = 0;
     pub const END: u8 = 1;
@@ -115,6 +115,7 @@ pub(crate) struct ReferenceChain {
 pub(crate) enum ChainError {
     /// `xrefs` was empty — nothing to resolve.
     Empty,
+    Invalid,
     /// A handle in the chain names an object that is not in the document
     /// (erased source; restored by an undo).
     Missing(Handle),
@@ -131,55 +132,54 @@ pub(crate) fn walk_chain(
     document: &CadDocument,
     xrefs: &[Handle],
 ) -> Result<ReferenceChain, ChainError> {
+    if xrefs.is_empty() {
+        return Err(ChainError::Empty);
+    }
     let mut viewport = None;
-    let mut block_path: Vec<Handle> = Vec::new();
-    let mut entity = None;
+    let mut block_path = Vec::new();
     let mut transform = Transform::identity();
-
-    for (index, handle) in xrefs.iter().copied().enumerate() {
+    let mut owner = None;
+    for (index, &handle) in xrefs.iter().enumerate() {
         if handle.is_null() {
+            return Err(ChainError::Invalid);
+        }
+        let node = document
+            .get_entity(handle)
+            .ok_or(ChainError::Missing(handle))?;
+        if owner.is_some_and(|owner| node.common().owner_handle != owner) {
+            return Err(ChainError::Invalid);
+        }
+        if index == 0 && matches!(node, EntityType::Viewport(_)) {
+            viewport = Some(handle);
+            owner = document.block_records.get("*Model_Space").map(|b| b.handle);
             continue;
         }
-        let Some(node) = document.get_entity(handle) else {
-            return Err(ChainError::Missing(handle));
-        };
-        match node {
-            // Only a *leading* viewport is the trans-space hop. A viewport
-            // deeper in the chain would be geometry being dimensioned (the
-            // paper-space rectangle itself), so it falls through to `entity`.
-            EntityType::Viewport(_) if index == 0 && viewport.is_none() => {
-                viewport = Some(handle);
-            }
-            EntityType::Insert(insert) => {
-                block_path.push(handle);
-                transform =
-                    transform.compose(&crate::scene::render_graph::insert_transform(document, insert));
-            }
-            _ => {
-                entity = Some(handle);
-                break;
-            }
+        if index == xrefs.len() - 1 {
+            return Ok(ReferenceChain {
+                viewport,
+                block_path,
+                entity: handle,
+                transform,
+            });
         }
+        let EntityType::Insert(insert) = node else {
+            return Err(ChainError::Invalid);
+        };
+        // Arrays need an instance index that this reference format does not carry.
+        if insert.row_count > 1 || insert.column_count > 1 || block_path.contains(&handle) {
+            return Err(ChainError::Invalid);
+        }
+        let block = document
+            .block_records
+            .get(&insert.block_name)
+            .ok_or(ChainError::Invalid)?;
+        owner = Some(block.handle);
+        block_path.push(handle);
+        transform = transform.compose(&crate::scene::render_graph::insert_transform(
+            document, insert,
+        ));
     }
-
-    let entity = match entity {
-        Some(entity) => entity,
-        // Nothing but INSERTs: the innermost one is the geometry, and it is
-        // no longer part of the path leading to it.
-        None => match block_path.pop() {
-            Some(innermost) => {
-                transform = block_transform(document, &block_path);
-                innermost
-            }
-            None => return Err(ChainError::Empty),
-        },
-    };
-    Ok(ReferenceChain {
-        viewport,
-        block_path,
-        entity,
-        transform,
-    })
+    Err(ChainError::Empty)
 }
 
 /// Accumulated entity-local -> model transform for an ordered INSERT path.
@@ -187,8 +187,9 @@ pub(crate) fn block_transform(document: &CadDocument, block_path: &[Handle]) -> 
     let mut transform = Transform::identity();
     for handle in block_path {
         if let Some(EntityType::Insert(insert)) = document.get_entity(*handle) {
-            transform =
-                transform.compose(&crate::scene::render_graph::insert_transform(document, insert));
+            transform = transform.compose(&crate::scene::render_graph::insert_transform(
+                document, insert,
+            ));
         }
     }
     transform
@@ -270,7 +271,7 @@ pub(crate) struct FeatureContext {
     /// The point the feature is measured *from*, in entity-local coordinates.
     /// PERPENDICULAR and TANGENT are two-point features: the foot / touch
     /// point only exists relative to an external point, which for a dimension
-    /// is the other definition point. `None` falls back to `hint`.
+    /// is the other definition point. Tangency requires this point.
     pub from: Option<Vector3>,
 }
 
@@ -287,9 +288,12 @@ pub(crate) fn feature_point(
     context: FeatureContext,
 ) -> Option<Vector3> {
     match reference.osnap_type {
+        osnap::END | osnap::START_POINT if reference.main_subent_type == 2 => {
+            imported_endpoint(entity, reference, context.hint)
+        }
         osnap::CEN => center_point(entity, reference),
         osnap::MID => mid_point(entity, reference),
-        osnap::QUAD => quadrant_point(entity, context.hint?),
+        osnap::QUAD => quadrant_point(entity, reference, context.hint?),
         osnap::NODE | osnap::INS => node_point(entity),
         osnap::INTERSEC | osnap::APPARENT_INT => intersection_point(
             document,
@@ -313,7 +317,9 @@ pub(crate) fn feature_point(
 pub(crate) fn evaluates(osnap_type: u8) -> bool {
     matches!(
         osnap_type,
-        osnap::CEN
+        osnap::END
+            | osnap::START_POINT
+            | osnap::CEN
             | osnap::MID
             | osnap::QUAD
             | osnap::NODE
@@ -342,7 +348,13 @@ fn center_point(entity: &EntityType, reference: &AssocDimensionReference) -> Opt
             let KernelCurve::Polyline(polyline) = &planar.curve else {
                 return None;
             };
-            let segment = reference.main_gs_marker.max(0) as usize;
+            let segment = if reference.main_subent_type == 1
+                && reference.main_gs_marker == super::dimension_assoc::POLYLINE_ARC_CENTER_MARKER
+            {
+                reference.osnap_distance.round().max(0.0) as usize
+            } else {
+                segment_index(reference)?
+            };
             let arc = polyline.segment_arc(segment)?;
             Some(lift(&planar.plane, arc.center))
         }
@@ -356,36 +368,52 @@ fn mid_point(entity: &EntityType, reference: &AssocDimensionReference) -> Option
         // without one, the midpoint of the whole run.
         KernelCurve::Polyline(_) if reference.main_gs_marker >= 0 => {
             let segments = planar.curve.segments();
-            let segment = segments.get(reference.main_gs_marker as usize)?;
+            let segment = segments.get(segment_index(reference)?)?;
             Some(lift(&planar.plane, segment.point_at(0.5)))
         }
         _ => Some(lift(&planar.plane, planar.curve.point_at(0.5))),
     }
 }
 
-fn quadrant_point(entity: &EntityType, hint: Vector3) -> Option<Vector3> {
+fn quadrant_point(
+    entity: &EntityType,
+    reference: &AssocDimensionReference,
+    hint: Vector3,
+) -> Option<Vector3> {
     let planar = entity_curve(entity)?;
     let (centre, radius) = match &planar.curve {
         KernelCurve::Circle(circle) => (circle.centre, circle.radius),
         KernelCurve::Arc(arc) => (arc.centre, arc.radius),
         _ => return None,
     };
-    // Four candidates on the curve's own plane; the stored point picks one, so
-    // a rotated source keeps the quadrant the user actually snapped to.
+    let valid_angle = |angle: f64| match &planar.curve {
+        KernelCurve::Arc(arc) => {
+            (angle - arc.start_angle).rem_euclid(std::f64::consts::TAU) <= arc.sweep() + 1e-9
+        }
+        _ => true,
+    };
+    let at_angle = |angle: f64| {
+        lift(
+            &planar.plane,
+            [
+                centre[0] + radius * angle.cos(),
+                centre[1] + radius * angle.sin(),
+            ],
+        )
+    };
+    // New references retain the chosen source-local angle, so translation
+    // cannot silently select another quadrant using the old world point.
+    if reference.main_subent_type == 1 && reference.main_gs_marker == -2 {
+        let angle = reference.osnap_distance;
+        return (angle.is_finite() && valid_angle(angle)).then(|| at_angle(angle));
+    }
+    // An imported point can identify an unchanged quadrant, but cannot prove
+    // which quadrant was intended after it moves away from the stored hint.
     (0..4)
-        .map(|index| {
-            let angle = std::f64::consts::FRAC_PI_2 * index as f64;
-            lift(
-                &planar.plane,
-                [
-                    centre[0] + radius * angle.cos(),
-                    centre[1] + radius * angle.sin(),
-                ],
-            )
-        })
-        .min_by(|first, second| {
-            distance_squared(*first, hint).total_cmp(&distance_squared(*second, hint))
-        })
+        .map(|index| std::f64::consts::FRAC_PI_2 * index as f64)
+        .filter(|angle| valid_angle(*angle))
+        .map(at_angle)
+        .find(|candidate| distance_squared(*candidate, hint) < 1e-12)
 }
 
 fn node_point(entity: &EntityType) -> Option<Vector3> {
@@ -402,7 +430,50 @@ fn node_point(entity: &EntityType) -> Option<Vector3> {
 fn perpendicular_point(entity: &EntityType, from: Vector3) -> Option<Vector3> {
     let planar = entity_curve(entity)?;
     let uv = planar.plane.project(dpoint(from))?;
-    Some(lift(&planar.plane, closest_point(&planar.curve, uv).point))
+    let near = closest_point(&planar.curve, uv);
+    let direction = planar.curve.tangent_at(near.t);
+    let delta = [near.point[0] - uv[0], near.point[1] - uv[1]];
+    let residual = delta[0] * direction[0] + delta[1] * direction[1];
+    if residual.abs() > 1e-8 * delta[0].hypot(delta[1]).max(1.0) {
+        return None;
+    }
+    Some(lift(&planar.plane, near.point))
+}
+
+/// Perpendicularity must be evaluated after a block's nonuniform scale.
+pub(crate) fn perpendicular_in_model(
+    entity: &EntityType,
+    transform: &Transform,
+    from: Vector3,
+) -> Option<Vector3> {
+    use glam::DVec3;
+    let source = entity_curve(entity)?;
+    let origin = transform.apply(vector3(source.plane.origin));
+    let x = DVec3::from_array(dpoint(
+        transform.apply_rotation(vector3(source.plane.x_axis)),
+    ));
+    let y = DVec3::from_array(dpoint(
+        transform.apply_rotation(vector3(source.plane.y_axis)),
+    ));
+    let axis_x = x.try_normalize()?;
+    let normal = x.cross(y).try_normalize()?;
+    let axis_y = normal.cross(axis_x);
+    let plane = Plane::from_axes(dpoint(origin), axis_x.to_array(), axis_y.to_array());
+    let curve = source.curve.transformed(&cadkernel::geom2d::Transform {
+        origin: [0.0, 0.0].into(),
+        x_axis: [x.dot(axis_x), x.dot(axis_y)].into(),
+        y_axis: [y.dot(axis_x), y.dot(axis_y)].into(),
+    })?;
+    let uv = plane.project(dpoint(from))?;
+    let near = closest_point(&curve, uv);
+    let tangent = curve.tangent_at(near.t);
+    let delta = [near.point[0] - uv[0], near.point[1] - uv[1]];
+    if (delta[0] * tangent[0] + delta[1] * tangent[1]).abs()
+        > 1e-8 * delta[0].hypot(delta[1]).max(1.0)
+    {
+        return None;
+    }
+    Some(lift(&plane, near.point))
 }
 
 fn nearest_point(
@@ -416,9 +487,7 @@ fn nearest_point(
     // Every other curve carries the kernel's normalised 0..1 parameter.
     match &planar.curve {
         KernelCurve::Circle(_) | KernelCurve::Arc(_) => match entity {
-            EntityType::Circle(circle) => {
-                Some(circle.point_at_angle_wcs(reference.osnap_distance))
-            }
+            EntityType::Circle(circle) => Some(circle.point_at_angle_wcs(reference.osnap_distance)),
             EntityType::Arc(arc) => Some(arc.point_at_angle_wcs(reference.osnap_distance)),
             _ => None,
         },
@@ -454,39 +523,14 @@ fn tangent_point(
         return spline_tangent_point(spline, reference, context);
     }
     let planar = entity_curve(entity)?;
-    let (centre, radius) = match &planar.curve {
-        KernelCurve::Circle(circle) => (circle.centre, circle.radius),
-        KernelCurve::Arc(arc) => (arc.centre, arc.radius),
-        _ => {
-            // Generic curve: no closed form and no spline evaluator. Hold the
-            // stored parameter if there is one, else leave it unresolved.
-            return nearest_point(entity, reference, context.hint);
-        }
-    };
-    let from = context.from.or(context.hint)?;
+    let from = context.from?;
     let uv = planar.plane.project(dpoint(from))?;
-    let (dx, dy) = (uv[0] - centre[0], uv[1] - centre[1]);
-    let distance = (dx * dx + dy * dy).sqrt();
-    if !distance.is_finite() || distance <= radius + 1e-12 || radius <= 1e-12 {
-        return None;
-    }
-    // Two touch points, symmetric about the centre-to-`from` line.
-    let base = dy.atan2(dx);
-    let offset = (radius / distance).clamp(-1.0, 1.0).acos();
-    let candidates = [base + offset, base - offset].map(|angle| {
-        lift(
-            &planar.plane,
-            [
-                centre[0] + radius * angle.cos(),
-                centre[1] + radius * angle.sin(),
-            ],
-        )
-    });
-    let hint = context.hint.unwrap_or(candidates[0]);
-    candidates
+    cadkernel::geom2d::snap::tangent_from(&planar.curve, uv)
         .into_iter()
-        .min_by(|first, second| {
-            distance_squared(*first, hint).total_cmp(&distance_squared(*second, hint))
+        .map(|candidate| lift(&planar.plane, candidate.point))
+        .min_by(|a, b| {
+            distance_squared(*a, context.hint.unwrap_or(from))
+                .total_cmp(&distance_squared(*b, context.hint.unwrap_or(from)))
         })
 }
 
@@ -504,50 +548,52 @@ fn spline_tangent_point(
         let hint = context.hint.or(context.from)?;
         curve.parameter_at(dpoint(hint)).clamp(start, end)
     };
-    let Some(from) = context.from.or(context.hint) else {
-        // No external point: the stored parameter is the whole answer.
-        return Some(vector3(curve.point_at_knot(u)));
-    };
-    let p = dpoint(from);
-    // Newton on f(u) = (C(u) - P) · C'(u). f'(u) is approximated by a central
-    // difference of f, which converges in a handful of steps from a seed that
-    // is already on the right lobe and never leaves the domain.
+    let from = glam::DVec3::from_array(dpoint(context.from?));
+    // A tangent is parallel to C(u)-P. Minimize the vector cross product,
+    // which also detects nonplanar curves that have no tangent from P.
     let f = |u: f64| {
-        let c = curve.point_at_knot(u);
-        let d = curve.derivative_at_knot(u);
-        (c[0] - p[0]) * d[0] + (c[1] - p[1]) * d[1] + (c[2] - p[2]) * d[2]
+        let c = glam::DVec3::from_array(curve.point_at_knot(u));
+        let d = glam::DVec3::from_array(curve.derivative_at_knot(u));
+        (c - from).cross(d)
     };
-    let span = (end - start).abs().max(1e-12);
-    let step = span * 1e-6;
-    for _ in 0..24 {
+    let span = (end - start).abs();
+    if !span.is_finite() || span <= 1e-15 {
+        return None;
+    }
+    for _ in 0..48 {
         let value = f(u);
-        if value.abs() <= span * 1e-12 {
+        let lo = (u - span * 1e-6).max(start);
+        let hi = (u + span * 1e-6).min(end);
+        let derivative = (f(hi) - f(lo)) / (hi - lo);
+        if !value.is_finite() || !derivative.is_finite() {
+            return None;
+        }
+        if derivative.length_squared() <= 1e-30 {
             break;
         }
-        let slope = (f((u + step).min(end)) - f((u - step).max(start))) / (2.0 * step);
-        if !slope.is_finite() || slope.abs() < 1e-18 {
-            break;
-        }
-        let next = (u - value / slope).clamp(start, end);
-        if !next.is_finite() || (next - u).abs() <= span * 1e-14 {
+        let next = (u - value.dot(derivative) / derivative.length_squared()).clamp(start, end);
+        if (next - u).abs() < span * 1e-14 {
             u = next;
             break;
         }
         u = next;
     }
-    Some(vector3(curve.point_at_knot(u)))
+    let c = glam::DVec3::from_array(curve.point_at_knot(u));
+    let d = glam::DVec3::from_array(curve.derivative_at_knot(u));
+    let scale = (c - from).length() * d.length();
+    if !c.is_finite() || scale <= 1e-20 || f(u).length() > 1e-8 * scale {
+        return None;
+    }
+    Some(vector3(c.to_array()))
 }
 
 // ── Intersection ──────────────────────────────────────────────────────────
 
 /// Intersection of `entity` with the reference's second object chain.
 ///
-/// Both curves are tessellated on the first curve's plane and crossed
-/// pairwise; the crossing nearest the stored osnap point wins, so a pair of
-/// curves that meet more than once keeps the corner the user picked. With
-/// `apparent` the segment parameters are not clamped, which recovers the
-/// crossing of the two *extended* nearest segments — the best-effort AutoCAD
-/// calls an apparent intersection in a plan view.
+/// Transform both curves into the first entity's local plane and use the
+/// kernel's exact/converged intersection solver. Apparent intersections may
+/// project noncoplanar curves; only straight lines support an extended crossing.
 fn intersection_point(
     document: &CadDocument,
     entity: &EntityType,
@@ -555,59 +601,53 @@ fn intersection_point(
     hint: Vector3,
     apparent: bool,
 ) -> Option<Vector3> {
+    let main = walk_chain(document, &reference.xrefs).ok()?;
     let other = walk_chain(document, &reference.intersection_objects).ok()?;
-    let other_entity = document.get_entity(other.entity)?;
+    if main.viewport != other.viewport {
+        return None;
+    }
+    let inverse = invert(&main.transform)?;
     let first = entity_curve(entity)?;
-    let second = entity_curve(other_entity)?;
-    // The first curve's plane is the working frame. The second curve is
-    // evaluated through its *own* block path, so each of its points is lifted
-    // to model space and then projected back onto that frame before crossing.
-    let a = first.curve.tessellate(DEFAULT_SEGMENTS_PER_RADIAN);
-    let b = second
-        .curve
-        .tessellate(DEFAULT_SEGMENTS_PER_RADIAN)
-        .into_iter()
-        .map(|uv| {
-            let world = other.transform.apply(lift(&second.plane, uv));
-            first.plane.project(dpoint(world)).unwrap_or(uv)
-        })
-        .collect::<Vec<_>>();
+    let second = entity_curve(document.get_entity(other.entity)?)?;
+    let map = |uv| {
+        let local = inverse.apply(other.transform.apply(lift(&second.plane, uv)));
+        let projected = first.plane.project(dpoint(local))?;
+        if !apparent && distance_squared(local, lift(&first.plane, projected)) > 1e-12 {
+            return None;
+        }
+        Some(projected)
+    };
+    let origin = glam::DVec2::from_array(map([0.0, 0.0])?);
+    let x = glam::DVec2::from_array(map([1.0, 0.0])?) - origin;
+    let y = glam::DVec2::from_array(map([0.0, 1.0])?) - origin;
+    let second = second.curve.transformed(&cadkernel::geom2d::Transform {
+        origin: origin.to_array().into(),
+        x_axis: x.to_array().into(),
+        y_axis: y.to_array().into(),
+    })?;
     let hint_uv = first.plane.project(dpoint(hint))?;
-    let mut best: Option<([f64; 2], f64)> = None;
-    for pair_a in a.windows(2) {
-        for pair_b in b.windows(2) {
-            let Some(point) = segment_cross(pair_a[0], pair_a[1], pair_b[0], pair_b[1], false)
-            else {
-                continue;
-            };
-            let error = (point[0] - hint_uv[0]).powi(2) + (point[1] - hint_uv[1]).powi(2);
-            if best.is_none_or(|(_, previous)| error < previous) {
-                best = Some((point, error));
-            }
+    let mut points: Vec<_> = cadkernel::geom2d::intersect(
+        &first.curve,
+        &second,
+        cadkernel::geom2d::Tolerance::new(1e-9),
+    )
+    .into_iter()
+    .map(|hit| hit.point)
+    .collect();
+    if apparent && points.is_empty() {
+        // Extended apparent intersections are meaningful for straight lines.
+        // Curved geometry must actually cross after projection.
+        if let (KernelCurve::Line(a), KernelCurve::Line(b)) = (&first.curve, &second) {
+            points.extend(segment_cross(a.start, a.end, b.start, b.end, true));
         }
     }
-    if best.is_none() && apparent {
-        // Nothing actually crosses: take the two segments nearest the stored
-        // point and cross their infinite extensions.
-        let nearest = |run: &[[f64; 2]]| -> Option<([f64; 2], [f64; 2])> {
-            run.windows(2)
-                .map(|pair| {
-                    let mid = [
-                        (pair[0][0] + pair[1][0]) * 0.5,
-                        (pair[0][1] + pair[1][1]) * 0.5,
-                    ];
-                    let error =
-                        (mid[0] - hint_uv[0]).powi(2) + (mid[1] - hint_uv[1]).powi(2);
-                    ((pair[0], pair[1]), error)
-                })
-                .min_by(|first, second| first.1.total_cmp(&second.1))
-                .map(|(pair, _)| pair)
-        };
-        let (a0, a1) = nearest(&a)?;
-        let (b0, b1) = nearest(&b)?;
-        best = segment_cross(a0, a1, b0, b1, true).map(|point| (point, 0.0));
-    }
-    best.map(|(point, _)| lift(&first.plane, point))
+    points
+        .into_iter()
+        .min_by(|a, b| {
+            let error = |p: &[f64; 2]| (p[0] - hint_uv[0]).powi(2) + (p[1] - hint_uv[1]).powi(2);
+            error(a).total_cmp(&error(b))
+        })
+        .map(|point| lift(&first.plane, point))
 }
 
 /// Crossing of segments `a0->a1` and `b0->b1`. With `extend` the parameters
@@ -632,4 +672,49 @@ fn segment_cross(
         return None;
     }
     Some([a0[0] + d[0] * t, a0[1] + d[1] * t])
+}
+
+/// Internal markers are zero-based; imported edge markers are one-based.
+fn segment_index(reference: &AssocDimensionReference) -> Option<usize> {
+    let marker = if reference.main_subent_type == 2 {
+        reference.main_gs_marker.checked_sub(1)?
+    } else {
+        reference.main_gs_marker
+    };
+    usize::try_from(marker).ok()
+}
+
+fn imported_endpoint(
+    entity: &EntityType,
+    reference: &AssocDimensionReference,
+    hint: Option<Vector3>,
+) -> Option<Vector3> {
+    let planar = entity_curve(entity)?;
+    let t = match reference.osnap_distance {
+        v if v.abs() < 1e-9 => 0.0,
+        v if (v - 1.0).abs() < 1e-9 => 1.0,
+        _ => return None,
+    };
+    let point = match &planar.curve {
+        KernelCurve::Polyline(_) => {
+            let segment = segment_index(reference)?;
+            let point = lift(
+                &planar.plane,
+                planar.curve.segments().get(segment)?.point_at(t),
+            );
+            // Exporters can leave stale GS markers after editing a polyline.
+            // Beyond the unambiguous first-edge convention, require a real
+            // stored snap point to validate this imported endpoint. Zero and
+            // 2e50 sentinel points do not establish feature identity.
+            if segment > 0 && !hint.is_some_and(|hint| distance_squared(point, hint) < 1e-10) {
+                return None;
+            }
+            point
+        }
+        KernelCurve::Line(_) | KernelCurve::Arc(_) | KernelCurve::Nurbs(_) => {
+            lift(&planar.plane, planar.curve.point_at(t))
+        }
+        _ => return None,
+    };
+    Some(point)
 }

@@ -14,10 +14,8 @@ use std::f64::consts::TAU;
 
 use crate::command::DimensionAssociationSource;
 
-use super::dimension_assoc_chain::{
-    self as chain, ChainError, FeatureContext, ReferenceChain,
-};
-use super::viewport_ref::{AcceptedSnap, ViewportFrame};
+use super::dimension_assoc_chain::{self as chain, ChainError, FeatureContext, ReferenceChain};
+use super::viewport_ref::{AcceptedSnap, MeasurementScale, ViewportFrame};
 use super::{ChangeKind, Scene};
 
 pub(crate) const POLYLINE_ARC_CENTER_MARKER: i32 = -4;
@@ -404,8 +402,7 @@ impl ChainMap {
     pub(crate) fn model_to_space(&self, point: Vector3) -> Vector3 {
         match &self.frame {
             Some(frame) => {
-                let mapped =
-                    frame.model_to_paper(glam::DVec3::new(point.x, point.y, point.z));
+                let mapped = frame.model_to_paper(glam::DVec3::new(point.x, point.y, point.z));
                 Vector3::new(mapped.x, mapped.y, mapped.z)
             }
             None => point,
@@ -416,8 +413,7 @@ impl ChainMap {
     pub(crate) fn space_to_model(&self, point: Vector3) -> Vector3 {
         match &self.frame {
             Some(frame) => {
-                let mapped =
-                    frame.paper_to_model(glam::DVec3::new(point.x, point.y, point.z));
+                let mapped = frame.paper_to_model(glam::DVec3::new(point.x, point.y, point.z));
                 Vector3::new(mapped.x, mapped.y, mapped.z)
             }
             None => point,
@@ -462,11 +458,18 @@ impl ChainMap {
     /// Only the plane moves: the centre, radius and angles are coordinates
     /// *within* the plane, so they stay as they are and every point the
     /// geometry produces comes out in the dimension's space already.
-    fn map_radial(&self, radial: RadialSourceGeometry) -> RadialSourceGeometry {
-        RadialSourceGeometry {
-            plane: self.map_plane(radial.plane),
-            ..radial
+    fn map_radial(&self, radial: RadialSourceGeometry) -> Option<RadialSourceGeometry> {
+        let plane = self.map_plane(radial.plane);
+        let x = glam::DVec3::from_array(plane.x_axis);
+        let y = glam::DVec3::from_array(plane.y_axis);
+        let magnitude = x.length_squared().max(y.length_squared());
+        if magnitude < 1e-24
+            || (x.length_squared() - y.length_squared()).abs() > magnitude * 1e-9
+            || x.dot(y).abs() > magnitude * 1e-9
+        {
+            return None;
         }
+        Some(RadialSourceGeometry { plane, ..radial })
     }
 }
 
@@ -500,7 +503,9 @@ pub enum ReferenceStatus {
 fn chain_map(scene: &Scene, walked: &ReferenceChain) -> ChainMap {
     ChainMap {
         transform: walked.transform,
-        frame: walked.viewport.and_then(|handle| scene.viewport_frame(handle)),
+        frame: walked
+            .viewport
+            .and_then(|handle| scene.viewport_frame(handle)),
     }
 }
 
@@ -531,7 +536,12 @@ fn hint_error(entity: &EntityType, point: Vector3) -> f64 {
 /// the same drawing. Rather than guess, both readings are mapped down to the
 /// entity and the one that actually lands on the geometry wins. The point is
 /// only ever a *hint* — it disambiguates candidates, it is never the answer.
-fn local_hint(scene: &Scene, map: &ChainMap, entity: &EntityType, stored: Vector3) -> Option<Vector3> {
+fn local_hint(
+    scene: &Scene,
+    map: &ChainMap,
+    entity: &EntityType,
+    stored: Vector3,
+) -> Option<Vector3> {
     let _ = scene;
     let inverse = chain::invert(&map.transform)?;
     let mut candidates = vec![inverse.apply(stored)];
@@ -558,34 +568,66 @@ pub fn resolve_reference_chain(
     let walked = match chain::walk_chain(&scene.document, &reference.xrefs) {
         Ok(walked) => walked,
         Err(ChainError::Missing(handle)) => return Err(ReferenceStatus::Broken(handle)),
-        Err(ChainError::Empty) => return Err(ReferenceStatus::Unresolved),
+        Err(ChainError::Empty | ChainError::Invalid) => return Err(ReferenceStatus::Unresolved),
     };
     let Some(entity) = scene.document.get_entity(walked.entity) else {
         return Err(ReferenceStatus::Broken(walked.entity));
     };
     let map = chain_map(scene, &walked);
-    let inverse = chain::invert(&map.transform);
-
-    let mut local = None;
-    if chain::evaluates(reference.osnap_type) {
-        let hint = local_hint(scene, &map, entity, reference.osnap_point);
-        let from = from_space
-            .zip(inverse)
-            .map(|(point, inverse)| inverse.apply(map.space_to_model(point)));
-        local = chain::feature_point(
+    if walked.viewport.is_some() && map.frame.is_none() {
+        return Err(ReferenceStatus::Unresolved);
+    }
+    let inverse = chain::invert(&map.transform).ok_or(ReferenceStatus::Unresolved)?;
+    if matches!(
+        reference.osnap_type,
+        chain::osnap::INTERSEC | chain::osnap::APPARENT_INT
+    ) {
+        match chain::walk_chain(&scene.document, &reference.intersection_objects) {
+            Err(ChainError::Missing(handle)) => return Err(ReferenceStatus::Broken(handle)),
+            Err(_) => return Err(ReferenceStatus::Unresolved),
+            Ok(_) => {}
+        }
+    }
+    let legacy = reference.main_subent_type != 2
+        && matches!(
+            reference.osnap_type,
+            chain::osnap::NONE | chain::osnap::END | chain::osnap::START_POINT
+        );
+    let local = if reference.osnap_type == chain::osnap::PERP && !walked.block_path.is_empty() {
+        from_space
+            .and_then(|from| {
+                chain::perpendicular_in_model(entity, &map.transform, map.space_to_model(from))
+            })
+            .map(|point| inverse.apply(point))
+    } else if legacy {
+        resolve_local_by_marker(entity, reference)
+    } else if chain::evaluates(reference.osnap_type) {
+        let hint = if reference
+            .osnap_point
+            .x
+            .abs()
+            .max(reference.osnap_point.y.abs())
+            .max(reference.osnap_point.z.abs())
+            < 1e40
+        {
+            local_hint(scene, &map, entity, reference.osnap_point)
+        } else {
+            None
+        };
+        let from = from_space.map(|point| inverse.apply(map.space_to_model(point)));
+        chain::feature_point(
             &scene.document,
             entity,
             reference,
             FeatureContext { hint, from },
-        );
+        )
+    } else {
+        None
     }
-    // Every reference — including one whose osnap type we do not evaluate —
-    // falls back to the marker/parameter convention, which is what the
-    // pre-PR3 writer and plain END references use.
-    let local = match local.or_else(|| resolve_local_by_marker(entity, reference)) {
-        Some(local) => local,
-        None => return Err(ReferenceStatus::Unresolved),
-    };
+    .ok_or(ReferenceStatus::Unresolved)?;
+    if !local.x.is_finite() || !local.y.is_finite() || !local.z.is_finite() {
+        return Err(ReferenceStatus::Unresolved);
+    }
     let model = map.to_model(local);
     Ok(ResolvedReference {
         model,
@@ -798,9 +840,11 @@ pub(crate) fn dimension_is_associative(
         };
         association.dimension == dimension
             && association.associativity != 0
-            && association.references.iter().flatten().any(|reference| {
-                chain::walk_chain(document, &reference.xrefs).is_ok()
-            })
+            && association
+                .references
+                .iter()
+                .flatten()
+                .any(|reference| chain::walk_chain(document, &reference.xrefs).is_ok())
     })
 }
 
@@ -827,6 +871,15 @@ pub(crate) fn constraint_from_associative_dimension(
         };
         (association.dimension == handle && association.associativity != 0).then_some(association)
     })?;
+    if association.trans_space
+        || association
+            .references
+            .iter()
+            .flatten()
+            .any(|r| r.xrefs.len() != 1)
+    {
+        return None;
+    }
     let point = |index: usize| {
         let reference = association.references.get(index)?.first()?;
         Some(ParametricRef::point(
@@ -1207,8 +1260,7 @@ impl Scene {
             self.attach_viewport_radial_association(dimension, snaps);
             return;
         }
-        let mut references: [Vec<AssocDimensionReference>; 4] =
-            std::array::from_fn(|_| Vec::new());
+        let mut references: [Vec<AssocDimensionReference>; 4] = std::array::from_fn(|_| Vec::new());
         let mut associativity = 0;
         let mut trans_space = false;
         let mut reactor_targets = Vec::new();
@@ -1233,25 +1285,41 @@ impl Scene {
             reactor_targets.extend(xrefs.iter().copied());
 
             let osnap_type = chain::osnap_type_for(source.snap_type);
-            // An explicitly-acquired sub-entity wins; otherwise fall back to
-            // the same marker inference model-space creation already uses, in
-            // the entity's own coordinates.
-            let (marker, parameter) = match source.source.marker {
-                Some(marker) => (marker, source.source.parameter),
-                None => {
-                    let local = Self::point_in_entity_space(
-                        &self.document,
-                        &source.block_path,
-                        dvec3(snap.model_point),
-                    );
-                    source_reference(entity, local).unwrap_or((0, 0.0))
-                }
+            let local = Self::point_in_entity_space(
+                &self.document,
+                &source.block_path,
+                dvec3(snap.model_point),
+            );
+            let marker_parameter = source
+                .source
+                .marker
+                .map(|marker| (marker, source.source.parameter))
+                .or_else(|| feature_reference(entity, local, source.snap_type));
+            let Some((marker, parameter)) = marker_parameter else {
+                continue;
             };
+            let mut intersection_objects = Vec::new();
+            if matches!(
+                source.snap_type,
+                crate::snap::SnapType::Intersection | crate::snap::SnapType::ApparentIntersection
+            ) {
+                let Some(other) = source.intersection.as_ref() else {
+                    continue;
+                };
+                intersection_objects.extend(snap.viewport);
+                intersection_objects.extend(other.block_path.iter().copied());
+                intersection_objects.push(other.source.handle);
+                if chain::walk_chain(&self.document, &intersection_objects).is_err() {
+                    continue;
+                }
+                reactor_targets.extend(intersection_objects.iter().copied());
+            }
             associativity |= 1 << index;
             references[index].push(AssocDimensionReference {
                 class_name: "AcDbOsnapPointRef".to_string(),
                 osnap_type,
                 xrefs,
+                intersection_objects,
                 main_subent_type: 1,
                 main_gs_marker: marker,
                 osnap_distance: parameter,
@@ -1385,13 +1453,41 @@ impl Scene {
     /// the erased source comes back and the same query starts answering
     /// [`ReferenceStatus::Resolved`] again, with the reference record itself
     /// never having been rewritten.
-    pub fn dimension_association_status(
-        &self,
-        dimension: Handle,
-    ) -> Vec<(usize, ReferenceStatus)> {
+    pub fn dimension_association_status(&self, dimension: Handle) -> Vec<(usize, ReferenceStatus)> {
         let Some(association) = self.dimension_association(dimension) else {
             return Vec::new();
         };
+        let measurement_supported = !association.trans_space
+            || self.document.get_entity(dimension).is_some_and(|entity| {
+                matches!(
+                    entity,
+                    EntityType::Dimension(Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_))
+                ) || persisted_measurement_scale(&self.document, entity).is_some()
+            });
+        let measurement_supported = measurement_supported
+            && self.document.get_entity(dimension).is_some_and(|entity| {
+                if !matches!(
+                    entity,
+                    EntityType::Dimension(
+                        Dimension::Radius(_) | Dimension::Diameter(_) | Dimension::LargeRadial(_)
+                    )
+                ) {
+                    return true;
+                }
+                association.references[0]
+                    .first()
+                    .and_then(|reference| {
+                        let walked = chain::walk_chain(&self.document, &reference.xrefs).ok()?;
+                        let source = self.document.get_entity(walked.entity)?;
+                        chain_map(self, &walked)
+                            .map_radial(radial_source_for_marker(source, reference.main_gs_marker)?)
+                    })
+                    .is_some()
+            });
+        let measurement_supported = measurement_supported
+            && association.references.iter().flatten()
+                .filter(|r| chain::needs_from_point(r.osnap_type)).count() <= 1;
+        let points = self.dimension_association_slot_points(dimension);
         association
             .references
             .iter()
@@ -1400,8 +1496,16 @@ impl Scene {
                 let reference = slot.first()?;
                 Some((
                     index,
-                    match resolve_reference_chain(self, reference, None) {
-                        Ok(_) => ReferenceStatus::Resolved,
+                    match resolve_reference_chain(
+                        self,
+                        reference,
+                        points
+                            .iter()
+                            .enumerate()
+                            .find_map(|(other, point)| (other != index).then_some(*point)),
+                    ) {
+                        Ok(_) if measurement_supported => ReferenceStatus::Resolved,
+                        Ok(_) => ReferenceStatus::Unresolved,
                         Err(status) => status,
                     },
                 ))
@@ -1437,10 +1541,7 @@ impl Scene {
     }
 
     /// The DIMASSOC payload attached to `dimension`, if there is one.
-    pub fn dimension_association(
-        &self,
-        dimension: Handle,
-    ) -> Option<&AssocDimensionAssociation> {
+    pub fn dimension_association(&self, dimension: Handle) -> Option<&AssocDimensionAssociation> {
         self.document.objects.values().find_map(|object| {
             let ObjectType::Associative(object) = object else {
                 return None;
@@ -1557,12 +1658,8 @@ impl Scene {
         }
     }
 
-    pub(crate) fn infer_dimension_sources(
-        &self,
-        dimension: Handle,
-    ) -> Vec<Option<Handle>> {
-        let Some(EntityType::Dimension(entity)) = self.document.get_entity(dimension)
-        else {
+    pub(crate) fn infer_dimension_sources(&self, dimension: Handle) -> Vec<Option<Handle>> {
+        let Some(EntityType::Dimension(entity)) = self.document.get_entity(dimension) else {
             return Vec::new();
         };
         let radial_data = match entity {
@@ -1659,11 +1756,15 @@ impl Scene {
 
         let mut refreshed = Vec::new();
         for association in associations {
-            // Two passes. PERPENDICULAR and TANGENT are measured *from* the
-            // other definition point, so the independent references have to
-            // land first; a dimension with two dependent references keeps its
-            // old points as the from-points, which is stable because they were
-            // valid the last time round.
+            // Dependent snaps need a resolved independent definition point.
+            // Two such features require a coupled solve; old points are not
+            // evidence of a solution after the geometry changes.
+            if association.references.iter().flatten()
+                .filter(|r| chain::needs_from_point(r.osnap_type)).count() > 1
+            {
+                continue;
+            }
+            // Resolve independent references first, then perpendicular/tangent.
             let mut resolved: [Option<ResolvedReference>; 4] = std::array::from_fn(|index| {
                 let reference = association.references[index].first()?;
                 if chain::needs_from_point(reference.osnap_type) {
@@ -1675,9 +1776,7 @@ impl Scene {
                 .document
                 .get_entity(association.dimension)
                 .and_then(|entity| match entity {
-                    EntityType::Dimension(dimension) => {
-                        Some(dimension_reference_points(dimension))
-                    }
+                    EntityType::Dimension(dimension) => Some(dimension_reference_points(dimension)),
                     _ => None,
                 })
                 .unwrap_or_default();
@@ -1698,6 +1797,19 @@ impl Scene {
                             .or_else(|| previous.get(other).copied())
                     });
                 resolved[index] = resolve_reference_chain(self, reference, from).ok();
+            }
+            if association
+                .references
+                .iter()
+                .enumerate()
+                .any(|(index, slot)| !slot.is_empty() && resolved[index].is_none())
+            {
+                continue;
+            }
+            let viewports: std::collections::HashSet<_> =
+                resolved.iter().flatten().map(|r| r.viewport).collect();
+            if viewports.len() > 1 {
+                continue;
             }
             // The map of the first live reference governs how the whole
             // dimension is placed and measured — all of a dimension's points
@@ -1725,7 +1837,7 @@ impl Scene {
                 // Mapped once, here: everything the match arms below build out
                 // of it then lands in the dimension's own space.
                 Some((
-                    chain_map(self, &walked).map_radial(radial),
+                    chain_map(self, &walked).map_radial(radial)?,
                     reference.osnap_distance,
                 ))
             });
@@ -1738,14 +1850,33 @@ impl Scene {
                     _ => return None,
                 };
                 let radial = radial_source_for_marker(entity, segment)?;
-                Some(chain_map(self, &walked).map_radial(radial))
+                chain_map(self, &walked).map_radial(radial)
             });
             if radial_source.is_none() && resolved.iter().all(Option::is_none) {
                 continue;
             }
+            let Some(before) = self.document.get_entity(association.dimension).cloned() else {
+                continue;
+            };
+            let angular = matches!(
+                &before,
+                EntityType::Dimension(Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_))
+            );
+            let measurement_scale = if let Some(frame) = map.frame.filter(|_| !angular) {
+                let Some(mut scale) = persisted_measurement_scale(&self.document, &before) else {
+                    continue;
+                };
+                scale.viewport_compensation = frame.paper_to_model_length_factor();
+                Some(scale)
+            } else {
+                None
+            };
             if self.is_recording_undo() {
                 let before = self.document.get_entity_arc(association.dimension);
                 self.record_undo_before(association.dimension, before);
+            }
+            if measurement_scale.is_some() {
+                self.ensure_app_id(MeasurementScale::APP_ID);
             }
             let Some(EntityType::Dimension(dimension)) =
                 self.document.get_entity_mut(association.dimension)
@@ -2005,8 +2136,8 @@ impl Scene {
                         .zip(resolved.iter())
                         .all(|(model, space)| match (model, space, map.frame.as_ref()) {
                             (Some(model), Some(space), Some(frame)) => {
-                                let projected =
-                                    frame.model_to_paper(glam::DVec3::new(model.x, model.y, model.z));
+                                let projected = frame
+                                    .model_to_paper(glam::DVec3::new(model.x, model.y, model.z));
                                 (projected.x - space.x).abs() < 1e-6
                                     && (projected.y - space.y).abs() < 1e-6
                             }
@@ -2015,6 +2146,30 @@ impl Scene {
                 "resolved paper points must be the model points through the frame",
             );
             dimension.base_mut().actual_measurement = measurement;
+            if map.frame.is_some() {
+                if let EntityType::Dimension(old) = &before {
+                    if old.base().text_user_positioned {
+                        dimension.base_mut().text_middle_point = old.base().text_middle_point;
+                        dimension.base_mut().insertion_point = old.base().insertion_point;
+                    }
+                }
+            }
+            let entity = self
+                .document
+                .get_entity_mut(association.dimension)
+                .expect("dimension exists");
+            if let Some(scale) = measurement_scale {
+                scale.write_to_entity(entity);
+            }
+            if *entity == before {
+                continue;
+            }
+            // Saved anonymous blocks bypass generated dimension rendering.
+            // Invalidate only after a completely resolved, committed update;
+            // the undo snapshot above retains the previous picture and data.
+            if let EntityType::Dimension(dimension) = entity {
+                dimension.base_mut().block_name.clear();
+            }
             refreshed.push((association.dimension, ChangeKind::Modified));
         }
         refreshed
@@ -2052,4 +2207,122 @@ fn linear_measurement(linear: &acadrust::entities::DimensionLinear) -> f64 {
     let second = plane.project(dpoint(linear.second_point)).unwrap_or(first);
     let axis = [linear.rotation.cos(), linear.rotation.sin()];
     ((second[0] - first[0]) * axis[0] + (second[1] - first[1]) * axis[1]).abs()
+}
+
+/// Encode the feature actually acquired, in source-local coordinates.
+fn feature_reference(
+    entity: &EntityType,
+    point: Vector3,
+    kind: crate::snap::SnapType,
+) -> Option<(i32, f64)> {
+    use crate::snap::SnapType as S;
+    match kind {
+        S::Node | S::Insertion => Some((0, 0.0)),
+        S::Center if matches!(entity, EntityType::Ellipse(_)) => Some((-3, 0.0)),
+        S::Endpoint | S::ObjectPick | S::Center => {
+            if kind != S::Center {
+                if let Some(index) = source_points(entity)
+                    .iter()
+                    .position(|candidate| point_distance_squared(*candidate, point) < 1e-12)
+                {
+                    return Some((index as i32, 0.0));
+                }
+            }
+            if matches!(entity, EntityType::Circle(_) | EntityType::Arc(_)) {
+                return source_reference(entity, point);
+            }
+            let planar = crate::entities::curve::entity_curve(entity)?;
+            if let KernelCurve::Polyline(polyline) = &planar.curve {
+                for segment in 0..polyline.vertices.len() {
+                    if let Some(arc) = polyline.segment_arc(segment) {
+                        let center = vector3(planar.plane.point_at(arc.center));
+                        if point_distance_squared(center, point) < 1e-12 {
+                            return Some((POLYLINE_ARC_CENTER_MARKER, segment as f64));
+                        }
+                    }
+                }
+            }
+            None
+        }
+        S::Nearest | S::Extension => {
+            if matches!(entity, EntityType::Circle(_) | EntityType::Arc(_)) {
+                return source_reference(entity, point);
+            }
+            let planar = crate::entities::curve::entity_curve(entity)?;
+            let near = closest_point(&planar.curve, planar.plane.project(dpoint(point))?);
+            Some((0, near.t))
+        }
+        S::Midpoint => {
+            let planar = crate::entities::curve::entity_curve(entity)?;
+            if let KernelCurve::Polyline(_) = &planar.curve {
+                let uv = planar.plane.project(dpoint(point))?;
+                let segments = planar.curve.segments();
+                let (index, _) = segments.iter().enumerate().min_by(|(_, a), (_, b)| {
+                    let error = |c: &KernelCurve| {
+                        let p = closest_point(c, uv).point;
+                        (p[0] - uv[0]).powi(2) + (p[1] - uv[1]).powi(2)
+                    };
+                    error(a).total_cmp(&error(b))
+                })?;
+                Some((index as i32, 0.5))
+            } else {
+                Some((0, 0.5))
+            }
+        }
+        S::Tangent => {
+            if let EntityType::Spline(spline) = entity {
+                return Some((
+                    0,
+                    crate::entities::spline::nurbs3(spline)?.parameter_at(dpoint(point)),
+                ));
+            }
+            source_reference(entity, point)
+        }
+        S::Intersection | S::ApparentIntersection => Some((0, 0.0)),
+        _ => source_reference(entity, point),
+    }
+}
+
+fn persisted_measurement_scale(
+    doc: &acadrust::CadDocument,
+    entity: &EntityType,
+) -> Option<MeasurementScale> {
+    use crate::entities::dim_override;
+    use acadrust::xdata::XDataValue;
+    let EntityType::Dimension(dimension) = entity else {
+        return None;
+    };
+    let data = &dimension.base().common.extended_data;
+    let effective = dim_override::real(data, dim_override::DIMLFAC)
+        .or_else(|| {
+            doc.dim_styles
+                .get(&dimension.base().style_name)
+                .map(|s| s.dimlfac)
+        })?
+        .abs();
+    let effective = if effective == 0.0 { 1.0 } else { effective };
+    if !effective.is_finite() {
+        return None;
+    }
+    if let Some(mut scale) = MeasurementScale::read(data) {
+        // A Properties edit writes the persisted total DIMLFAC. Preserve that
+        // new user choice when the next source/viewport update recomposes it.
+        scale.user_lfac = effective / scale.viewport_compensation;
+        return Some(scale);
+    }
+    let calculated = data
+        .get_record("ACAD_DIMASSOC_CALC_DIMLFAC")?
+        .values
+        .iter()
+        .find_map(|v| match v {
+            XDataValue::Real(v) => Some(v.abs()),
+            _ => None,
+        })?;
+    if !calculated.is_finite() || calculated <= 0.0 {
+        return None;
+    }
+    Some(MeasurementScale {
+        user_lfac: effective / calculated,
+        viewport_compensation: calculated,
+    })
 }
