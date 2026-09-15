@@ -487,7 +487,14 @@ impl OpenCADStudio {
                         PropSection {
                             title: t!("Parameters").into_owned(),
                             props: {
-                                let mut props: Vec<Property> = scene
+                                let mut props = vec![Property {
+                                    label: String::new(),
+                                    field: "show_constraint_values",
+                                    value: PropValue::ParamsVisibilityToggle(
+                                        self.show_constraint_values,
+                                    ),
+                                }];
+                                props.extend(scene
                                     .named_parameters()
                                     .iter()
                                     .enumerate()
@@ -503,8 +510,7 @@ impl OpenCADStudio {
                                                 .resolve(&parameter.name)
                                                 .map_err(|error| error.to_string()),
                                         },
-                                    })
-                                    .collect();
+                                    }));
                                 props.push(Property {
                                     label: String::new(),
                                     field: "named_parameter_add",
@@ -3267,6 +3273,9 @@ fn make_sections_read_only(sections: &mut [crate::scene::model::object::PropSect
             PropValue::EntityLink { handles, .. } => format!("{} entity link(s)", handles.len()),
             PropValue::ParamRow { name, formula, .. } => format!("{name} = {formula}"),
             PropValue::ParamAddRow => String::new(),
+            PropValue::ParamsVisibilityToggle(value) => {
+                if *value { t!("On") } else { t!("Off") }.into_owned()
+            }
         };
         property.field = "locked_read_only";
         property.value = PropValue::ReadOnly(text);

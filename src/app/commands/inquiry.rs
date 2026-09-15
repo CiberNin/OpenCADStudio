@@ -25,7 +25,7 @@ impl OpenCADStudio {
             .collect();
         if handles.len() < 2 {
             self.command_line
-                .push_info(crate::t!("Select at least two unlocked objects to align.").as_ref());
+                .push_info(crate::t!("Select objects").as_ref());
             return;
         }
 
@@ -54,8 +54,6 @@ impl OpenCADStudio {
             })
             .collect();
         if bounds.len() < 2 {
-            self.command_line
-                .push_info(crate::t!("The selected objects do not provide usable bounds.").as_ref());
             return;
         }
 

@@ -8038,6 +8038,15 @@ mod parametric_constraint_undo_tests {
                 crate::scene::model::object::PropValue::ParamRow { name, .. }
                     if name == "width"
             )));
+        assert!(app.tabs[app.active_tab]
+            .properties
+            .sections
+            .iter()
+            .flat_map(|section| &section.props)
+            .any(|property| matches!(
+                property.value,
+                crate::scene::model::object::PropValue::ParamsVisibilityToggle(_)
+            )));
     }
 
     /// End-to-end through the actual `Message` handlers a Properties-panel

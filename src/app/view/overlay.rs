@@ -1256,7 +1256,7 @@ pub(super) fn viewport_context_menu_overlay(
             // none of the entity-selection actions above (Move/Copy/Isolate/
             // Select Similar) apply to it.
             items.push(item(
-                t!("Delete Constraint").into_owned(),
+                t!("Delete").into_owned(),
                 Message::PropConstraintDelete(id),
             ));
             items.push(sep());
