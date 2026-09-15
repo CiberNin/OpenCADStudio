@@ -46,41 +46,49 @@ impl OpenCADStudio {
         self.accepted_snaps.last()
     }
 
-    /// `true` when any point the active command collected came through a
-    /// layout viewport. Dimension association inference (which compares a
-    /// dimension's own definition points against geometry in the *current*
-    /// space) must not run in that case: the definition points are paper
-    /// coordinates that correspond to no paper-sheet geometry, and the model
-    /// geometry they really describe lives at completely different
-    /// coordinates. PR3 replaces this guard with real viewport-aware
-    /// associations built from `AcceptedSnap::source`.
-    pub(crate) fn accepted_snaps_through_viewport(&self) -> bool {
-        self.accepted_snaps.iter().any(AcceptedSnap::through_viewport)
-    }
-
-    /// `Scene::infer_dimension_sources`, suppressed when the dimension's points
-    /// were picked through a layout viewport (PR1).
+    /// `Scene::infer_dimension_sources`, suppressed when the dimension being
+    /// created measures through a layout viewport.
     ///
     /// Inference works by looking for geometry near the dimension's own
     /// definition points, in whatever space it is handed. A paper-space
     /// dimension measured through a viewport has PAPER definition points that
     /// happen to sit over projected model geometry, so unguarded inference
     /// would either associate it with unrelated paper-sheet geometry at those
-    /// coordinates, or match model geometry using paper coordinates. Neither is
-    /// correct, and a wrong association is worse than none. Returning an empty
-    /// source list makes `attach_dimension_association` a no-op.
+    /// coordinates, or match model geometry using paper coordinates. Neither
+    /// is correct, and a wrong association is worse than none. Returning an
+    /// empty source list makes `attach_dimension_association` a no-op.
     ///
-    /// Deliberately minimal: PR3 replaces this with a real viewport-aware
-    /// association built from `AcceptedSnap::source`.
+    /// The classification is
+    /// [`OpenCADStudio::dimension_measure_space`] — the *same* one that
+    /// decides whether to compensate the measurement, so the two can never
+    /// disagree. In particular it ignores the trailing dimension-line
+    /// placement click, which routinely lands inside a viewport rectangle for
+    /// an ordinary paper-space dimension and must not suppress its
+    /// association.
     pub(crate) fn infer_dimension_sources_guarded(
         &self,
         tab: usize,
         dimension: Handle,
     ) -> Vec<Option<Handle>> {
-        if self.accepted_snaps_through_viewport() {
+        if !self.dimension_association_allowed(tab) {
             return Vec::new();
         }
         self.tabs[tab].scene.infer_dimension_sources(dimension)
+    }
+
+    /// The single gate on creating a paper-space association for the
+    /// dimension the active command is committing.
+    ///
+    /// `false` exactly when the dimension measures through (or partly through)
+    /// a layout viewport, whatever supplied its sources — inference,
+    /// an explicit object pick, or an explicit source list. Everything in the
+    /// commit path that used to decide this for itself now asks here, so the
+    /// measurement rule and the association rule cannot drift apart.
+    pub(crate) fn dimension_association_allowed(&self, tab: usize) -> bool {
+        matches!(
+            self.dimension_measure_space(tab),
+            crate::app::dim_viewport::DimensionMeasureSpace::Direct
+        )
     }
 
     /// Forget the accepted snaps of a finished / abandoned command.
@@ -107,6 +115,15 @@ impl OpenCADStudio {
             }
             None => AcceptedSnap::free(committed),
         };
+        self.push_accepted_snap(accepted);
+    }
+
+    /// Append an already-built accepted snap, keeping the retention cap.
+    ///
+    /// Used by paths that are not point steps (the dimension object pick
+    /// resolved through a viewport) and therefore never reach the click
+    /// handler.
+    pub(crate) fn push_accepted_snap(&mut self, accepted: AcceptedSnap) {
         if self.accepted_snaps.len() >= MAX_ACCEPTED_SNAPS {
             self.accepted_snaps.remove(0);
         }

@@ -1,19 +1,20 @@
-//! PR2 seams onto the paper-space viewport world.
+//! Object-pick resolution for paper-space dimensions taken through a layout
+//! viewport.
 //!
-//! Everything in this file exists so that viewport-aware dimension
-//! measurement works *without* PR1 (viewport snapping) in the tree. Each seam
-//! is small and self-contained; the merge notes say which ones PR1 replaces.
+//! Paper-space hit testing only sees the sheet's own entities, so a dimension
+//! command's explicit "select object" pick that lands inside a content
+//! viewport finds nothing. [`Scene::dimension_pick_through_viewport`] maps the
+//! click into model space through the viewport's
+//! [`crate::scene::viewport_ref::ViewportFrame`], hit-tests the viewport's
+//! resident model wires (descending into block instances and baking the
+//! instance transform), and hands back a copy of the picked entity already
+//! projected onto the sheet.
 //!
-//! ## Seams
-//! * [`Scene::viewport_frame`] — **replaced by PR1.** PR1 owns construction of
-//!   [`ViewportFrame`] from the live viewport camera. This implementation
-//!   derives the frame straight from the DXF viewport record, which is correct
-//!   for plan (non-oblique) content viewports.
-//! * [`Scene::content_viewport_at_paper_point`] /
-//!   [`Scene::viewport_frame_at_paper_point`] — PR1 supersedes these with its
-//!   snap-time viewport resolution; harmless to keep.
-//! * [`Scene::dimension_pick_through_viewport`] — PR2 owns this permanently.
-//!   It is the explicit-object-pick path and does not depend on PR1.
+//! The frame itself is built by [`Scene::viewport_frame`] (see
+//! `crate::scene::mspace`), which derives it from the *live viewport camera*
+//! so it always agrees with the pixels the renderer drew. It returns `None`
+//! for oblique / perspective viewports, and every entry point here then
+//! declines the pick rather than guessing a planar mapping.
 
 use super::*;
 
@@ -43,33 +44,6 @@ pub struct ViewportDimPick {
 }
 
 impl Scene {
-    // ───────────────────────── PR1 SEAM: BEGIN ──────────────────────────
-    // Replace the body of `viewport_frame` with PR1's implementation on
-    // merge; the signature is the shared contract and must not change.
-
-    /// Planar paper↔model mapping for one layout viewport.
-    ///
-    /// Derived from the viewport record rather than the render camera:
-    /// `paper_center = vp.center`, `model_target = vp.view_target`,
-    /// `scale = vp_effective_scale(...)`, `twist = vp.twist_angle`.
-    pub fn viewport_frame(&self, viewport: Handle) -> Option<ViewportFrame> {
-        let Some(EntityType::Viewport(vp)) = self.document.get_entity(viewport) else {
-            return None;
-        };
-        let scale = vp_effective_scale(vp.custom_scale, vp.view_height, vp.height);
-        if !scale.is_finite() || scale.abs() < 1e-12 {
-            return None;
-        }
-        Some(ViewportFrame {
-            viewport,
-            paper_center: DVec2::new(vp.center.x, vp.center.y),
-            model_target: DVec2::new(vp.view_target.x, vp.view_target.y),
-            scale,
-            twist: vp.twist_angle,
-            locked: vp.status.locked,
-        })
-    }
-    // ────────────────────────── PR1 SEAM: END ───────────────────────────
 
     /// The smallest *on* content viewport of the current layout whose paper
     /// rectangle contains `paper`. `None` on the Model tab, while editing

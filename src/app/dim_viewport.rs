@@ -5,29 +5,42 @@
 //! *report* the model measurement. Because a viewport frame is a similarity
 //! (uniform scale plus in-plane twist), the model measurement of any linear,
 //! aligned or radial span is exactly the raw paper measurement times the
-//! viewport compensation `1 / scale` — projecting the model span onto the
+//! viewport compensation `1 / scale` -- projecting the model span onto the
 //! rotated paper axis and compensating is the same number. So no geometry is
 //! rewritten: the compensation is persisted once, as a negative DIMLFAC
 //! override on the dimension (see
 //! [`MeasurementScale::viewport_dimlfac_override`]), and applied once, by the
 //! linear formatter.
 //!
-//! Angular dimensions are never compensated — a similarity preserves angles.
+//! Angular dimensions are never compensated -- a similarity preserves angles.
 //!
-//! ## PR1 seam
-//! [`OpenCADStudio::record_dimension_accepted_snap`] is the one function PR1
-//! replaces. PR1 records a real [`AcceptedSnap`] per accepted point (with the
-//! snapped source and the frame in effect at snap time); this branch derives
-//! the same information from the cursor's paper position and the content
-//! viewport under it. Everything downstream consumes `AcceptedSnap` only.
+//! ## Where the snaps come from
+//! The per-point [`AcceptedSnap`] list is PR1's
+//! ([`OpenCADStudio::accepted_snaps`]): the click handler records the real
+//! snap for every interactive pick, and `apply_step_input` records a free
+//! snap for typed / dynamic-input / headless points. There is exactly one
+//! source of truth. Two things are layered on top here:
+//!
+//! * the explicit object-pick path ([`Scene::dimension_pick_through_viewport`])
+//!   is not a point step at all, so it records its own snaps
+//!   ([`OpenCADStudio::record_dimension_viewport_pick`]);
+//! * a *typed* coordinate carries no snap, so PR1 records it as a free point
+//!   with no viewport. [`OpenCADStudio::measure_snap`] re-attaches the
+//!   content viewport under such a point, which is what makes
+//!   `DIMLINEAR` + typed coordinates inside a 1:10 viewport measure the model.
+//!   It is deliberately limited to snaps that are free *and* source-less, so a
+//!   genuine paper-sheet snap that happens to sit over a viewport is never
+//!   reinterpreted.
 
 use acadrust::entities::Dimension;
+use acadrust::types::Handle;
 use acadrust::xdata::XDataValue;
 use acadrust::EntityType;
 use glam::DVec3;
 
+use crate::command::DimensionAssociationSource;
 use crate::entities::dim_override;
-use crate::scene::viewport_ref::{AcceptedSnap, MeasurementScale, ViewportFrame};
+use crate::scene::viewport_ref::{AcceptedSnap, MeasurementScale, SnapSourceRef, ViewportFrame};
 
 use super::OpenCADStudio;
 
@@ -46,101 +59,106 @@ pub(crate) enum DimensionMeasureSpace {
 }
 
 impl OpenCADStudio {
-    // ───────────────────────── PR1 SEAM: BEGIN ──────────────────────────
-
-    /// Record the snap accepted for one collected point of the active
-    /// command.
+    /// Record the accepted snaps produced by the explicit object-pick path (a
+    /// dimension "select object" pick resolved through a content viewport).
     ///
-    /// PR1 replaces the body with the real snap result (which knows the
-    /// snapped entity, the block path and the frame at snap time). Until then
-    /// the viewport is resolved from the paper position of the accepted point,
-    /// which is correct for every point that lands inside a content viewport
-    /// and yields a free snap everywhere else.
-    pub(crate) fn record_dimension_accepted_snap(&mut self, i: usize, point: DVec3) {
-        self.sync_dimension_snap_owner(i);
-        let snap = match self.tabs[i].scene.viewport_frame_at_paper_point(point) {
-            Some(frame) => AcceptedSnap {
-                paper_point: point,
-                model_point: frame.paper_to_model(point),
-                viewport: Some(frame.viewport),
-                frame: Some(frame),
-                source: None,
-            },
-            None => AcceptedSnap::free(point),
-        };
-        self.dim_accepted_snaps.push(snap);
-    }
-
-    // ────────────────────────── PR1 SEAM: END ───────────────────────────
-
-    /// Record an accepted snap produced by the explicit object-pick path (a
-    /// pick resolved through a content viewport). Independent of PR1.
+    /// An object pick is not a point step, so PR1's click handler never sees
+    /// it. One pick supplies *both* extension origins, so it is recorded
+    /// twice: that keeps the list index-parallel with the definition points
+    /// the command derives from the entity, and lets the "every measuring
+    /// point came through one viewport" classification see a complete set.
     pub(crate) fn record_dimension_viewport_pick(
         &mut self,
-        i: usize,
         frame: ViewportFrame,
         paper_point: DVec3,
         model_point: DVec3,
+        entity: Handle,
+        block_path: Vec<Handle>,
     ) {
-        self.sync_dimension_snap_owner(i);
-        // An object pick supplies both extension origins at once; record it
-        // twice so the "every measuring point came through one viewport"
-        // test sees a complete set.
         for _ in 0..2 {
-            self.dim_accepted_snaps.push(AcceptedSnap {
+            self.push_accepted_snap(AcceptedSnap {
                 paper_point,
                 model_point,
                 viewport: Some(frame.viewport),
                 frame: Some(frame),
-                source: None,
+                source: Some(SnapSourceRef {
+                    source: DimensionAssociationSource::inferred(entity),
+                    block_path: block_path.clone(),
+                    // An object pick acquires the whole curve, not one
+                    // feature; the per-slot feature point is derived from the
+                    // committed dimension's own definition points.
+                    snap_type: crate::snap::SnapType::Nearest,
+                }),
             });
         }
     }
 
     /// The accepted snap for the `idx`-th collected point of the active
-    /// command, if one was recorded. The contracted accessor PR1 and PR3 read;
-    /// PR2 itself classifies the whole set at commit time.
+    /// command, with the typed-coordinate viewport fallback applied.
+    ///
+    /// Reads PR1's list -- there is no second store.
     #[allow(dead_code)]
-    pub(crate) fn accepted_snap_for_point(&self, idx: usize) -> Option<&AcceptedSnap> {
-        self.dim_accepted_snaps.get(idx)
+    pub(crate) fn accepted_snap_for_point(&self, i: usize, idx: usize) -> Option<AcceptedSnap> {
+        self.accepted_snaps().get(idx).map(|snap| self.measure_snap(i, snap))
     }
 
-    /// Drop recorded snaps when the active command changes, so one command
-    /// never sees another's points.
-    fn sync_dimension_snap_owner(&mut self, i: usize) {
-        let name = self.tabs[i]
-            .active_cmd
-            .as_ref()
-            .map(|command| command.name().to_string());
-        if self.dim_accepted_snaps_owner != name {
-            self.dim_accepted_snaps.clear();
-            self.dim_accepted_snaps_owner = name;
+    /// One accepted snap as *measurement* sees it.
+    ///
+    /// Identical to the recorded snap except that a point which carries no
+    /// snap at all (a typed coordinate, a dynamic-input point, a headless
+    /// script point) and lands inside a content viewport is re-attached to
+    /// that viewport, so typing `100,50` inside a 1:10 viewport measures the
+    /// model just like clicking there would. A snap that landed on real
+    /// paper-sheet geometry keeps `viewport: None` and is never reinterpreted.
+    pub(crate) fn measure_snap(&self, i: usize, snap: &AcceptedSnap) -> AcceptedSnap {
+        if snap.frame.is_some() || snap.source.is_some() {
+            return snap.clone();
+        }
+        let scene = &self.tabs[i].scene;
+        if scene.current_layout == "Model" || scene.active_viewport.is_some() {
+            return snap.clone();
+        }
+        match scene.viewport_frame_at_paper_point(snap.paper_point) {
+            Some(frame) => AcceptedSnap {
+                paper_point: snap.paper_point,
+                model_point: frame.paper_to_model(snap.paper_point),
+                viewport: Some(frame.viewport),
+                frame: Some(frame),
+                source: None,
+            },
+            None => snap.clone(),
         }
     }
 
-    pub(crate) fn clear_dimension_accepted_snaps(&mut self) {
-        self.dim_accepted_snaps.clear();
-        self.dim_accepted_snaps_owner = None;
+    /// The accepted snaps that say what the pending dimension *measures*, in
+    /// collection order.
+    ///
+    /// The final collected point of every dimension command in scope is the
+    /// dimension-line / text placement click, which says nothing about what is
+    /// being measured -- it routinely lands on bare sheet even for a viewport
+    /// measurement, and inside a viewport rectangle even for a plain paper
+    /// one. It is dropped here, which is also why association inference is
+    /// guarded on this set rather than on every recorded snap.
+    pub(crate) fn dimension_measuring_snaps(&self, i: usize) -> Vec<AcceptedSnap> {
+        let all = self.accepted_snaps();
+        let measuring = match all.len() {
+            0 | 1 => all,
+            n => &all[..n - 1],
+        };
+        measuring.iter().map(|snap| self.measure_snap(i, snap)).collect()
     }
 
     /// Classify how the pending dimension should be measured from the snaps
     /// recorded for it.
-    fn dimension_measure_space(&self, i: usize) -> DimensionMeasureSpace {
+    pub(crate) fn dimension_measure_space(&self, i: usize) -> DimensionMeasureSpace {
         let scene = &self.tabs[i].scene;
         // Only a dimension being created *on the sheet* can measure through a
         // viewport. Inside MSPACE the command already works in model space.
         if scene.current_layout == "Model" || scene.active_viewport.is_some() {
             return DimensionMeasureSpace::Direct;
         }
-        // The final collected point of every dimension command in scope is the
-        // dimension-line / text placement click, which says nothing about what
-        // is being measured — it routinely lands on bare sheet even for a
-        // viewport measurement, and inside a viewport rectangle even for a
-        // plain paper one. Only the measuring points are classified.
-        let measuring = match self.dim_accepted_snaps.len() {
-            0 | 1 => self.dim_accepted_snaps.as_slice(),
-            n => &self.dim_accepted_snaps[..n - 1],
-        };
+        let measuring = self.dimension_measuring_snaps(i);
+        let measuring = measuring.as_slice();
         if measuring.is_empty() {
             return DimensionMeasureSpace::Direct;
         }
@@ -167,24 +185,23 @@ impl OpenCADStudio {
 
     /// Apply viewport compensation to a dimension about to be committed.
     ///
-    /// Returns `true` when the dimension measures through a viewport, which
-    /// tells the caller not to infer a paper-space association from the
-    /// projected definition points (PR3 creates the real viewport
-    /// associations).
+    /// Whether the dimension may also take a paper-space association is a
+    /// separate question with the same answer source:
+    /// [`OpenCADStudio::dimension_association_allowed`].
     pub(crate) fn apply_viewport_dimension_measurement(
         &mut self,
         i: usize,
         entity: &mut EntityType,
-    ) -> bool {
+    ) {
         let EntityType::Dimension(dimension) = entity else {
-            return false;
+            return;
         };
         let is_angular = matches!(
             dimension,
             Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)
         );
         let frame = match self.dimension_measure_space(i) {
-            DimensionMeasureSpace::Direct => return false,
+            DimensionMeasureSpace::Direct => return,
             DimensionMeasureSpace::Mixed => {
                 self.command_line.push_warning(
                     crate::t!(
@@ -192,16 +209,15 @@ impl OpenCADStudio {
                     )
                     .as_ref(),
                 );
-                return false;
+                return;
             }
             DimensionMeasureSpace::Viewport(frame) => frame,
         };
 
         // A similarity preserves angles, so an angular dimension reads the
-        // model angle already. It still measured through a viewport, so the
-        // caller must skip association inference.
+        // model angle already and needs no override.
         if is_angular {
-            return true;
+            return;
         }
 
         let compensation = frame.paper_to_model_length_factor();
@@ -225,7 +241,6 @@ impl OpenCADStudio {
                 Some(XDataValue::Real(value)),
             );
         }
-        true
     }
 
     /// Explicit "select object" pick for a dimension command, resolved through
@@ -251,7 +266,13 @@ impl OpenCADStudio {
         let pick = self.tabs[i]
             .scene
             .dimension_pick_through_viewport(paper, aperture_paper)?;
-        self.record_dimension_viewport_pick(i, pick.frame, pick.paper_point, pick.model_point);
+        self.record_dimension_viewport_pick(
+            pick.frame,
+            pick.paper_point,
+            pick.model_point,
+            pick.entity_handle,
+            pick.block_path.clone(),
+        );
         let command = self.tabs[i].active_cmd.as_mut()?;
         command.inject_picked_entity(pick.paper_entity);
         Some(command.on_entity_pick(pick.entity_handle, pick.paper_point))
