@@ -209,6 +209,16 @@ impl OpenCADStudio {
         if let Some(value) =
             MeasurementScale::viewport_dimlfac_override(style_dimlfac, compensation)
         {
+            // The negative DIMLFAC convention is resolved from the dimension's
+            // owner block, and the commit path (or, with DIMASSOC = 0, the
+            // explode path) reads the entity before `add_entity_to_layout`
+            // assigns one. Stamping the layout block here — the same handle
+            // the add would set — keeps the entity self-describing, so the
+            // text is compensated whichever path consumes it.
+            let layout_block = self.tabs[i].scene.current_layout_block_handle_pub();
+            if layout_block.is_valid() {
+                entity.common_mut().owner_handle = layout_block;
+            }
             dim_override::set_on_entity(
                 entity,
                 dim_override::DIMLFAC,
