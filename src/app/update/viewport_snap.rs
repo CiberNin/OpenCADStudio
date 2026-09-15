@@ -102,11 +102,12 @@ impl OpenCADStudio {
     /// after ortho / polar / axis-lock / dynamic-input resolution.
     pub(crate) fn record_accepted_snap(
         &mut self,
+        tab: usize,
         snap: Option<SnapResult>,
         frame: Option<ViewportFrame>,
         committed: glam::DVec3,
     ) {
-        let accepted = match snap {
+        let mut accepted = match snap {
             // A viewport snap keeps its frame only when the hit really came
             // through it, so a paper-sheet snap never claims a model point.
             Some(hit) => {
@@ -115,7 +116,40 @@ impl OpenCADStudio {
             }
             None => AcceptedSnap::free(committed),
         };
+        self.resolve_source_block_path(tab, &mut accepted);
         self.push_accepted_snap(accepted);
+    }
+
+    /// Replace a snap source that is a block INSTANCE with the entity inside
+    /// it that actually owns the snapped feature, plus the INSERT path.
+    ///
+    /// The snap engine can only report what the wire carries, and the
+    /// renderer stamps every wire of an expanded block with the *top-level
+    /// INSERT's* handle — nested inserts included. `SnapSourceRef` promises
+    /// the innermost entity in `source.handle` and the instance chain in
+    /// `block_path`, so the descent happens here, once, at accept time (not
+    /// per pointer move).
+    ///
+    /// When the descent cannot identify the inner entity the source stays the
+    /// INSERT with an empty path. See
+    /// [`crate::scene::Scene::resolve_block_snap_source`] for exactly when
+    /// that happens; the resulting association is coarser (it tracks the whole
+    /// block instance) but never wrong.
+    fn resolve_source_block_path(&self, tab: usize, accepted: &mut AcceptedSnap) {
+        let Some(source) = accepted.source.as_mut() else {
+            return;
+        };
+        if !source.block_path.is_empty() {
+            return;
+        }
+        if let Some((entity, path)) = self.tabs[tab]
+            .scene
+            .resolve_block_snap_source(source.source.handle, accepted.model_point)
+        {
+            source.source =
+                crate::command::DimensionAssociationSource::inferred(entity);
+            source.block_path = path;
+        }
     }
 
     /// Append an already-built accepted snap, keeping the retention cap.

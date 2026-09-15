@@ -17,7 +17,7 @@ use crate::command::DimensionAssociationSource;
 use super::dimension_assoc_chain::{
     self as chain, ChainError, FeatureContext, ReferenceChain,
 };
-use super::viewport_ref::{AcceptedSnap, MeasurementScale, ViewportFrame};
+use super::viewport_ref::{AcceptedSnap, ViewportFrame};
 use super::{ChangeKind, Scene};
 
 pub(crate) const POLYLINE_ARC_CENTER_MARKER: i32 = -4;
@@ -372,7 +372,7 @@ fn source_marker(entity: &EntityType, point: Vector3) -> Option<i32> {
 /// with a frame the dimension lives on the sheet and every point it holds is
 /// a *paper* point, while the value it displays is a *model* length. Keeping
 /// both directions in one place is what stops the viewport compensation from
-/// being applied twice (see [`MeasurementScale`]).
+/// being applied twice (see `viewport_ref::measurement_rule`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ChainMap {
     pub transform: Transform,
@@ -1175,9 +1175,25 @@ impl Scene {
         dimension: Handle,
         snaps: &[Option<AcceptedSnap>],
     ) {
-        let Some(EntityType::Dimension(_)) = self.document.get_entity(dimension) else {
+        let Some(EntityType::Dimension(dimension_entity)) = self.document.get_entity(dimension)
+        else {
             return;
         };
+        // A radial dimension has ONE reference, and it is an
+        // `AcDbOsnapPointRef` of osnap type 10 carrying the *radial* marker
+        // (which circle / which polyline arc segment) and the angle around it,
+        // not a vertex marker. `source_reference` would return the generic
+        // curve-parameter marker `-2`, which `radial_source_for_marker` cannot
+        // find, so radial goes down its own path — the same one
+        // `attach_dimension_association_sources` uses for model space.
+        let radial_dimension = matches!(
+            dimension_entity,
+            Dimension::Radius(_) | Dimension::Diameter(_) | Dimension::LargeRadial(_)
+        );
+        if radial_dimension {
+            self.attach_viewport_radial_association(dimension, snaps);
+            return;
+        }
         let mut references: [Vec<AssocDimensionReference>; 4] =
             std::array::from_fn(|_| Vec::new());
         let mut associativity = 0;
@@ -1242,6 +1258,96 @@ impl Scene {
             trans_space,
             reactor_targets,
         );
+    }
+
+    /// The radial half of [`Scene::attach_viewport_dimension_association`].
+    ///
+    /// The first snap that carries a source wins: a radius / diameter
+    /// dimension measures one circle or one polyline arc segment, and the
+    /// command only ever acquires one.
+    fn attach_viewport_radial_association(
+        &mut self,
+        dimension: Handle,
+        snaps: &[Option<AcceptedSnap>],
+    ) {
+        let Some(snap) = snaps
+            .iter()
+            .flatten()
+            .find(|snap| snap.source.is_some())
+            .cloned()
+        else {
+            return;
+        };
+        let source = snap.source.as_ref().expect("filtered above");
+        let entity_handle = source.source.handle;
+        let Some(entity) = self.document.get_entity(entity_handle) else {
+            return;
+        };
+        // The acquired point in the source entity's own coordinates, so the
+        // radial geometry and the angle are both computed where the entity
+        // lives.
+        let local = Self::point_in_entity_space(
+            &self.document,
+            &source.block_path,
+            dvec3(snap.model_point),
+        );
+        let radial = match source.source.marker {
+            Some(marker) => radial_source_for_marker(entity, marker),
+            None => radial_source_at(entity, local),
+        };
+        let Some(radial) = radial else { return };
+        let angle = if source.source.marker.is_some() && source.source.parameter.is_finite() {
+            source.source.parameter
+        } else {
+            radial.angle_at(dpoint(local))
+        };
+        let mut xrefs = Vec::new();
+        let mut trans_space = false;
+        if let Some(viewport) = snap.viewport {
+            xrefs.push(viewport);
+            trans_space = true;
+        }
+        xrefs.extend(source.block_path.iter().copied());
+        xrefs.push(entity_handle);
+        let reactor_targets = xrefs.clone();
+        let reference = AssocDimensionReference {
+            class_name: "AcDbOsnapPointRef".to_string(),
+            osnap_type: 10,
+            xrefs,
+            main_subent_type: 1,
+            main_gs_marker: radial.marker,
+            osnap_distance: angle,
+            osnap_point: dvec3(snap.model_point),
+            ..AssocDimensionReference::default()
+        };
+        self.store_dimension_association_full(
+            dimension,
+            [vec![reference], Vec::new(), Vec::new(), Vec::new()],
+            1,
+            trans_space,
+            reactor_targets,
+        );
+    }
+
+    /// The definition points an association fills, slot by slot, in the same
+    /// order [`Scene::attach_viewport_dimension_association`] consumes its
+    /// `snaps` argument.
+    ///
+    /// Callers use it to size and sanity-check the slot array they build from
+    /// the accepted snaps: slot `k` of that array must describe the feature
+    /// sitting at `dimension_association_slot_points()[k]`.
+    pub(crate) fn dimension_association_slot_points(&self, dimension: Handle) -> Vec<Vector3> {
+        let Some(EntityType::Dimension(entity)) = self.document.get_entity(dimension) else {
+            return Vec::new();
+        };
+        match entity {
+            // A radial dimension's single reference describes the point where
+            // the leader meets the circle.
+            Dimension::Radius(radius) => vec![radius.definition_point],
+            Dimension::Diameter(diameter) => vec![diameter.angle_vertex],
+            Dimension::LargeRadial(radial) => vec![radial.chord_point],
+            other => dimension_reference_points(other),
+        }
     }
 
     /// A model-space point brought down into the coordinates of the entity at
@@ -1638,22 +1744,6 @@ impl Scene {
                 let before = self.document.get_entity_arc(association.dimension);
                 self.record_undo_before(association.dimension, before);
             }
-            // The user's DIMLFAC override travels with the dimension (PR2
-            // persists it when it creates a viewport dimension); split it from
-            // the viewport compensation so the compensation is applied exactly
-            // once, on the model length, and never again on the paper one.
-            let scale = MeasurementScale::from_dimlfac(
-                self.document
-                    .get_entity(association.dimension)
-                    .and_then(|entity| {
-                        crate::entities::dim_override::real(
-                            &entity.common().extended_data,
-                            crate::entities::dim_override::DIMLFAC,
-                        )
-                    })
-                    .unwrap_or(0.0),
-                map.frame.as_ref(),
-            );
             let Some(EntityType::Dimension(dimension)) =
                 self.document.get_entity_mut(association.dimension)
             else {
@@ -1897,47 +1987,39 @@ impl Scene {
                 Dimension::Linear(linear) => linear_measurement(linear),
                 _ => dimension.measurement(),
             };
-            // A dimension drawn on the sheet through a viewport has just been
-            // rebuilt from *paper* points, so measuring those gives the paper
-            // length. The number it shows is the model one: take it from the
-            // model points the same references resolved to, and apply only the
-            // user's DIMLFAC on top (`model_factor`) — the viewport
-            // compensation is already inherent in having measured in model
-            // space, and applying it again is the double-scaling this whole
-            // three-PR effort exists to stop.
-            let measurement = match (map.frame.as_ref(), &*dimension) {
-                (Some(_), Dimension::Linear(_) | Dimension::Aligned(_)) => {
-                    match (model_points[0], model_points[1]) {
-                        (Some(first), Some(second)) => {
-                            let raw = match &*dimension {
-                                // Rotated linear measures only along its axis.
-                                Dimension::Linear(linear) => {
-                                    axis_distance(first, second, linear.rotation)
-                                }
-                                _ => first.distance(&second),
-                            };
-                            raw * scale.model_factor()
-                        }
-                        _ => measurement,
-                    }
-                }
-                _ => measurement,
-            };
+            // `actual_measurement` stays RAW, in the dimension's own space —
+            // paper, for a dimension drawn on the sheet through a viewport.
+            // The viewport compensation is carried by the negative DIMLFAC
+            // override and applied once, by the formatter. See
+            // `viewport_ref::measurement_rule`: substituting the model
+            // distance here (or multiplying by `MeasurementScale::model_factor`)
+            // would make a refreshed dimension read a different number from an
+            // identical freshly-created one.
+            //
+            // The similarity property of a viewport frame is what makes this
+            // exact: paper_span * (1 / scale) is the model span, for a rotated
+            // linear projection just as much as for a free distance.
+            debug_assert!(
+                map.frame.is_none()
+                    || model_points
+                        .iter()
+                        .zip(resolved.iter())
+                        .all(|(model, space)| match (model, space, map.frame.as_ref()) {
+                            (Some(model), Some(space), Some(frame)) => {
+                                let projected =
+                                    frame.model_to_paper(glam::DVec3::new(model.x, model.y, model.z));
+                                (projected.x - space.x).abs() < 1e-6
+                                    && (projected.y - space.y).abs() < 1e-6
+                            }
+                            _ => true,
+                        }),
+                "resolved paper points must be the model points through the frame",
+            );
             dimension.base_mut().actual_measurement = measurement;
             refreshed.push((association.dimension, ChangeKind::Modified));
         }
         refreshed
     }
-}
-
-/// Distance between two points measured along the direction `rotation`.
-///
-/// The rotated-linear rule, evaluated in whatever space the two points are in
-/// — the same formula [`linear_measurement`] applies on the sheet, reused for
-/// the model points a trans-space dimension measures.
-fn axis_distance(first: Vector3, second: Vector3, rotation: f64) -> f64 {
-    let axis = [rotation.cos(), rotation.sin()];
-    ((second.x - first.x) * axis[0] + (second.y - first.y) * axis[1]).abs()
 }
 
 /// How far the midpoint of a dimension's measured points moved.

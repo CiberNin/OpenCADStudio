@@ -328,42 +328,38 @@ impl MeasurementScale {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// MERGE SEAM — PR1 (feat/viewport-snap) owns `Scene::viewport_frame`.
-//
-// PR3 needs a frame to map a resolved model point onto the sheet, but PR1 is
-// not visible from this branch. This is the minimal stand-in agreed in the
-// shared contract: paper_center = vp.center, model_target = vp.view_target,
-// scale = `vp_effective_scale`, twist = vp.twist_angle. PR1's version is
-// camera-derived (it must agree with what is actually drawn, including the
-// auto-fit rescue in `Scene::camera_for_viewport` for stale saved views).
-//
-// To merge: delete this whole block. Nothing else in PR3 reads viewport
-// fields directly — every call goes through `Scene::viewport_frame`.
-// ─────────────────────────────────────────────────────────────────────────
-impl crate::scene::Scene {
-    /// The planar paper<->model mapping of layout viewport `handle`.
-    ///
-    /// `None` when the handle is not a viewport, or when its scale is
-    /// degenerate (a zero-height view cannot map anything).
-    pub fn viewport_frame(&self, handle: Handle) -> Option<ViewportFrame> {
-        let Some(acadrust::EntityType::Viewport(vp)) = self.document.get_entity(handle) else {
-            return None;
-        };
-        let scale = crate::scene::vp_effective_scale(vp.custom_scale, vp.view_height, vp.height);
-        if !scale.is_finite() || scale.abs() < 1e-12 {
-            return None;
-        }
-        Some(ViewportFrame {
-            viewport: handle,
-            paper_center: DVec2::new(vp.center.x, vp.center.y),
-            model_target: DVec2::new(vp.view_target.x, vp.view_target.y),
-            scale,
-            twist: vp.twist_angle,
-            locked: vp.status.locked,
-        })
-    }
-}
+/// # Where the viewport compensation lives, once
+///
+/// A dimension that sits on a paper layout but measures model geometry seen
+/// through a viewport has **paper** definition points and displays a **model**
+/// number. Exactly one rule governs that, everywhere:
+///
+/// > `Dimension::actual_measurement` (DXF group 42) is always the **raw**
+/// > geometric measurement in the dimension's *own* space — paper, for a
+/// > viewport dimension. The viewport compensation lives **only** in the
+/// > magnitude of the negative DIMLFAC override
+/// > ([`MeasurementScale::viewport_dimlfac_override`]), and is applied
+/// > **once**, at format time, by the linear formatter.
+///
+/// So for a 1:10 viewport and a user DIMLFAC of 1: a 100-unit model line is
+/// 10 paper units, `actual_measurement` is `10`, the override is `-10`,
+/// [`MeasurementScale::user_lfac_for_space`] resolves that to `10` for a
+/// paper-space dimension, and the text reads `100`.
+///
+/// The consequence for association refresh
+/// (`Scene::refresh_associative_dimensions`) is that after re-placing a
+/// viewport dimension's definition points on the sheet it must write the
+/// **paper** measurement back — it must *not* substitute the model distance,
+/// and it must *not* multiply by [`MeasurementScale::model_factor`]. Doing
+/// either makes a refreshed dimension read a different number from an
+/// identical freshly-created one (`user_lfac` too many times). This is the
+/// rule that makes `attach_viewport_dimension_association` + refresh agree
+/// with creation by construction, and it is why `actual_measurement` stays
+/// raw: that is also what the DXF format specifies and what export writes.
+///
+/// Angular dimensions are exempt on both counts — a similarity preserves
+/// angles, so there is no compensation and no override.
+pub mod measurement_rule {}
 
 #[cfg(test)]
 mod tests {

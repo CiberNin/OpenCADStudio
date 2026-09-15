@@ -4173,6 +4173,7 @@ impl OpenCADStudio {
                 // `world_pt` exactly as before.
                 let pending = self.pending_click_snap.take();
                 self.record_accepted_snap(
+                    i,
                     pending.map(|(hit, _)| hit),
                     pending.and_then(|(_, frame)| frame),
                     world_pt,

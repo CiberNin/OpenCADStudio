@@ -183,6 +183,83 @@ impl OpenCADStudio {
         }
     }
 
+    /// The slot array [`Scene::attach_viewport_dimension_association`] wants,
+    /// built from the snaps PR1 recorded for the command that just committed
+    /// `dimension`.
+    ///
+    /// Slot `k` describes the feature at
+    /// `Scene::dimension_association_slot_points()[k]`, so the measuring snaps
+    /// are taken in collection order and truncated / padded to that length.
+    ///
+    /// A snap whose paper point is not (still) the definition point it would
+    /// fill has its `model_point` recomputed from that definition point
+    /// through the frame. Two cases need it:
+    ///
+    /// * the explicit object pick, which records one click twice — once per
+    ///   extension origin — so neither recorded point is the endpoint the
+    ///   command derived from the entity;
+    /// * a point the command moved after the snap (a rotated DIMLINEAR
+    ///   projects its origins onto the measuring axis).
+    ///
+    /// The source identity is kept in both cases: it is the entity that was
+    /// acquired, and the feature marker is re-derived from the corrected
+    /// point.
+    pub(crate) fn viewport_dimension_snaps(
+        &self,
+        i: usize,
+        dimension: Handle,
+    ) -> Vec<Option<AcceptedSnap>> {
+        let slots = self.tabs[i].scene.dimension_association_slot_points(dimension);
+        if slots.is_empty() {
+            return Vec::new();
+        }
+        let measuring = self.dimension_measuring_snaps(i);
+        slots
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| {
+                let snap = measuring.get(index)?.clone();
+                let frame = snap.frame?;
+                let slot = DVec3::new(slot.x, slot.y, slot.z);
+                if snap.paper_point.truncate().distance_squared(slot.truncate()) <= 1e-12 {
+                    return Some(snap);
+                }
+                Some(AcceptedSnap {
+                    paper_point: slot,
+                    model_point: frame.paper_to_model(slot),
+                    ..snap
+                })
+            })
+            .collect()
+    }
+
+    /// Record the viewport association for a dimension that has just been
+    /// committed while measuring through a layout viewport.
+    ///
+    /// Announces the whole chain — the viewport, every INSERT on the block
+    /// path and the source entity — so the dependency index picks the new
+    /// association up immediately.
+    pub(crate) fn attach_viewport_dimension_association(&mut self, i: usize, dimension: Handle) {
+        let snaps = self.viewport_dimension_snaps(i, dimension);
+        if snaps.iter().flatten().all(|snap| snap.source.is_none()) {
+            return;
+        }
+        self.tabs[i]
+            .scene
+            .attach_viewport_dimension_association(dimension, &snaps);
+        let mut changes = vec![(dimension, crate::scene::ChangeKind::Modified)];
+        changes.extend(
+            self.tabs[i]
+                .scene
+                .dimension_association_sources(dimension)
+                .into_iter()
+                .map(|handle| (handle, crate::scene::ChangeKind::Modified)),
+        );
+        changes.sort_by_key(|(handle, _)| handle.value());
+        changes.dedup_by_key(|(handle, _)| handle.value());
+        self.tabs[i].scene.bump_entities(&changes);
+    }
+
     /// Apply viewport compensation to a dimension about to be committed.
     ///
     /// Whether the dimension may also take a paper-space association is a

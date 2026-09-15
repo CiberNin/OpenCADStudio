@@ -376,7 +376,7 @@ impl OpenCADStudio {
             // accepted-snap list must stay index-parallel with the points the
             // command collects (PR1). Interactive picks record themselves in
             // the click handler and never reach here.
-            self.record_accepted_snap(None, None, *point);
+            self.record_accepted_snap(i, None, None, *point);
         }
         if default_start {
             let StepInput::Point(point) = &input else {
@@ -2220,6 +2220,14 @@ impl OpenCADStudio {
                             changes.sort_by_key(|(handle, _)| handle.value());
                             changes.dedup_by_key(|(handle, _)| handle.value());
                             self.tabs[i].scene.bump_entities(&changes);
+                        } else if association_mode == 2 {
+                            // Measured through a layout viewport: a paper-space
+                            // association would bind projected coordinates to
+                            // geometry that is not on the sheet. Record the real
+                            // chain instead — dimension -> viewport -> block
+                            // path -> entity -> feature — from the AcceptedSnaps
+                            // PR1 captured, in definition-point slot order.
+                            self.attach_viewport_dimension_association(i, handle);
                         }
                     }
                     pending

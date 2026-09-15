@@ -110,6 +110,39 @@ impl Scene {
         })
     }
 
+    /// Resolve a snapped INSERT handle into the innermost entity that owns the
+    /// geometry, plus the INSERT path down to it.
+    ///
+    /// The renderer names every wire of an expanded block with the **top-level
+    /// INSERT's** handle (see `block_cache`), including wires belonging to
+    /// nested inserts, so a snap inside a block reports the INSERT and nothing
+    /// finer. This walks the block definition from that INSERT looking for the
+    /// nearest measurable entity to `model_point`, which recovers the real
+    /// source handle and the instance path for the association chain.
+    ///
+    /// Returns `None` — and the caller then keeps the INSERT itself as the
+    /// source, which still gives a correct, if coarse, association — when:
+    /// * `top` is not an INSERT (the common case: `Some((top, vec![]))`);
+    /// * the geometry is a type [`planar_pick_distance`] does not handle
+    ///   (text, hatch, spline, solid, 3-D geometry);
+    /// * the nesting is deeper than eight levels.
+    ///
+    /// Depth is not limited to one level: [`Scene::descend_block_instance`]
+    /// recurses, and the returned path lists every INSERT from the outermost
+    /// down to the one that directly contains the entity.
+    pub fn resolve_block_snap_source(
+        &self,
+        top: Handle,
+        model_point: DVec3,
+    ) -> Option<(Handle, Vec<Handle>)> {
+        if !matches!(self.document.get_entity(top), Some(EntityType::Insert(_))) {
+            return None;
+        }
+        let (entity, path) = self.resolve_measurable_entity(top, model_point)?;
+        let handle = entity.as_entity().handle();
+        handle.is_valid().then_some((handle, path))
+    }
+
     /// Nearest resident model wire of `viewport` to `model_point`, within
     /// `aperture` model units. Wires are the same tessellation the viewport
     /// draws, so this matches what the user sees.
