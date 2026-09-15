@@ -418,38 +418,10 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
     }
     .segment_midpoint_index();
     if let Some(segment) = segment {
-        let points = super::dimension_assoc::source_points(entity);
-        let closed = match entity {
-            acadrust::EntityType::LwPolyline(polyline) => polyline.is_closed,
-            acadrust::EntityType::Polyline2D(polyline) => polyline.is_closed(),
-            _ => return None,
-        };
-        let a = *points.get(segment)?;
-        let b = if segment + 1 < points.len() {
-            points[segment + 1]
-        } else if closed {
-            *points.first()?
-        } else {
-            return None;
-        };
-        let bulge = match entity {
-            acadrust::EntityType::LwPolyline(polyline) => {
-                polyline.vertices.get(segment)?.bulge
-            }
-            acadrust::EntityType::Polyline2D(polyline) => {
-                polyline.vertices.get(segment)?.bulge
-            }
-            _ => 0.0,
-        };
-        if let Some(arc) = cadkernel::geom2d::BulgeArc::from_bulge(
-            [a.x, a.y],
-            [b.x, b.y],
-            bulge,
-        ) {
-            let midpoint = arc.sample(0.5);
-            return Some(Vector3::new(midpoint[0], midpoint[1], (a.z + b.z) * 0.5));
-        }
-        return Some((a + b) * 0.5);
+        let planar = crate::entities::curve::entity_curve(entity)?;
+        let curve = planar.curve.segments().into_iter().nth(segment)?;
+        let point = planar.plane.point_at(curve.point_at(0.5));
+        return Some(Vector3::new(point[0], point[1], point[2]));
     }
     if marker < 0 {
         return None;
@@ -495,55 +467,21 @@ pub(crate) fn parametric_point_candidates(
         }
     }
 
-    let polyline_midpoints = |vertices: &[Vector3], bulges: &[f64], closed: bool| {
-        let mut result = Vec::new();
-        for (index, bulge) in bulges.iter().copied().enumerate() {
-            let Some(a) = vertices.get(index).copied() else {
-                continue;
-            };
-            let b = vertices
-                .get(index + 1)
-                .copied()
-                .or_else(|| closed.then(|| vertices.first().copied()).flatten());
-            if let Some(b) = b {
-                let midpoint = cadkernel::geom2d::BulgeArc::from_bulge(
-                    [a.x, a.y],
-                    [b.x, b.y],
-                    bulge,
-                )
-                .map(|arc| {
-                    let point = arc.sample(0.5);
-                    Vector3::new(point[0], point[1], (a.z + b.z) * 0.5)
-                })
-                .unwrap_or((a + b) * 0.5);
-                result.push((
-                    POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - index as i32,
-                    midpoint,
-                ));
-            }
+    if matches!(
+        entity,
+        acadrust::EntityType::LwPolyline(_) | acadrust::EntityType::Polyline2D(_)
+    ) {
+        if let Some(planar) = crate::entities::curve::entity_curve(entity) {
+            points.extend(planar.curve.segments().into_iter().enumerate().map(
+                |(index, curve)| {
+                    let point = planar.plane.point_at(curve.point_at(0.5));
+                    (
+                        POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - index as i32,
+                        Vector3::new(point[0], point[1], point[2]),
+                    )
+                },
+            ));
         }
-        result
-    };
-    match entity {
-        acadrust::EntityType::LwPolyline(polyline) => {
-            let vertices = super::dimension_assoc::source_points(entity);
-            let bulges: Vec<_> = polyline
-                .vertices
-                .iter()
-                .map(|vertex| vertex.bulge)
-                .collect();
-            points.extend(polyline_midpoints(&vertices, &bulges, polyline.is_closed));
-        }
-        acadrust::EntityType::Polyline2D(polyline) => {
-            let vertices = super::dimension_assoc::source_points(entity);
-            let bulges: Vec<_> = polyline
-                .vertices
-                .iter()
-                .map(|vertex| vertex.bulge)
-                .collect();
-            points.extend(polyline_midpoints(&vertices, &bulges, polyline.is_closed()));
-        }
-        _ => {}
     }
     points
 }
@@ -609,17 +547,7 @@ pub(crate) fn nearest_parametric_point_on_entity(
         .map(|(_, reference)| reference)
 }
 
-fn point_segment_distance_squared(point: Vector3, start: Vector3, end: Vector3) -> f64 {
-    let edge = end - start;
-    let denominator = edge.length_squared();
-    if denominator <= f64::EPSILON {
-        return (point - start).length_squared();
-    }
-    let unit = ((point - start).dot(&edge) / denominator).clamp(0.0, 1.0);
-    (point - (start + edge * unit)).length_squared()
-}
-
-/// Resolve the whole curve or the picked straight polyline segment used by a
+/// Resolve the whole curve or the picked polyline segment used by a
 /// point-to-curve Coincident relation.
 pub(crate) fn parametric_curve_ref_for_pick(
     document: &acadrust::CadDocument,
@@ -637,33 +565,10 @@ pub(crate) fn parametric_curve_ref_for_pick(
         | acadrust::EntityType::Arc(_)
         | acadrust::EntityType::Ellipse(_)
         | acadrust::EntityType::Spline(_) => Some(ParametricRef::whole(handle)),
-        acadrust::EntityType::LwPolyline(polyline) => {
-            let vertices = super::dimension_assoc::source_points(entity);
-            (0..polyline.vertices.len())
-                .filter_map(|index| {
-                    let start = vertices.get(index).copied()?;
-                    let end = vertices
-                        .get(index + 1)
-                        .copied()
-                        .or_else(|| polyline.is_closed.then(|| vertices.first().copied()).flatten())?;
-                    Some((point_segment_distance_squared(world_point, start, end), index))
-                })
-                .min_by(|(a, _), (b, _)| a.total_cmp(b))
-                .map(|(_, index)| ParametricRef::segment(handle, index))
-        }
-        acadrust::EntityType::Polyline2D(polyline) => {
-            let vertices = super::dimension_assoc::source_points(entity);
-            (0..polyline.vertices.len())
-                .filter_map(|index| {
-                    let start = vertices.get(index).copied()?;
-                    let end = vertices
-                        .get(index + 1)
-                        .copied()
-                        .or_else(|| polyline.is_closed().then(|| vertices.first().copied()).flatten())?;
-                    Some((point_segment_distance_squared(world_point, start, end), index))
-                })
-                .min_by(|(a, _), (b, _)| a.total_cmp(b))
-                .map(|(_, index)| ParametricRef::segment(handle, index))
+        acadrust::EntityType::LwPolyline(_) | acadrust::EntityType::Polyline2D(_) => {
+            let segments = crate::entities::curve::entity_curve_xy(entity)?.segments();
+            cadkernel::geom2d::nearest_of(segments.iter(), [world_point.x, world_point.y])
+                .map(|(index, _)| ParametricRef::segment(handle, index))
         }
         _ => None,
     }
@@ -788,6 +693,121 @@ pub(crate) fn glyph_placement(
         }
         _ => None,
     }
+}
+
+/// World-space locations that explain what a hovered constraint acts on.
+/// Point constraints expose their referenced point directly; curve relations
+/// expose the contact or intersection that makes the relation visible.
+fn constraint_segment_endpoints(
+    document: &acadrust::CadDocument,
+    reference: ParametricRef,
+) -> Option<[Vector3; 2]> {
+    let segment = reference.segment_index()?;
+    let entity = document.get_entity(reference.entity)?;
+    let points = super::dimension_assoc::source_points(entity);
+    let closed = match entity {
+        acadrust::EntityType::LwPolyline(polyline) => polyline.is_closed,
+        acadrust::EntityType::Polyline2D(polyline) => polyline.is_closed(),
+        _ => return None,
+    };
+    let first = *points.get(segment)?;
+    let second = if segment + 1 < points.len() {
+        points[segment + 1]
+    } else if closed {
+        *points.first()?
+    } else {
+        return None;
+    };
+    Some([first, second])
+}
+
+fn constraint_reference_curve_xy(
+    document: &acadrust::CadDocument,
+    reference: ParametricRef,
+) -> Option<cadkernel::geom2d::Curve> {
+    let curve = crate::entities::curve::entity_curve_xy(document.get_entity(reference.entity)?)?;
+    reference
+        .segment_index()
+        .map(|index| curve.segments().into_iter().nth(index))
+        .unwrap_or(Some(curve))
+}
+
+pub(crate) fn constraint_hover_points(
+    document: &acadrust::CadDocument,
+    constraint: &ParametricConstraint,
+) -> Vec<Vector3> {
+    let mut points = Vec::new();
+    let push_unique = |points: &mut Vec<Vector3>, point: Vector3| {
+        if point.x.is_finite()
+            && point.y.is_finite()
+            && point.z.is_finite()
+            && !points
+                .iter()
+                .any(|existing| (*existing - point).length_squared() <= 1.0e-12)
+        {
+            points.push(point);
+        }
+    };
+
+    for reference in &constraint.refs {
+        let Some(marker) = reference.marker else {
+            continue;
+        };
+        let Some(entity) = document.get_entity(reference.entity) else {
+            continue;
+        };
+        if let Some(point) = resolve_point(entity, marker) {
+            push_unique(&mut points, point);
+        }
+    }
+
+    if matches!(
+        constraint.kind,
+        ConstraintKind::Horizontal | ConstraintKind::Vertical
+    ) {
+        for reference in &constraint.refs {
+            let Some(entity) = document.get_entity(reference.entity) else {
+                continue;
+            };
+            if let Some(endpoints) = constraint_segment_endpoints(document, *reference) {
+                for point in endpoints {
+                    push_unique(&mut points, point);
+                }
+            } else if matches!(entity, acadrust::EntityType::Line(_)) {
+                for point in super::dimension_assoc::source_points(entity) {
+                    push_unique(&mut points, point);
+                }
+            }
+        }
+    }
+
+    if matches!(
+        constraint.kind,
+        ConstraintKind::Perpendicular | ConstraintKind::Tangent
+    ) {
+        if let [first, second, ..] = constraint.refs.as_slice() {
+            if let (Some(first_curve), Some(second_curve)) = (
+                constraint_reference_curve_xy(document, *first),
+                constraint_reference_curve_xy(document, *second),
+            ) {
+                let elevation = glyph_placement(document, constraint)
+                    .map(|(anchor, _)| anchor.z)
+                    .unwrap_or(0.0);
+                for crossing in cadkernel::geom2d::intersect(
+                    &first_curve,
+                    &second_curve,
+                    cadkernel::geom2d::Tolerance::default(),
+                ) {
+                    push_unique(
+                        &mut points,
+                        Vector3::new(crossing.point[0], crossing.point[1], elevation),
+                    );
+                }
+            }
+        }
+    }
+
+    points
 }
 
 impl super::Scene {
@@ -1253,8 +1273,9 @@ impl super::Scene {
     }
 
     /// Screen-projected parametric-constraint glyph placements for `scope`:
-    /// `(id, anchor, outward_screen_direction, label, is_conflicting)` for
-    /// every enabled, visible constraint whose glyph projects on-screen.
+    /// `(id, anchor, outward_screen_direction, label, is_conflicting,
+    /// hover_points)` for every enabled, visible constraint whose glyph
+    /// projects on-screen.
     /// `vp_size` is the full canvas size (as `SelectionState::vp_size`
     /// reports it), matching what `viewport_edit_frame`/
     /// `active_model_tile_bounds` expect. Mirrors the projection
@@ -1269,7 +1290,14 @@ impl super::Scene {
         vp_size: (f32, f32),
         show_values: bool,
         display_mode: i16,
-    ) -> Vec<(ConstraintId, iced::Point, [f32; 2], String, bool)> {
+    ) -> Vec<(
+        ConstraintId,
+        iced::Point,
+        [f32; 2],
+        String,
+        bool,
+        Vec<iced::Point>,
+    )> {
         let Some(set) = self.parametric_constraint_set(scope) else {
             return Vec::new();
         };
@@ -1323,7 +1351,30 @@ impl super::Scene {
                 } else {
                     c.kind.glyph_symbol().to_string()
                 };
-                point.x.is_finite().then_some((c.id, point, direction.to_array(), label, is_conflicting))
+                let hover_points = constraint_hover_points(&self.document, c)
+                    .into_iter()
+                    .filter_map(|hover_point| {
+                        let projected = crate::scene::pick::grip::project_rte(
+                            glam::DVec3::new(hover_point.x, hover_point.y, hover_point.z),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )?;
+                        let point = iced::Point::new(
+                            bounds.x + projected.x,
+                            bounds.y + projected.y,
+                        );
+                        (point.x.is_finite() && point.y.is_finite()).then_some(point)
+                    })
+                    .collect();
+                point.x.is_finite().then_some((
+                    c.id,
+                    point,
+                    direction.to_array(),
+                    label,
+                    is_conflicting,
+                    hover_points,
+                ))
             })
             .collect()
     }
@@ -1349,7 +1400,7 @@ impl super::Scene {
         );
         let glyphs: Vec<(iced::Point, [f32; 2], String, bool)> = placements
             .iter()
-            .map(|(_, point, direction, label, is_conflicting)| {
+            .map(|(_, point, direction, label, is_conflicting, _)| {
                 (*point, *direction, label.clone(), *is_conflicting)
             })
             .collect();
@@ -1834,5 +1885,78 @@ mod tests {
         scene.hidden_parametric_constraints.insert((scope, id));
 
         assert!(!scene.should_display_parametric_constraint(scope, id, true, 2));
+    }
+
+    #[test]
+    fn hover_geometry_keeps_a_bulged_polyline_segment_curved() {
+        let mut document = acadrust::CadDocument::new();
+        let mut polyline = acadrust::entities::LwPolyline::new();
+        polyline.common.handle = h(1);
+        polyline.vertices = vec![
+            acadrust::entities::LwVertex::with_bulge(
+                acadrust::types::Vector2::new(0.0, 0.0),
+                1.0,
+            ),
+            acadrust::entities::LwVertex::from_coords(10.0, 0.0),
+        ];
+        document
+            .add_entity(acadrust::EntityType::LwPolyline(polyline))
+            .unwrap();
+
+        assert!(matches!(
+            constraint_reference_curve_xy(&document, ParametricRef::segment(h(1), 0)),
+            Some(cadkernel::geom2d::Curve::Arc(_))
+        ));
+    }
+
+    #[test]
+    fn curve_pick_uses_the_bulged_segment_instead_of_its_chord() {
+        let mut scene = super::super::Scene::new();
+        let mut polyline = acadrust::entities::LwPolyline::new();
+        polyline.vertices = vec![
+            acadrust::entities::LwVertex::with_bulge(
+                acadrust::types::Vector2::new(0.0, 0.0),
+                1.0,
+            ),
+            acadrust::entities::LwVertex::from_coords(10.0, 0.0),
+            acadrust::entities::LwVertex::from_coords(0.0, -4.0),
+        ];
+        let handle = scene.add_entity(acadrust::EntityType::LwPolyline(polyline));
+
+        assert_eq!(
+            parametric_curve_ref_for_pick(
+                &scene.document,
+                ParametricScope::ModelSpace,
+                handle,
+                Vector3::new(5.0, -5.0, 0.0),
+            ),
+            Some(ParametricRef::segment(handle, 0))
+        );
+    }
+
+    #[test]
+    fn move_expansion_follows_only_coincident_relations() {
+        let mut scene = super::super::Scene::new();
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        set.add(
+            ConstraintKind::Coincident,
+            vec![ParametricRef::point(h(1), 0), ParametricRef::point(h(2), 0)],
+            None,
+        );
+        set.add(
+            ConstraintKind::PointOnCurve,
+            vec![ParametricRef::point(h(2), 0), ParametricRef::whole(h(3))],
+            None,
+        );
+        set.add(
+            ConstraintKind::Parallel,
+            vec![ParametricRef::whole(h(3)), ParametricRef::whole(h(4))],
+            None,
+        );
+
+        assert_eq!(
+            scene.parametric_connected_handles(ParametricScope::ModelSpace, &[h(1)]),
+            vec![h(1), h(2), h(3)]
+        );
     }
 }

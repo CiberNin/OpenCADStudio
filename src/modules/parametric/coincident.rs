@@ -299,3 +299,61 @@ impl CadCommand for CoincidentConstraintCommand {
 inventory::submit!(crate::command::CommandRegistration {
     names: &["CCONSTRAINT", "GCCOINCIDENT"]
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acadrust::types::Vector3;
+
+    #[test]
+    fn multiple_keeps_the_first_curve_for_repeated_points() {
+        let mut command = CoincidentConstraintCommand::new();
+        assert!(matches!(
+            command.on_text_input("Object"),
+            Some(CmdResult::NeedPoint)
+        ));
+        command.inject_picked_entity(EntityType::Line(
+            acadrust::entities::Line::from_points(Vector3::ZERO, Vector3::UNIT_X),
+        ));
+        let handle = Handle::new(7);
+        assert!(matches!(
+            command.on_entity_pick(handle, DVec3::ZERO),
+            CmdResult::NeedPoint
+        ));
+        assert!(matches!(
+            command.on_text_input("Multiple"),
+            Some(CmdResult::NeedPoint)
+        ));
+
+        assert!(matches!(
+            command.on_point(DVec3::X),
+            CmdResult::AddCoincidentConstraint {
+                first: CoincidentPick {
+                    handle: Some(found),
+                    whole_curve: true,
+                    ..
+                },
+                multiple: true,
+                ..
+            } if found == handle
+        ));
+    }
+
+    #[test]
+    fn automatic_mode_returns_the_completed_selection() {
+        let mut command = CoincidentConstraintCommand::new();
+        assert!(matches!(
+            command.on_text_input("Autoconstrain"),
+            Some(CmdResult::NeedPoint)
+        ));
+        let handles = vec![Handle::new(3), Handle::new(5)];
+        assert!(matches!(
+            command.on_selection_complete(handles.clone()),
+            CmdResult::NeedPoint
+        ));
+        assert!(matches!(
+            command.on_enter(),
+            CmdResult::AddAutoCoincidentConstraints { handles: found } if found == handles
+        ));
+    }
+}

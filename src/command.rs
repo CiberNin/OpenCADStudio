@@ -1479,9 +1479,9 @@ pub enum CmdResult {
     },
     /// Opens the Auto Constrain settings dialog from the selection prompt.
     OpenAutoConstrainSettings,
-    /// Adds a Coincident constraint between the sub-entity points nearest
-    /// the two picked positions. The host resolves the raw points because
-    /// `CadCommand` has no document access.
+    /// Adds an ordered Coincident relation.  Point/point selections create a
+    /// Coincident constraint; point/curve selections create the corresponding
+    /// point-on-curve relation while retaining Coincident command semantics.
     AddCoincidentConstraint {
         first: CoincidentPick,
         second: CoincidentPick,

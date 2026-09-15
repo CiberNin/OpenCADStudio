@@ -3165,9 +3165,11 @@ impl OpenCADStudio {
                     .copied()
                     .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect();
-                self.tabs[i]
-                    .scene
-                    .bump_entities_with_parametric_driven(&changes, &[first_ref]);
+                self.tabs[i].scene.bump_entities_with_parametric_policy(
+                    &changes,
+                    &[first_ref],
+                    self.constraint_solve_mode,
+                );
                 self.tabs[i].dirty = true;
                 self.tabs[i].snap_result = None;
                 if !multiple {
@@ -8601,6 +8603,21 @@ mod parametric_constraint_undo_tests {
             entities.contains(&a) && entities.contains(&b),
             "the constraint should reference both lines"
         );
+        let Some(acadrust::EntityType::Line(first)) =
+            app.tabs[app.active_tab].scene.document.get_entity(a)
+        else {
+            panic!("expected first line");
+        };
+        let Some(acadrust::EntityType::Line(second)) =
+            app.tabs[app.active_tab].scene.document.get_entity(b)
+        else {
+            panic!("expected second line");
+        };
+        assert!(
+            (first.end - acadrust::types::Vector3::new(5.0, 0.0, 0.0)).length() < 1.0e-7
+        );
+        assert!((second.start - first.end).length() < 1.0e-7);
+        assert!((second.length() - 5.0).abs() < 1.0e-7);
     }
 
     /// A pick that doesn't land near any real point (no object snap match)

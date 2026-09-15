@@ -1823,14 +1823,10 @@ fn solve_scope(
                 }
                 EntityGeom::Polyline {
                     points,
-                    straight,
                     closed,
                     ..
                 } => {
-                    for index in 0..straight.len() {
-                        if !straight[index] {
-                            continue;
-                        }
+                    for index in 0..points.len() {
                         let Some(a) = points.get(index).copied() else {
                             continue;
                         };
@@ -2746,6 +2742,26 @@ mod tests {
                 Some(&DrivingValue::Literal(f64::NAN)),
             )
             .is_err());
+    }
+
+    #[test]
+    fn bulged_polyline_segment_registers_as_a_kernel_arc() {
+        let mut scene = Scene::new();
+        let mut polyline = acadrust::entities::LwPolyline::new();
+        polyline.vertices = vec![
+            acadrust::entities::LwVertex::with_bulge(
+                acadrust::types::Vector2::new(0.0, 0.0),
+                1.0,
+            ),
+            acadrust::entities::LwVertex::from_coords(10.0, 0.0),
+        ];
+        let handle = scene.add_entity(EntityType::LwPolyline(polyline));
+        let mut system = cadkernel_constraints::system::System::new();
+        let geometry = super::register_entity(&scene.document, &mut system, handle).unwrap();
+        let segment = geometry.arc_segment(0).expect("expected an arc segment");
+
+        assert!((system.store().get(segment.arc.circle.rad) - 5.0).abs() < 1.0e-9);
+        assert!((segment.sweep - std::f64::consts::PI).abs() < 1.0e-9);
     }
 
     #[test]

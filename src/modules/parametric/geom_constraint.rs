@@ -85,3 +85,21 @@ impl CadCommand for GeomConstraintCommand {
 inventory::submit!(crate::command::CommandRegistration {
     names: &["GEOMCONSTRAINT"]
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chooser_dispatches_an_existing_constraint_command() {
+        let mut command = GeomConstraintCommand::new();
+        assert!(matches!(
+            command.on_text_input("Parallel"),
+            Some(CmdResult::Dispatch(found)) if found == "PCONSTRAINT"
+        ));
+        assert!(matches!(
+            command.on_enter(),
+            CmdResult::Dispatch(found) if found == "GCCOINCIDENT"
+        ));
+    }
+}
