@@ -80,6 +80,25 @@ pub fn properties_sectioned(
     } else {
         sections.extend(groups);
     }
+    if let Some(thickness) = entity_thickness(entity) {
+        let already_present = sections.iter().flat_map(|section| &section.props).any(|property| {
+            property.field == "thickness"
+                || property.field == "sl_thickness"
+                || property.label == crate::t!("Thickness").as_ref()
+        });
+        if !already_present {
+            if let Some(geometry) = sections
+                .iter_mut()
+                .find(|section| section.title == crate::t!("Geometry").as_ref())
+            {
+                geometry.props.push(crate::entities::common::edit_prop(
+                    crate::t!("Thickness").as_ref(),
+                    "thickness",
+                    thickness,
+                ));
+            }
+        }
+    }
     sections
 }
 

@@ -361,6 +361,7 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
         return match entity {
             acadrust::EntityType::Circle(circle) => Some(circle.center_wcs()),
             acadrust::EntityType::Arc(arc) => Some(arc.center_wcs()),
+            acadrust::EntityType::Ellipse(ellipse) => Some(ellipse.center),
             _ => None,
         };
     }
@@ -392,6 +393,23 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
         } else {
             return None;
         };
+        let bulge = match entity {
+            acadrust::EntityType::LwPolyline(polyline) => {
+                polyline.vertices.get(segment)?.bulge
+            }
+            acadrust::EntityType::Polyline2D(polyline) => {
+                polyline.vertices.get(segment)?.bulge
+            }
+            _ => 0.0,
+        };
+        if let Some(arc) = cadkernel::geom2d::BulgeArc::from_bulge(
+            [a.x, a.y],
+            [b.x, b.y],
+            bulge,
+        ) {
+            let midpoint = arc.sample(0.5);
+            return Some(Vector3::new(midpoint[0], midpoint[1], (a.z + b.z) * 0.5));
+        }
         return Some((a + b) * 0.5);
     }
     if marker < 0 {
@@ -405,6 +423,97 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
 /// Below this squared distance (1e-6 world units), two points count as
 /// already coincident for [`nearest_parametric_point`]'s purposes.
 const COINCIDENT_EPSILON_SQ: f64 = 1.0e-12;
+
+/// Addressable constraint points for one entity, in the same marker space
+/// used by persistent constraint references.
+pub(crate) fn parametric_point_candidates(
+    entity: &acadrust::EntityType,
+) -> Vec<(i32, Vector3)> {
+    let mut points: Vec<_> = super::dimension_assoc::source_points(entity)
+        .into_iter()
+        .enumerate()
+        .map(|(marker, point)| (marker as i32, point))
+        .collect();
+    match entity {
+        acadrust::EntityType::Circle(circle) => points.push((-3, circle.center_wcs())),
+        acadrust::EntityType::Arc(arc) => points.push((-3, arc.center_wcs())),
+        acadrust::EntityType::Ellipse(ellipse) => points.push((-3, ellipse.center)),
+        _ => {}
+    }
+
+    if matches!(
+        entity,
+        acadrust::EntityType::Line(_)
+            | acadrust::EntityType::Arc(_)
+            | acadrust::EntityType::Spline(_)
+            | acadrust::EntityType::Ellipse(_)
+    ) {
+        if let Some(curve) = crate::entities::curve::entity_curve(entity) {
+            if !curve.is_closed() {
+                let point = curve.point_at(0.5);
+                points.push((-2, Vector3::new(point[0], point[1], point[2])));
+            }
+        }
+    }
+
+    let polyline_midpoints = |vertices: &[Vector3], bulges: &[f64], closed: bool| {
+        let mut result = Vec::new();
+        for (index, bulge) in bulges.iter().copied().enumerate() {
+            let Some(a) = vertices.get(index).copied() else {
+                continue;
+            };
+            let b = vertices
+                .get(index + 1)
+                .copied()
+                .or_else(|| closed.then(|| vertices.first().copied()).flatten());
+            if let Some(b) = b {
+                let midpoint = cadkernel::geom2d::BulgeArc::from_bulge(
+                    [a.x, a.y],
+                    [b.x, b.y],
+                    bulge,
+                )
+                .map(|arc| {
+                    let point = arc.sample(0.5);
+                    Vector3::new(point[0], point[1], (a.z + b.z) * 0.5)
+                })
+                .unwrap_or((a + b) * 0.5);
+                result.push((
+                    POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - index as i32,
+                    midpoint,
+                ));
+            }
+        }
+        result
+    };
+    match entity {
+        acadrust::EntityType::LwPolyline(polyline) => {
+            let vertices = super::dimension_assoc::source_points(entity);
+            let bulges: Vec<_> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| vertex.bulge)
+                .collect();
+            points.extend(polyline_midpoints(&vertices, &bulges, polyline.is_closed));
+        }
+        acadrust::EntityType::Polyline2D(polyline) => {
+            let vertices = super::dimension_assoc::source_points(entity);
+            let bulges: Vec<_> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| vertex.bulge)
+                .collect();
+            points.extend(polyline_midpoints(&vertices, &bulges, polyline.is_closed()));
+        }
+        _ => {}
+    }
+    points
+}
+
+pub(crate) fn is_parametric_point_near(entity: &acadrust::EntityType, point: Vector3) -> bool {
+    parametric_point_candidates(entity)
+        .into_iter()
+        .any(|(_, candidate)| (candidate - point).length_squared() <= COINCIDENT_EPSILON_SQ)
+}
 
 /// Finds the addressable entity point nearest a snapped world position.
 /// Returns `None` when no point in the scope is within the coincidence
@@ -431,19 +540,94 @@ pub(crate) fn nearest_parametric_point(
         if common.owner_handle != owner || Some(common.handle) == exclude {
             continue;
         }
-        for (marker, point) in super::dimension_assoc::source_points(candidate)
-            .into_iter()
-            .enumerate()
-        {
-            consider(common.handle, marker as i32, point);
-        }
-        match candidate {
-            acadrust::EntityType::Circle(c) => consider(common.handle, -3, c.center_wcs()),
-            acadrust::EntityType::Arc(a) => consider(common.handle, -3, a.center_wcs()),
-            _ => {}
+        for (marker, point) in parametric_point_candidates(candidate) {
+            consider(common.handle, marker, point);
         }
     }
     best.map(|(_, r)| r)
+}
+
+/// Resolve a point pick within one explicitly selected entity.  This keeps two
+/// different endpoints at the same world coordinate distinguishable.
+pub(crate) fn nearest_parametric_point_on_entity(
+    document: &acadrust::CadDocument,
+    scope: ParametricScope,
+    handle: Handle,
+    world_point: Vector3,
+) -> Option<ParametricRef> {
+    let entity = document.get_entity(handle)?;
+    if entity.common().owner_handle != scope.owner_handle(document) {
+        return None;
+    }
+    parametric_point_candidates(entity)
+        .into_iter()
+        .filter_map(|(marker, point)| {
+            let distance = (point - world_point).length_squared();
+            (distance <= COINCIDENT_EPSILON_SQ)
+                .then_some((distance, ParametricRef::point(handle, marker)))
+        })
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, reference)| reference)
+}
+
+fn point_segment_distance_squared(point: Vector3, start: Vector3, end: Vector3) -> f64 {
+    let edge = end - start;
+    let denominator = edge.length_squared();
+    if denominator <= f64::EPSILON {
+        return (point - start).length_squared();
+    }
+    let unit = ((point - start).dot(&edge) / denominator).clamp(0.0, 1.0);
+    (point - (start + edge * unit)).length_squared()
+}
+
+/// Resolve the whole curve or the picked straight polyline segment used by a
+/// point-to-curve Coincident relation.
+pub(crate) fn parametric_curve_ref_for_pick(
+    document: &acadrust::CadDocument,
+    scope: ParametricScope,
+    handle: Handle,
+    world_point: Vector3,
+) -> Option<ParametricRef> {
+    let entity = document.get_entity(handle)?;
+    if entity.common().owner_handle != scope.owner_handle(document) {
+        return None;
+    }
+    match entity {
+        acadrust::EntityType::Line(_)
+        | acadrust::EntityType::Circle(_)
+        | acadrust::EntityType::Arc(_)
+        | acadrust::EntityType::Ellipse(_)
+        | acadrust::EntityType::Spline(_) => Some(ParametricRef::whole(handle)),
+        acadrust::EntityType::LwPolyline(polyline) => {
+            let vertices = super::dimension_assoc::source_points(entity);
+            (0..polyline.vertices.len())
+                .filter_map(|index| {
+                    let start = vertices.get(index).copied()?;
+                    let end = vertices
+                        .get(index + 1)
+                        .copied()
+                        .or_else(|| polyline.is_closed.then(|| vertices.first().copied()).flatten())?;
+                    Some((point_segment_distance_squared(world_point, start, end), index))
+                })
+                .min_by(|(a, _), (b, _)| a.total_cmp(b))
+                .map(|(_, index)| ParametricRef::segment(handle, index))
+        }
+        acadrust::EntityType::Polyline2D(polyline) => {
+            let vertices = super::dimension_assoc::source_points(entity);
+            (0..polyline.vertices.len())
+                .filter_map(|index| {
+                    let start = vertices.get(index).copied()?;
+                    let end = vertices
+                        .get(index + 1)
+                        .copied()
+                        .or_else(|| polyline.is_closed().then(|| vertices.first().copied()).flatten())?;
+                    Some((point_segment_distance_squared(world_point, start, end), index))
+                })
+                .min_by(|(a, _), (b, _)| a.total_cmp(b))
+                .map(|(_, index)| ParametricRef::segment(handle, index))
+        }
+        _ => None,
+    }
 }
 
 impl ConstraintKind {
@@ -568,6 +752,49 @@ pub(crate) fn glyph_placement(
 }
 
 impl super::Scene {
+    /// Expand a set of entities to the full enabled constraint component in
+    /// one scope.  Whole-object translations use this to keep every connected
+    /// entity's own shape while moving the assembly.
+    pub(crate) fn parametric_connected_handles(
+        &self,
+        scope: ParametricScope,
+        seeds: &[Handle],
+    ) -> Vec<Handle> {
+        let mut ordered = seeds.to_vec();
+        let mut found: std::collections::HashSet<_> = seeds.iter().copied().collect();
+        let Some(set) = self.parametric_constraint_set(scope) else {
+            return ordered;
+        };
+        loop {
+            let mut added = false;
+            for constraint in set.constraints.iter().filter(|constraint| {
+                constraint.enabled
+                    && matches!(
+                        constraint.kind,
+                        ConstraintKind::Coincident | ConstraintKind::PointOnCurve
+                    )
+            }) {
+                if !constraint
+                    .refs
+                    .iter()
+                    .any(|reference| found.contains(&reference.entity))
+                {
+                    continue;
+                }
+                for reference in &constraint.refs {
+                    if found.insert(reference.entity) {
+                        ordered.push(reference.entity);
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        ordered
+    }
+
     pub fn is_parametric_constraint_visible(
         &self,
         scope: ParametricScope,
@@ -722,6 +949,68 @@ impl super::Scene {
                 .is_ok()
         });
         mapped
+    }
+
+    /// Infer only endpoint/vertex coincidences from the selected objects.
+    /// Unlike the broader automatic constraint pass, this includes spline,
+    /// ellipse, and polyline vertices while leaving centers and midpoints to
+    /// their dedicated constraint kinds.
+    pub fn inferred_coincident_constraints(
+        &self,
+        scope: ParametricScope,
+        handles: &[Handle],
+    ) -> Vec<Vec<ParametricRef>> {
+        let owner = scope.owner_handle(&self.document);
+        let mut sources = Vec::new();
+        let mut seen_handles = std::collections::HashSet::new();
+        for handle in handles.iter().copied() {
+            if !seen_handles.insert(handle) {
+                continue;
+            }
+            let Some(entity) = self.document.get_entity(handle) else {
+                continue;
+            };
+            if entity.common().owner_handle != owner {
+                continue;
+            }
+            for (marker, point) in super::dimension_assoc::source_points(entity)
+                .into_iter()
+                .enumerate()
+            {
+                sources.push((ParametricRef::point(handle, marker as i32), point));
+            }
+        }
+
+        let existing = self.parametric_constraint_set(scope);
+        let mut inferred = Vec::new();
+        for first in 0..sources.len() {
+            for second in first + 1..sources.len() {
+                if sources[first].0.entity == sources[second].0.entity
+                    || (sources[first].1 - sources[second].1).length_squared()
+                        > COINCIDENT_EPSILON_SQ
+                {
+                    continue;
+                }
+                let refs = vec![sources[first].0, sources[second].0];
+                let already_exists = existing.is_some_and(|set| {
+                    set.constraints.iter().any(|constraint| {
+                        constraint.kind == ConstraintKind::Coincident
+                            && constraint.refs.len() == 2
+                            && (constraint.refs == refs
+                                || (constraint.refs[0] == refs[1]
+                                    && constraint.refs[1] == refs[0]))
+                    })
+                });
+                if !already_exists
+                    && self
+                        .validate_parametric_constraint(ConstraintKind::Coincident, &refs, None)
+                        .is_ok()
+                {
+                    inferred.push(refs);
+                }
+            }
+        }
+        inferred
     }
 
     pub fn smooth_constraint_refs(&self, handles: &[Handle]) -> Option<Vec<ParametricRef>> {

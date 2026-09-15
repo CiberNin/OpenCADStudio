@@ -2836,6 +2836,14 @@ impl Scene {
     }
 
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        self.bump_entities_with_parametric_driven(changes, &[]);
+    }
+
+    pub fn bump_entities_with_parametric_driven(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[parametric_constraints::ParametricRef],
+    ) {
         if changes.iter().any(|(handle, kind)| {
             matches!(kind, ChangeKind::Removed)
                 || self
@@ -2869,7 +2877,7 @@ impl Scene {
             }
         }
         if !self.parametric_constraints.is_empty() {
-            for change in self.refresh_parametric_constraints(&changes) {
+            for change in self.refresh_parametric_constraints_with_driven(&changes, driven_refs) {
                 if !changes.iter().any(|(handle, _)| *handle == change.0) {
                     changes.push(change);
                 }

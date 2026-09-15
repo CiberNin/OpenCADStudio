@@ -2082,10 +2082,17 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = None;
                     return Task::none();
                 }
+                if matches!(&transform, crate::command::EntityTransform::Translate(_)) {
+                    let scope = self.tabs[i].current_parametric_scope();
+                    handles = self.tabs[i]
+                        .scene
+                        .parametric_connected_handles(scope, &handles);
+                    handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                }
                 let label = self.history_label_from_active_cmd(i, "MOVE");
-                // A move/rotate/scale/mirror mutates only the selected entities
-                // (and their baked dimension sub-entities) through
-                // transform_entities — always delta-safe.
+                // A translation carries its complete connected constraint
+                // component so each member keeps its own dimensions. Other
+                // transforms retain their selected-object behavior.
                 let pending = self.begin_undo(i, label, handles.len(), true);
                 self.tabs[i].scene.transform_entities(&handles, &transform);
                 self.tabs[i].dirty = true;
@@ -2955,44 +2962,165 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::AddCoincidentConstraint {
-                point_a,
-                point_b,
+                first,
+                second,
+                multiple,
                 label,
             } => {
                 let scope = self.tabs[i].current_parametric_scope();
                 let to_world = |p: glam::DVec3| acadrust::types::Vector3::new(p.x, p.y, p.z);
-                let resolved_a = crate::scene::parametric_constraints::nearest_parametric_point(
-                    &self.tabs[i].scene.document,
-                    scope,
-                    to_world(point_a),
-                    None,
-                );
-                let resolved_b = resolved_a.and_then(|ref_a| {
-                    crate::scene::parametric_constraints::nearest_parametric_point(
-                        &self.tabs[i].scene.document,
-                        scope,
-                        to_world(point_b),
-                        None,
-                    )
-                    .filter(|ref_b| *ref_b != ref_a)
-                });
-                match (resolved_a, resolved_b) {
-                    (Some(ref_a), Some(ref_b)) => {
-                        return self.apply_cmd_result(CmdResult::AddParametricConstraint {
-                            kind: crate::scene::parametric_constraints::ConstraintKind::Coincident,
-                            refs: vec![ref_a, ref_b],
-                            driving_param: None,
-                            label,
-                        });
+                let resolve = |pick: crate::command::CoincidentPick,
+                               exclude: Option<Handle>| {
+                    if pick.whole_curve {
+                        pick.handle.and_then(|handle| {
+                            crate::scene::parametric_constraints::parametric_curve_ref_for_pick(
+                                &self.tabs[i].scene.document,
+                                scope,
+                                handle,
+                                to_world(pick.point),
+                            )
+                        })
+                    } else if let Some(handle) = pick.handle {
+                        crate::scene::parametric_constraints::nearest_parametric_point_on_entity(
+                            &self.tabs[i].scene.document,
+                            scope,
+                            handle,
+                            to_world(pick.point),
+                        )
+                    } else {
+                        crate::scene::parametric_constraints::nearest_parametric_point(
+                            &self.tabs[i].scene.document,
+                            scope,
+                            to_world(pick.point),
+                            exclude,
+                        )
                     }
+                };
+                let resolved_first = resolve(first, None);
+                let resolved_second = resolved_first
+                    .and_then(|reference| resolve(second, Some(reference.entity)));
+                let (Some(first_ref), Some(second_ref)) = (resolved_first, resolved_second) else {
+                    self.command_line.push_error(
+                        "Coincident: select a supported endpoint, center, midpoint, vertex, or curve.",
+                    );
+                    return Task::none();
+                };
+                let (kind, refs) = match (first.whole_curve, second.whole_curve) {
+                    (false, false) if first_ref != second_ref => (
+                        crate::scene::parametric_constraints::ConstraintKind::Coincident,
+                        vec![first_ref, second_ref],
+                    ),
+                    (true, false) => (
+                        crate::scene::parametric_constraints::ConstraintKind::PointOnCurve,
+                        vec![second_ref, first_ref],
+                    ),
+                    (false, true) => (
+                        crate::scene::parametric_constraints::ConstraintKind::PointOnCurve,
+                        vec![first_ref, second_ref],
+                    ),
                     _ => {
-                        self.command_line.push_error(
-                            "Coincident: pick didn't land on a point (endpoint, center, or vertex) — enable an Endpoint/Center object snap and try again.",
-                        );
-                        self.tabs[i].active_cmd = None;
-                        self.tabs[i].snap_result = None;
+                        self.command_line
+                            .push_error("Coincident: select one point and one curve, or two points.");
+                        return Task::none();
+                    }
+                };
+                if let Err(error) = self.tabs[i]
+                    .scene
+                    .validate_parametric_constraint(kind, &refs, None)
+                {
+                    self.command_line.push_error(error);
+                    return Task::none();
+                }
+                let touched: Vec<_> = refs.iter().map(|reference| reference.entity).collect();
+                let constraints_before = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::scene::parametric_constraints::ParametricConstraintSet::new(scope)
+                    });
+                let pending = self.begin_undo(i, label, touched.len(), true);
+                self.tabs[i]
+                    .scene
+                    .record_undo_parametric_constraints_before(scope, constraints_before);
+                self.tabs[i]
+                    .scene
+                    .parametric_constraint_set_mut(scope)
+                    .add(kind, refs, None);
+                let changes: Vec<_> = touched
+                    .iter()
+                    .copied()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect();
+                self.tabs[i]
+                    .scene
+                    .bump_entities_with_parametric_driven(&changes, &[first_ref]);
+                self.tabs[i].dirty = true;
+                self.tabs[i].snap_result = None;
+                if !multiple {
+                    self.tabs[i].active_cmd = None;
+                }
+                self.command_line.push_output("Coincident constraint applied.");
+                if multiple {
+                    if let Some(prompt) = self.tabs[i].active_cmd.as_ref().map(|cmd| cmd.prompt()) {
+                        self.command_line.push_info(&prompt);
+                    }
+                    self.command_line.set_step_options(
+                        self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .map(|cmd| cmd.options())
+                            .unwrap_or_default(),
+                    );
+                }
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::AddAutoCoincidentConstraints { handles } => {
+                use crate::scene::parametric_constraints::ConstraintKind;
+                let scope = self.tabs[i].current_parametric_scope();
+                let inferred = self.tabs[i]
+                    .scene
+                    .inferred_coincident_constraints(scope, &handles);
+                let count = inferred.len();
+                if count > 0 {
+                    let constraints_before = self.tabs[i]
+                        .scene
+                        .parametric_constraint_set(scope)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            crate::scene::parametric_constraints::ParametricConstraintSet::new(
+                                scope,
+                            )
+                        });
+                    let pending = self.begin_undo(i, "Coincident auto constrain", handles.len(), true);
+                    self.tabs[i]
+                        .scene
+                        .record_undo_parametric_constraints_before(scope, constraints_before);
+                    for refs in inferred {
+                        self.tabs[i]
+                            .scene
+                            .parametric_constraint_set_mut(scope)
+                            .add(ConstraintKind::Coincident, refs, None);
+                    }
+                    let changes: Vec<_> = handles
+                        .iter()
+                        .copied()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                    self.refresh_properties();
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
                     }
                 }
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.command_line
+                    .push_output(format!("{} coincident constraint(s) applied.", count).as_str());
             }
             CmdResult::AddPointOnEntityConstraint {
                 point,
@@ -8276,8 +8404,17 @@ mod parametric_constraint_undo_tests {
         let b = add_line(&mut app, 20.0, 0.0, 20.0, 5.0); // deliberately far from `a`, so the two picks are unambiguous
 
         let _ = app.apply_cmd_result(CmdResult::AddCoincidentConstraint {
-            point_a: glam::DVec3::new(5.0, 0.0, 0.0),  // a's end
-            point_b: glam::DVec3::new(20.0, 0.0, 0.0), // b's start
+            first: crate::command::CoincidentPick {
+                handle: Some(a),
+                point: glam::DVec3::new(5.0, 0.0, 0.0),
+                whole_curve: false,
+            },
+            second: crate::command::CoincidentPick {
+                handle: Some(b),
+                point: glam::DVec3::new(20.0, 0.0, 0.0),
+                whole_curve: false,
+            },
+            multiple: false,
             label: "Coincident constraint",
         });
 
@@ -8305,8 +8442,17 @@ mod parametric_constraint_undo_tests {
         let _a = add_line(&mut app, 0.0, 0.0, 5.0, 0.0);
 
         let _ = app.apply_cmd_result(CmdResult::AddCoincidentConstraint {
-            point_a: glam::DVec3::new(5.0, 0.0, 0.0), // a's end — a real point
-            point_b: glam::DVec3::new(500.0, 500.0, 0.0), // nowhere near anything
+            first: crate::command::CoincidentPick {
+                handle: Some(_a),
+                point: glam::DVec3::new(5.0, 0.0, 0.0),
+                whole_curve: false,
+            },
+            second: crate::command::CoincidentPick {
+                handle: None,
+                point: glam::DVec3::new(500.0, 500.0, 0.0),
+                whole_curve: false,
+            },
+            multiple: false,
             label: "Coincident constraint",
         });
 
