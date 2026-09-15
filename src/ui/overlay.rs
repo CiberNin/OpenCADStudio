@@ -1789,11 +1789,13 @@ impl canvas::Program<Message> for SelectionCanvas {
                 frame.fill_text(canvas::Text {
                     content: label.clone(),
                     position: Point::new(
-                        top_left.x + CONSTRAINT_GLYPH_PAD_X,
-                        top_left.y + CONSTRAINT_GLYPH_PAD_Y,
+                        top_left.x + size.width * 0.5,
+                        top_left.y + size.height * 0.5,
                     ),
                     color: fg,
                     size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
+                    align_x: iced::alignment::Horizontal::Center.into(),
+                    align_y: iced::alignment::Vertical::Center,
                     shaping: iced::advanced::text::Shaping::Advanced,
                     ..Default::default()
                 });
