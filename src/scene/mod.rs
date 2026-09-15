@@ -2880,6 +2880,22 @@ impl Scene {
         retain_size: bool,
         retained_originals: &[(Handle, EntityType)],
     ) {
+        self.bump_entities_with_solve_policy(changes, driven_refs, retain_size, retained_originals, true);
+    }
+
+    /// Refresh display and associations after a solved grip or exact history restore.
+    pub(crate) fn bump_entities_after_parametric_solve(&mut self, changes: &[(Handle, ChangeKind)]) {
+        self.bump_entities_with_solve_policy(changes, &[], false, &[], false);
+    }
+
+    fn bump_entities_with_solve_policy(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[parametric_constraints::ParametricRef],
+        retain_size: bool,
+        retained_originals: &[(Handle, EntityType)],
+        solve_parametric: bool,
+    ) {
         if changes.iter().any(|(handle, kind)| {
             matches!(kind, ChangeKind::Removed)
                 || self
@@ -2912,7 +2928,7 @@ impl Scene {
                 changes.push(change);
             }
         }
-        if !self.parametric_constraints.is_empty() {
+        if solve_parametric && !self.parametric_constraints.is_empty() {
             for change in self.refresh_parametric_constraints_with_originals(
                 &changes,
                 driven_refs,

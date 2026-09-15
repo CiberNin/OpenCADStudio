@@ -1244,7 +1244,7 @@ impl OpenCADStudio {
             };
 
             let mut seen_handles = rustc_hash::FxHashSet::default();
-            let mut edited_handles: Vec<_> = grip
+            let edited_handles: Vec<_> = grip
                 .targets
                 .iter()
                 .map(|target| target.handle)
@@ -1254,6 +1254,9 @@ impl OpenCADStudio {
             // Initialize once: constraint solves may add neighbors to this gesture.
             // Wire entities use the overlay; solid meshes stay visible and move live.
             if self.grip_preview_handles.is_empty() {
+                let preview_handles = self.tabs[i].scene.parametric_connected_handles(
+                    self.tabs[i].current_parametric_scope(), &edited_handles, true,
+                );
                 if self.grip_dirty_before.is_none() {
                     self.grip_dirty_before = Some(self.tabs[i].dirty);
                 }
@@ -1261,7 +1264,7 @@ impl OpenCADStudio {
                 // before insertion so append + placement is one undo step.
                 // Normal grip drags still snapshot their current entities here.
                 if self.grip_originals.is_empty() {
-                    self.grip_originals = edited_handles
+                    self.grip_originals = preview_handles
                         .iter()
                         .filter_map(|&handle| {
                             self.tabs[i]
@@ -1274,17 +1277,17 @@ impl OpenCADStudio {
                         .collect();
                 }
                 self.capture_grip_history_originals(i, &edited_handles);
-                for &handle in &edited_handles {
+                for &handle in &preview_handles {
                     if !self.tabs[i].scene.meshes.contains_key(&handle) {
                         self.tabs[i].scene.preview_hidden.insert(handle);
                     }
                 }
-                let changes: Vec<_> = edited_handles
+                let changes: Vec<_> = preview_handles
                     .iter()
                     .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect();
-                self.tabs[i].scene.bump_entities(&changes);
-                self.grip_preview_handles = edited_handles.clone();
+                self.tabs[i].scene.bump_entities_after_parametric_solve(&changes);
+                self.grip_preview_handles = preview_handles;
                 // Snapshot the entity's glyph quads once so each move can
                 // slide the already-shaped text rather than re-shaping it
                 // (issue #316). The fast slide path only runs for a rigid
@@ -1292,7 +1295,7 @@ impl OpenCADStudio {
                 // dimension re-tessellates) and a Square insertion grip (so
                 // an MTEXT width handle, a Triangle, still re-tessellates so
                 // the re-wrap is exact).
-                let snap = self.tabs[i].scene.wire_models_for(&edited_handles);
+                let snap = self.tabs[i].scene.wire_models_for(&self.grip_preview_handles);
 
                 // Preserve the exact geometry from the instant the grip drag began.
                 // This snapshot is visual/reference-only: do NOT append it to
@@ -1317,7 +1320,7 @@ impl OpenCADStudio {
                         grip_def.shape == crate::scene::model::object::GripShape::Square
                     })
                     .unwrap_or(false);
-                self.grip_text_slide = edited_handles.len() == 1
+                self.grip_text_slide = self.grip_preview_handles.len() == 1
                     && grip.targets.len() == 1
                     && !self.grip_text_verts.is_empty()
                     && snap.iter().all(|w| w.points.is_empty())
@@ -1745,62 +1748,17 @@ impl OpenCADStudio {
                     );
                 }
             }
-            let driven_refs: Vec<_> = grip
-                .targets
-                .iter()
-                .filter_map(|target| {
-                    let entity = self.tabs[i]
-                        .scene
-                        .document
-                        .get_entity(target.handle)?;
-                    crate::scene::parametric_constraints::grip_solve_anchor_ref(
-                        entity,
-                        target.handle,
-                        target.grip_id,
-                    )
-                })
-                .collect();
-            // Re-solve constrained neighbors on each drag frame and include
-            // their original state in the gesture's undo record.
-            let solved_by_constraints = self.tabs[i]
-                .scene
-                .solve_parametric_constraints_preview(
-                    &edited_handles,
-                    &driven_refs,
-                    false,
-                    &self.grip_originals,
-                );
-            for (handle, _) in &solved_by_constraints {
-                let handle = *handle;
-                if !self.grip_preview_handles.contains(&handle) {
-                    if let Some(original) = self.tabs[i].scene.document.get_entity(handle).cloned()
-                    {
-                        self.grip_originals.push((handle, original));
-                    }
-                    self.grip_preview_handles.push(handle);
-                    if !self.tabs[i].scene.meshes.contains_key(&handle) {
-                        self.tabs[i].scene.preview_hidden.insert(handle);
-                    }
-                }
-                if !edited_handles.contains(&handle) {
-                    edited_handles.push(handle);
-                }
-            }
-            for (handle, new_entity) in solved_by_constraints {
-                if let Some(slot) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                    *slot = new_entity;
-                }
-            }
-            let mesh_changes: Vec<_> = edited_handles
+            self.solve_grip_constraints(i, &grip);
+            let mesh_changes: Vec<_> = self.grip_preview_handles
                 .iter()
                 .copied()
                 .filter(|handle| self.tabs[i].scene.meshes.contains_key(handle))
                 .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                 .collect();
             if !mesh_changes.is_empty() {
-                self.tabs[i].scene.bump_entities(&mesh_changes);
+                self.tabs[i].scene.bump_entities_after_parametric_solve(&mesh_changes);
             }
-            self.tabs[i].scene.set_preview_hatches(&edited_handles);
+            self.tabs[i].scene.set_preview_hatches(&self.grip_preview_handles);
             self.tabs[i].dirty = true;
             if let Some(active) = self.tabs[i].active_grip.as_mut() {
                 active.last_world = snapped;
@@ -1826,7 +1784,7 @@ impl OpenCADStudio {
                 self.tabs[i].scene.set_preview_wires(Vec::new());
             } else {
                 // Current deformed geometry.
-                let mut preview = self.tabs[i].scene.grip_wire_models_for(&edited_handles);
+                let mut preview = self.tabs[i].scene.grip_wire_models_for(&self.grip_preview_handles);
 
                 // Also show the drag-start geometry as a faint ghost.
                 //
@@ -3480,7 +3438,7 @@ impl OpenCADStudio {
                     .into_iter()
                     .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect();
-                self.tabs[i].scene.bump_entities(&changes);
+                self.tabs[i].scene.bump_entities_after_parametric_solve(&changes);
             }
             // Placement confirmed — keep the just-added leader.
             self.grip_add_provisional = None;
@@ -6076,6 +6034,128 @@ mod selection_preview_tests {
     use crate::app::{HoverDwell, OpenCADStudio, HOVER_DWELL_MS};
 
     #[test]
+    fn lower_endpoint_drag_previews_connected_tangent_profile_and_keeps_top_fixed() {
+        use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef, ParametricScope};
+        use acadrust::{entities::{Arc, Line}, types::Vector3, EntityType};
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.snapper.snap_enabled = false;
+        app.snapper.grid_snap_on = false;
+        app.snapper.otrack_enabled = false;
+        app.ortho_mode = false;
+        app.polar_mode = false;
+        app.constraint_solve_mode = true;
+        app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        let scene = &mut app.tabs[i].scene;
+        let [outer, inner, upper, lower] = [
+            ([0.0, 0.0], [0.0, 5.0]),
+            ([-1.0, -1.0], [-1.0, 5.0]),
+            ([4.0, 0.0], [0.0, 0.0]),
+            ([4.0, -1.0], [-1.0, -1.0]),
+        ].map(|(a, b)| scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(a[0], a[1], 0.0), Vector3::new(b[0], b[1], 0.0),
+        ))));
+        let top = scene.add_entity(EntityType::Arc(Arc::from_coords(
+            -0.5, 5.0, 0.0, 0.5, 0.0, std::f64::consts::PI,
+        )));
+        let right = scene.add_entity(EntityType::Arc(Arc::from_coords(
+            4.0, -0.5, 0.0, 0.5, -std::f64::consts::FRAC_PI_2,
+            std::f64::consts::FRAC_PI_2,
+        )));
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        for (a, ai, b, bi) in [
+            (outer, 1, top, 0), (top, 1, inner, 1),
+            (outer, 0, upper, 1), (upper, 0, right, 1),
+            (inner, 0, lower, 1), (right, 0, lower, 0),
+        ] {
+            set.add(ConstraintKind::Coincident,
+                vec![ParametricRef::point(a, ai), ParametricRef::point(b, bi)], None);
+        }
+        for (kind, a, b) in [
+            (ConstraintKind::Parallel, outer, inner),
+            (ConstraintKind::Parallel, upper, lower),
+            (ConstraintKind::Tangent, outer, top),
+            (ConstraintKind::Tangent, inner, top),
+            (ConstraintKind::Tangent, upper, right),
+            (ConstraintKind::Tangent, lower, right),
+            (ConstraintKind::Equal, top, right),
+        ] {
+            set.add(kind, vec![ParametricRef::whole(a), ParametricRef::whole(b)], None);
+        }
+        set.add(ConstraintKind::Horizontal, vec![ParametricRef::whole(lower)], None);
+        let handles = if let Ok(path) = std::env::var("OCS_GRIP_TEST_DRAWING") {
+            let result = app.automation_op(&serde_json::json!({"op":"open","path":path}).to_string());
+            assert_eq!(result["ok"], true, "{result}");
+            app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+            [0x57F, 0x57D, 0x57C, 0x57A, 0x57E, 0x57B].map(Handle::new)
+        } else {
+            [outer, inner, upper, lower, top, right]
+        };
+        let inner = handles[1];
+        let geometry = |app: &OpenCADStudio| handles.map(|handle|
+            app.tabs[i].scene.document.get_entity(handle).unwrap().clone());
+        let before = geometry(&app);
+        let EntityType::Line(original_line) = &before[1] else { panic!("line") };
+        let lower_endpoint = original_line.start;
+        let upper_endpoint = original_line.end;
+        let EntityType::Arc(original_arc) = &before[4] else { panic!("arc") };
+        let radius = original_arc.radius;
+        app.tabs[i].scene.selected.insert(inner);
+        app.refresh_selected_grips();
+        app.tabs[i].active_grip = Some(GripEdit::single(
+            inner, 0, false, glam::DVec3::new(lower_endpoint.x, lower_endpoint.y, 0.0),
+        ));
+        let check_profile = |app: &OpenCADStudio| {
+            let entities = geometry(app);
+            let EntityType::Line(line) = &entities[1] else { panic!("line") };
+            assert_eq!(line.end, upper_endpoint, "top endpoint drifted");
+            let EntityType::Arc(arc) = &entities[4] else { panic!("arc") };
+            assert!((arc.end_point() - line.end).length() < 1e-7, "top arc detached");
+            for index in [4, 5] {
+                let EntityType::Arc(arc) = &entities[index] else { panic!("arc") };
+                assert!((arc.radius - radius).abs() < 1e-7, "parallel gap changed");
+            }
+            for (line_index, arc_index, marker) in [(0, 4, 0), (1, 4, 1), (2, 5, 1), (3, 5, 0)] {
+                let EntityType::Line(line) = &entities[line_index] else { panic!("line") };
+                let EntityType::Arc(arc) = &entities[arc_index] else { panic!("arc") };
+                let contact = if marker == 0 { arc.start_point() } else { arc.end_point() };
+                let endpoint = if line_index < 2 { line.end } else { line.start };
+                assert!((contact - endpoint).length() < 1e-7, "tangent contact detached");
+                let direction = line.end - line.start;
+                assert!(direction.dot(&(contact - arc.center)).abs() < 1e-7,
+                    "tangency lost: line={line:?}, arc={arc:?}, error={}", direction.dot(&(contact - arc.center)));
+            }
+        };
+        for offset in [[-0.4, -0.5], [-1.0, -1.0], [-1.0, -1.0], [0.3, 0.4]] {
+            let target = [lower_endpoint.x + offset[0], lower_endpoint.y + offset[1]];
+            let cursor = app.tabs[i].scene.camera.borrow().project(
+                glam::DVec3::new(target[0], target[1], 0.0),
+                iced::Rectangle::with_size(iced::Size::new(800.0, 600.0)),
+            ).unwrap();
+            let _ = app.on_viewport_move(Point::new(cursor.x, cursor.y));
+            check_profile(&app);
+            let EntityType::Line(line) = app.tabs[i].scene.document.get_entity(inner).unwrap()
+                else { panic!("line") };
+            assert!((line.start - Vector3::new(target[0], target[1], 0.0)).length() < 1e-5);
+            for handle in handles {
+                assert!(app.tabs[i].scene.preview_wires.iter().any(|wire|
+                    wire.name == handle.value().to_string() && wire.color[3] > 0.9),
+                    "connected entity {handle:?} missing from preview");
+            }
+        }
+        let preview = geometry(&app);
+        let _ = app.on_viewport_left_release();
+        check_profile(&app);
+        assert_eq!(geometry(&app), preview, "release changed the preview solution");
+        app.undo_steps(1);
+        assert_eq!(geometry(&app), before);
+        app.redo_steps(1);
+        assert_eq!(geometry(&app), preview);
+    }
+
+    #[test]
     fn grip_moves_keep_perpendicular_constraints_live_and_undoable() {
         use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
         use acadrust::{entities::Line, types::Vector3, EntityType};
@@ -6137,9 +6217,9 @@ mod selection_preview_tests {
                 .normalize()
             };
             assert!(direction(current[0]).dot(direction(current[1])).abs() < 1e-8);
-            assert_eq!(
+            assert_ne!(
                 current[1], before[1],
-                "geometry outside the grip edit must stay fixed"
+                "the constrained neighbor must follow the edited line"
             );
             assert_eq!(
                 current[0][0], before[0][0],

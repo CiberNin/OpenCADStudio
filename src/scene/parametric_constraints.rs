@@ -83,32 +83,33 @@ impl ParametricRef {
     }
 }
 
-/// Point reference temporarily pinned while solving a native grip edit.
-/// A line endpoint anchors its opposite endpoint so the grabbed endpoint is
-/// projected onto the constraint solution instead of moving the whole line.
-pub(crate) fn grip_solve_anchor_ref(
+/// Point references temporarily pinned while solving a native grip edit.
+/// Both endpoints of an edited line are exact inputs: the opposite endpoint
+/// stays fixed while the grabbed endpoint follows the cursor.
+pub(crate) fn grip_solve_anchor_refs(
     entity: &acadrust::EntityType,
     handle: Handle,
     grip_id: usize,
-) -> Option<ParametricRef> {
+) -> Vec<ParametricRef> {
     match entity {
-        acadrust::EntityType::Line(_) if grip_id <= 1 => {
-            Some(ParametricRef::point(handle, 1 - grip_id as i32))
-        }
+        acadrust::EntityType::Line(_) if grip_id <= 1 => vec![
+            ParametricRef::point(handle, 0),
+            ParametricRef::point(handle, 1),
+        ],
         acadrust::EntityType::LwPolyline(polyline) if grip_id < polyline.vertices.len() => {
-            Some(ParametricRef::point(handle, grip_id as i32))
+            vec![ParametricRef::point(handle, grip_id as i32)]
         }
         acadrust::EntityType::Polyline2D(polyline) if grip_id < polyline.vertices.len() => {
-            Some(ParametricRef::point(handle, grip_id as i32))
+            vec![ParametricRef::point(handle, grip_id as i32)]
         }
         acadrust::EntityType::Arc(_) => match grip_id {
-            0 => Some(ParametricRef::center(handle)),
-            1 => Some(ParametricRef::point(handle, 0)),
-            2 => Some(ParametricRef::point(handle, 1)),
-            _ => None,
+            0 => vec![ParametricRef::center(handle)],
+            1 => vec![ParametricRef::point(handle, 0)],
+            2 => vec![ParametricRef::point(handle, 1)],
+            _ => Vec::new(),
         },
         acadrust::EntityType::Circle(_) if grip_id == 0 => {
-            Some(ParametricRef::center(handle))
+            vec![ParametricRef::center(handle)]
         }
         acadrust::EntityType::Point(_)
         | acadrust::EntityType::Insert(_)
@@ -116,9 +117,9 @@ pub(crate) fn grip_solve_anchor_ref(
         | acadrust::EntityType::MText(_)
             if grip_id == 0 =>
         {
-            Some(ParametricRef::point(handle, 0))
+            vec![ParametricRef::point(handle, 0)]
         }
-        _ => None,
+        _ => Vec::new(),
     }
 }
 
@@ -903,13 +904,13 @@ pub(crate) fn constraint_hover_points(
 }
 
 impl super::Scene {
-    /// Expand a set of entities to the full enabled constraint component in
-    /// one scope.  Whole-object translations use this to keep every connected
-    /// entity's own shape while moving the assembly.
+    /// Expand through enabled constraints. Whole-object translations follow
+    /// point connections; grip previews include curve relations as well.
     pub(crate) fn parametric_connected_handles(
         &self,
         scope: ParametricScope,
         seeds: &[Handle],
+        include_curve_relations: bool,
     ) -> Vec<Handle> {
         let mut ordered = seeds.to_vec();
         let mut found: std::collections::HashSet<_> = seeds.iter().copied().collect();
@@ -920,10 +921,10 @@ impl super::Scene {
             let mut added = false;
             for constraint in set.constraints.iter().filter(|constraint| {
                 constraint.enabled
-                    && matches!(
+                    && (include_curve_relations || matches!(
                         constraint.kind,
                         ConstraintKind::Coincident | ConstraintKind::PointOnCurve
-                    )
+                    ))
             }) {
                 if !constraint
                     .refs
@@ -1414,7 +1415,8 @@ impl super::Scene {
                 let selected = c
                     .refs
                     .iter()
-                    .any(|reference| self.selected.contains(&reference.entity));
+                    .any(|reference| self.selected.contains(&reference.entity)
+                        || self.preview_hidden.contains(&reference.entity));
                 self.should_display_parametric_constraint(scope, c.id, selected, display_mode)
             })
             .flat_map(|c| {
@@ -1888,18 +1890,18 @@ mod tests {
         ));
 
         assert_eq!(
-            grip_solve_anchor_ref(&arc, handle, 0),
-            Some(ParametricRef::center(handle))
+            grip_solve_anchor_refs(&arc, handle, 0),
+            vec![ParametricRef::center(handle)]
         );
         assert_eq!(
-            grip_solve_anchor_ref(&arc, handle, 1),
-            Some(ParametricRef::point(handle, 0))
+            grip_solve_anchor_refs(&arc, handle, 1),
+            vec![ParametricRef::point(handle, 0)]
         );
         assert_eq!(
-            grip_solve_anchor_ref(&arc, handle, 2),
-            Some(ParametricRef::point(handle, 1))
+            grip_solve_anchor_refs(&arc, handle, 2),
+            vec![ParametricRef::point(handle, 1)]
         );
-        assert_eq!(grip_solve_anchor_ref(&arc, handle, 3), None);
+        assert_eq!(grip_solve_anchor_refs(&arc, handle, 3), Vec::new());
     }
 
     #[test]
@@ -2146,7 +2148,7 @@ mod tests {
         );
 
         assert_eq!(
-            scene.parametric_connected_handles(ParametricScope::ModelSpace, &[h(1)]),
+            scene.parametric_connected_handles(ParametricScope::ModelSpace, &[h(1)], false),
             vec![h(1), h(2), h(3)]
         );
     }

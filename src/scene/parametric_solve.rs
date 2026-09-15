@@ -800,27 +800,54 @@ fn oriented_distance(target: f64, current_projection: f64) -> f64 {
     }
 }
 
-/// One [`ParametricConstraint`]'s `cadkernel_constraints` construction: every system-level
-/// constraint it contributes (most kinds contribute exactly one; a few —
-/// `Coincident`/`Concentric`/`CenterPoint`'s X+Y halves, `Colinear`'s two
-/// endpoints, `Midpoint`'s X+Y, `Symmetric`'s midpoint+perpendicular pair,
-/// `Fixed`'s per-coordinate pins — contribute more). Empty means it can't be
-/// built (an unsupported/not-yet-mapped kind, a dangling ref, a ref shape
-/// the kind doesn't expect — e.g. `Parallel` needs two whole-line refs — or,
-/// for a dimensional kind, a `driving_param` that fails to resolve). A constraint
-/// that can't be built is simply skipped for this solve, not an error:
-/// geometry it would have constrained is left alone, matching how a
-/// dangling associative-dimension reference degrades today rather than
-/// aborting the whole recompute. (A named-parameter *cycle* should be
-/// unreachable here — `ParameterTable::set` already refuses to create one —
-/// so it gets the same treatment as any other resolve failure rather than a
-/// special case.)
+fn retained_tangent_side(
+    document: &acadrust::CadDocument,
+    retained_before: &HashMap<Handle, std::sync::Arc<EntityType>>,
+    constraint: &ParametricConstraint,
+) -> Option<bool> {
+    let [a, b] = constraint.refs.as_slice() else {
+        return None;
+    };
+    if constraint.kind != ConstraintKind::Tangent
+        || !retained_before.contains_key(&a.entity) && !retained_before.contains_key(&b.entity)
+    {
+        return None;
+    }
+    let curve = |reference: ParametricRef| {
+        let entity = retained_before
+            .get(&reference.entity)
+            .map(|entity| entity.as_ref())
+            .or_else(|| document.get_entity(reference.entity))?;
+        let curve = crate::entities::curve::entity_curve_xy(entity)?;
+        reference
+            .segment_index()
+            .map(|index| curve.segments().into_iter().nth(index))
+            .unwrap_or(Some(curve))
+    };
+    let circle_center = |curve: &cadkernel::geom2d::Curve| match curve {
+        cadkernel::geom2d::Curve::Circle(circle) => Some(circle.centre),
+        cadkernel::geom2d::Curve::Arc(arc) => Some(arc.centre),
+        _ => None,
+    };
+    let (a, b) = (curve(*a)?, curve(*b)?);
+    let (line, center) = a
+        .as_ray()
+        .zip(circle_center(&b))
+        .or_else(|| b.as_ray().zip(circle_center(&a)))?;
+    let ([x1, y1], [dx, dy]) = line;
+    Some(dx * (center[1] - y1) - dy * (center[0] - x1) >= 0.0)
+}
+
+/// Builds the kernel equations for one constraint. Unsupported references or
+/// invalid dimensional targets produce no equations.
 fn build_constraint(
     document: &acadrust::CadDocument,
     sys: &mut System,
     cache: &mut HashMap<Handle, EntityGeom>,
     params: &ParameterTable,
     c: &ParametricConstraint,
+    tangent_side: Option<bool>,
+    tangent_point: Option<ParametricRef>,
 ) -> Vec<Rc<dyn Constraint>> {
     if !c.enabled || !refs_share_supported_plane(document, &c.refs) {
         return Vec::new();
@@ -1517,6 +1544,14 @@ fn build_constraint(
                 }
                 (CircleOrLine::Circle(circ), CircleOrLine::Line(line))
                 | (CircleOrLine::Line(line), CircleOrLine::Circle(circ)) => {
+                    if let Some(point) = tangent_point.and_then(|reference|
+                        resolve_constraint_point(document, sys, cache, reference))
+                    {
+                        // At a coincident endpoint, constrain the tangent direction
+                        // directly; a circle-to-line distance has a singular derivative.
+                        let radius = GLine { p1: circ.center, p2: point };
+                        return vec![Rc::new(PerpendicularConstraint::new(sys.store(), line, radius))];
+                    }
                     let store = sys.store();
                     let (cx, cy) = (store.get(circ.center.x), store.get(circ.center.y));
                     let (x1, y1) = (store.get(line.p1.x), store.get(line.p1.y));
@@ -1525,7 +1560,7 @@ fn build_constraint(
                     // `C2LDistance::signed_value` itself uses — so `ccw`'s
                     // sign matches whichever side the circle already sits on.
                     let area = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1);
-                    let ccw = area >= 0.0;
+                    let ccw = tangent_side.unwrap_or(area >= 0.0);
                     // A driven, fixed zero: with `internal: false` this makes
                     // `C2LDistance`'s target exactly the circle's own radius
                     // (see its `error_grad`), i.e. plain tangency rather than
@@ -1748,6 +1783,7 @@ fn solve_scope(
     set: &ParametricConstraintSet,
     driven_refs: &[ParametricRef],
     retain_size: bool,
+    retain_lengths: bool,
     retained_before: &HashMap<Handle, std::sync::Arc<EntityType>>,
 ) -> Option<SolveResult> {
     let params = if set.local_parameters.is_empty() {
@@ -1768,7 +1804,26 @@ fn solve_scope(
     let mut owner: Vec<(Rc<dyn Constraint>, ConstraintId)> = Vec::new();
 
     for c in &set.constraints {
-        for constraint in build_constraint(document, &mut sys, &mut cache, params, c) {
+        let tangent_side = retained_tangent_side(document, retained_before, c);
+        let tangent_point = (c.kind == ConstraintKind::Tangent && c.refs.len() == 2
+            && c.refs[0].entity != c.refs[1].entity
+            && c.refs.iter().all(|r| r.marker.is_none()))
+            .then(|| set.constraints.iter().find_map(|connection| {
+                (connection.enabled && connection.kind == ConstraintKind::Coincident
+                    && connection.refs.len() == 2
+                    && connection.refs.iter().all(|r| matches!(r.marker, Some(0 | 1)))
+                    && c.refs.iter().all(|r| connection.refs.iter().any(|p| p.entity == r.entity)))
+                    .then(|| connection.refs[0])
+            })).flatten();
+        for constraint in build_constraint(
+            document,
+            &mut sys,
+            &mut cache,
+            params,
+            c,
+            tangent_side,
+            tangent_point,
+        ) {
             owner.push((constraint.clone(), c.id));
             sys.add_constraint(constraint);
         }
@@ -1782,13 +1837,12 @@ fn solve_scope(
         return None;
     }
 
-    // Preserve current line lengths and radii for this solve when
-    // CONSTRAINTSOLVEMODE requests it. These temporary equations guide the
-    // solution without becoming persistent dimensional constraints.
+    // Grip edits retain radii while connected lines resize to meet their
+    // endpoints. Other edits can retain line lengths as well.
     if retain_size {
         for (handle, geom) in &cache {
             match geom {
-                EntityGeom::Line(line) => {
+                EntityGeom::Line(line) if retain_lengths => {
                     let current_length = {
                         let store = sys.store();
                         let dx = store.get(line.p2.x) - store.get(line.p1.x);
@@ -1806,7 +1860,7 @@ fn solve_scope(
                     points,
                     closed,
                     ..
-                } => {
+                } if retain_lengths => {
                     for index in 0..points.len() {
                         let Some(a) = points.get(index).copied() else {
                             continue;
@@ -2476,6 +2530,8 @@ impl Scene {
             &mut cache,
             &self.named_parameters,
             &candidate,
+            None,
+            None,
         )
         .is_empty()
         {
@@ -2592,6 +2648,7 @@ impl Scene {
                 &self.parametric_constraints[i],
                 driven_refs,
                 retain_size,
+                true,
                 &retained_before,
             ) else {
                 continue;
@@ -2636,25 +2693,17 @@ impl Scene {
             if !is_touched {
                 continue;
             }
-            let mut anchors = driven_refs.to_vec();
-            for reference in set
-                .constraints
-                .iter()
-                .filter(|constraint| constraint.enabled)
-                .flat_map(|constraint| &constraint.refs)
-            {
-                if !touched.contains(&reference.entity)
-                    && !anchors.iter().any(|anchor| anchor.entity == reference.entity)
-                {
-                    anchors.push(ParametricRef::whole(reference.entity));
-                }
-            }
+            let connected = self.parametric_connected_handles(set.scope, touched, true);
+            let mut component = set.clone();
+            component.constraints.retain(|constraint| constraint.refs.iter()
+                .any(|reference| connected.contains(&reference.entity)));
             let Some((solved, _dof, _conflicts)) = solve_scope(
                 &self.document,
                 &self.named_parameters,
-                set,
-                &anchors,
+                &component,
+                driven_refs,
                 retain_size,
+                false,
                 &retained_before,
             )
             else {
@@ -2925,68 +2974,87 @@ mod tests {
         );
     }
 
-    /// A grip preview treats geometry outside the edit as a fixed reference,
-    /// so a parallel constraint projects the dragged endpoint without moving
-    /// the other line or changing their separation.
+    /// A grip preview lets the paired line and tangent circle follow the
+    /// edited line while preserving their sizes and parallel separation.
     #[test]
-    fn preview_solve_keeps_untouched_parallel_geometry_fixed() {
+    fn preview_solve_preserves_parallel_spacing_through_tangent_radius() {
         let mut scene = Scene::new();
         let a = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
             Vector3::new(0.0, 0.0, 0.0),
-            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
         )));
         let b = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
-            Vector3::new(0.0, 5.0, 0.0),
-            Vector3::new(10.0, 5.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(2.0, 10.0, 0.0),
         )));
+        let circle = scene.add_entity(EntityType::Circle(
+            acadrust::entities::Circle::from_center_radius(Vector3::new(1.0, 5.0, 0.0), 1.0),
+        ));
         let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         set.add(
             ConstraintKind::Parallel,
             vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
+        set.add(
+            ConstraintKind::Tangent,
+            vec![ParametricRef::whole(a), ParametricRef::whole(circle)],
+            None,
+        );
+        set.add(
+            ConstraintKind::Tangent,
+            vec![ParametricRef::whole(b), ParametricRef::whole(circle)],
+            None,
+        );
         scene.parametric_constraints.push(set);
 
-        // Simulate a live grip drag: mutate `a` directly (as `apply_grip`
-        // would each frame), without going through `bump_entities` at all.
+        let a_before = scene.document.get_entity(a).unwrap().clone();
         if let Some(EntityType::Line(l)) = scene.document.get_entity_mut(a) {
-            l.end = Vector3::new(10.0, 6.0, 0.0);
+            l.end = Vector3::new(2.0, 10.0, 0.0);
         }
         let b_before = scene.document.get_entity(b).cloned();
 
         let solved = scene.solve_parametric_constraints_preview(
             &[a],
-            &[ParametricRef::point(a, 0)],
-            false,
-            &[],
+            &[ParametricRef::point(a, 0), ParametricRef::point(a, 1)],
+            true,
+            &[(a, a_before)],
         );
-
         assert_eq!(
             scene.document.get_entity(b),
             b_before.as_ref(),
             "preview must not mutate the document"
         );
-        let moved_a = solved
-            .iter()
-            .find(|(h, _)| *h == a)
-            .map(|(_, entity)| entity)
-            .expect("the dragged line should be projected");
-        assert!(solved.iter().all(|(handle, _)| *handle != b));
-        let EntityType::Line(moved_a_line) = moved_a else {
+        let solved_entity = |handle| {
+            solved
+                .iter()
+                .find(|(candidate, _)| *candidate == handle)
+                .map(|(_, entity)| entity)
+                .unwrap_or_else(|| scene.document.get_entity(handle).unwrap())
+        };
+        let EntityType::Line(moved_a) = solved_entity(a) else {
             panic!("expected a Line")
         };
-        assert_eq!(moved_a_line.start, Vector3::new(0.0, 0.0, 0.0));
-        let EntityType::Line(fixed_b) = b_before.unwrap() else {
+        let EntityType::Line(moved_b) = solved_entity(b) else {
             panic!("expected a Line")
         };
-        let dir_a = moved_a_line.end - moved_a_line.start;
-        let dir_b = fixed_b.end - fixed_b.start;
+        let EntityType::Circle(moved_circle) = solved_entity(circle) else {
+            panic!("expected a Circle")
+        };
+        assert_eq!(moved_a.start, Vector3::new(0.0, 0.0, 0.0));
+        assert_eq!(moved_a.end, Vector3::new(2.0, 10.0, 0.0));
+        assert_ne!(solved_entity(b), b_before.as_ref().unwrap());
+        let dir_a = moved_a.end - moved_a.start;
+        let dir_b = moved_b.end - moved_b.start;
         let cross = dir_a.x * dir_b.y - dir_a.y * dir_b.x;
+        assert!(cross.abs() < 1.0e-6);
+        let offset = moved_b.start - moved_a.start;
+        let separation = (dir_a.x * offset.y - dir_a.y * offset.x).abs() / dir_a.length();
         assert!(
-            cross.abs() < 1e-6,
-            "the previewed positions should be mutually parallel: dir_a={dir_a:?} dir_b={dir_b:?}"
+            (separation - 2.0).abs() < 1.0e-6,
+            "separation={separation}, a={moved_a:?}, b={moved_b:?}, circle={moved_circle:?}"
         );
-        assert_eq!(fixed_b.start.y - moved_a_line.start.y, 5.0);
+        assert!((moved_circle.radius - 1.0).abs() < 1.0e-9);
     }
 
     #[test]

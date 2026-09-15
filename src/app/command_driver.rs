@@ -118,8 +118,45 @@ impl OpenCADStudio {
         let _ = self.on_viewport_exit();
     }
 
-    /// Roll a hot grip back to its pre-drag image and remove every grip-owned
-    /// overlay. Shared by Escape and drawing-space transitions.
+    pub(super) fn solve_grip_constraints(
+        &mut self,
+        i: usize,
+        grip: &crate::scene::pick::grip::GripEdit,
+    ) {
+        let touched: Vec<_> = grip.targets.iter().map(|target| target.handle).collect();
+        let connected = self.tabs[i].scene.parametric_connected_handles(
+            self.tabs[i].current_parametric_scope(), &touched, true,
+        );
+        for handle in connected {
+            if !self.grip_originals.iter().any(|(original, _)| *original == handle) {
+                if let Some(entity) = self.tabs[i].scene.document.get_entity(handle).cloned() {
+                    self.grip_originals.push((handle, entity));
+                }
+            }
+            if !self.grip_preview_handles.contains(&handle) {
+                self.grip_preview_handles.push(handle);
+                if !self.tabs[i].scene.meshes.contains_key(&handle) {
+                    self.tabs[i].scene.preview_hidden.insert(handle);
+                }
+            }
+        }
+        let driven_refs: Vec<_> = grip.targets.iter().flat_map(|target| {
+            self.tabs[i].scene.document.get_entity(target.handle)
+                .map(|entity| crate::scene::parametric_constraints::grip_solve_anchor_refs(
+                    entity, target.handle, target.grip_id,
+                )).unwrap_or_default()
+        }).collect();
+        let solved = self.tabs[i].scene.solve_parametric_constraints_preview(
+            &touched, &driven_refs,
+            self.constraint_solve_mode && !driven_refs.is_empty(), &self.grip_originals,
+        );
+        for (handle, entity) in solved {
+            if let Some(slot) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                *slot = entity;
+            }
+        }
+    }
+
     pub(super) fn capture_grip_history_originals(&mut self, i: usize, handles: &[Handle]) {
         if !self.grip_history_originals.is_empty() {
             return;
@@ -220,7 +257,7 @@ impl OpenCADStudio {
             .into_iter()
             .map(|handle| (handle, crate::scene::ChangeKind::Modified))
             .collect();
-        self.tabs[i].scene.bump_entities(&changes);
+        self.tabs[i].scene.bump_entities_after_parametric_solve(&changes);
         if let Some(dirty_before) = self.grip_dirty_before.take() {
             self.tabs[i].dirty = dirty_before;
         }
@@ -2190,7 +2227,7 @@ impl OpenCADStudio {
                     let scope = self.tabs[i].current_parametric_scope();
                     handles = self.tabs[i]
                         .scene
-                        .parametric_connected_handles(scope, &handles);
+                        .parametric_connected_handles(scope, &handles, false);
                     handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
                 }
                 let label = self.history_label_from_active_cmd(i, "MOVE");
