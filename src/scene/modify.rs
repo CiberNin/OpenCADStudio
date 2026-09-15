@@ -744,6 +744,11 @@ impl Scene {
         // Complete group copies record their new Group objects and dictionary
         // entry as targeted object deltas inside copy_complete_groups.
         self.copy_complete_groups(&handle_map);
+        // A dimension copied together with everything it measures (its
+        // viewport, its block path and its source) keeps an association, with
+        // every handle remapped onto the copies. Copied on its own it keeps
+        // none — see `copy_dimension_associations`.
+        self.copy_dimension_associations(&handle_map);
         // The copies are new handles (natural memo misses, tessellated fresh)
         // and reference only already-cached blocks — no block defn changes.
         // Report them as additions so derived caches patch in exactly the copies.
