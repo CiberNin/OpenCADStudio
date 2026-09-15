@@ -9,6 +9,7 @@ pub(crate) mod config;
 pub use automation::{export_headless, serve};
 mod command_driver;
 pub(crate) mod commands;
+mod dim_viewport;
 mod document;
 mod drafting_settings;
 pub(crate) mod expr_eval;
@@ -508,6 +509,12 @@ pub(super) struct OpenCADStudio {
     cursor_size: i32,
     /// Selection-box size setting (PICKBOX, 0..=50).
     pick_box: i32,
+    /// PR2: accepted snaps for the points the active dimension command has
+    /// collected, in collection order. Transient command state — the committed
+    /// result is an ordinary dimension entity, so undo/redo needs nothing here.
+    pub(crate) dim_accepted_snaps: Vec<crate::scene::viewport_ref::AcceptedSnap>,
+    /// Name of the command `dim_accepted_snaps` belongs to.
+    pub(crate) dim_accepted_snaps_owner: Option<String>,
     /// Use REFEDIT rather than BEDIT when double-clicking an attribute-free block.
     double_click_block_refedit: bool,
     /// Open ATTEDIT when double-clicking a block with attributes.
@@ -3634,6 +3641,8 @@ impl OpenCADStudio {
             zoom_factor: 60,
             cursor_size: 5,
             pick_box: 3,
+            dim_accepted_snaps: Vec::new(),
+            dim_accepted_snaps_owner: None,
             double_click_block_refedit: false,
             double_click_block_attedit: true,
             grip_object_limit: settings::DEFAULT_GRIP_OBJECT_LIMIT,

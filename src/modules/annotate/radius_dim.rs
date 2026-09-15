@@ -130,6 +130,12 @@ impl CadCommand for RadiusDimensionCommand {
         CmdResult::Cancel
     }
 
+    /// PR2: points and object picks may come through a paper-space viewport;
+    /// the committed dimension then reports the model measurement.
+    fn measures_through_viewports(&self) -> bool {
+        true
+    }
+
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }

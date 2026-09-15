@@ -2163,6 +2163,14 @@ pub trait CadCommand: Send {
     }
 
     /// Returns `true` when the command needs entity picking (hit-test) instead of point picking.
+    /// PR2: this command creates a dimension whose measurement must be
+    /// compensated when its points are picked through a paper-space viewport,
+    /// and whose explicit object pick may land on model geometry displayed
+    /// inside one. See `crate::app::dim_viewport`.
+    fn measures_through_viewports(&self) -> bool {
+        false
+    }
+
     fn needs_entity_pick(&self) -> bool {
         false
     }

@@ -454,6 +454,17 @@ impl OpenCADStudio {
             }
         }
         if matches!(&input, StepInput::Point(_)) { self.refresh_command_point_pick_context(i); }
+        // PR2: remember which viewport (if any) each dimension point was
+        // picked through, before the command turns it into geometry.
+        if let StepInput::Point(p) = &input {
+            if self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .is_some_and(|command| command.measures_through_viewports())
+            {
+                self.record_dimension_accepted_snap(i, *p);
+            }
+        }
         let ctrl = self.ctrl_down;
         let shift = self.shift_down;
         let result: Option<CmdResult> = {
@@ -2106,6 +2117,15 @@ impl OpenCADStudio {
                         acadrust::entities::Dimension::Ordinate(_)
                     )
                 );
+                // PR2: a dimension placed on the sheet but measuring model
+                // geometry through a viewport carries the compensation as a
+                // negative DIMLFAC override. It is deliberately *not*
+                // associated: its definition points are projected paper
+                // coordinates, so inferring a paper-space association would
+                // bind it to geometry that is not there. PR3 records the real
+                // dimension -> viewport -> entity chain.
+                let measured_through_viewport =
+                    self.apply_viewport_dimension_measurement(i, &mut entity);
                 let inherited_dimension = if preserve_base_style {
                     match &entity {
                         acadrust::EntityType::Dimension(dimension) => Some((
@@ -2172,7 +2192,7 @@ impl OpenCADStudio {
                         entity,
                         preserve_base_style,
                     ) {
-                        if association_mode == 2 {
+                        if association_mode == 2 && !measured_through_viewport {
                             let mut changes = vec![
                                 (handle, crate::scene::ChangeKind::Modified),
                             ];
@@ -2216,6 +2236,7 @@ impl OpenCADStudio {
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].snap_result = None;
+                self.clear_dimension_accepted_snaps();
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
                 }
