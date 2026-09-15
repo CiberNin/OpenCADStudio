@@ -3597,11 +3597,15 @@ impl OpenCADStudio {
                 // snapshot — the create already pushed one, so the whole object
                 // reverts as a unit.
                 if let Some(old) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                    let old_handle = old.as_entity().handle();
-                    let layer = old.as_entity().layer().to_string();
+                    // The initial live commit assigns the handle, owning block,
+                    // current layer and common display properties.  Geometry
+                    // refreshes must retain all of that identity; replacing only
+                    // the handle and layer reset owner_handle to NULL and made
+                    // the completed entity unavailable to scoped operations such
+                    // as parametric constraints.
+                    let common = old.common().clone();
                     let mut new = entity;
-                    new.as_entity_mut().set_handle(old_handle);
-                    new.as_entity_mut().set_layer(layer);
+                    *new.common_mut() = common;
                     *old = new;
                     self.tabs[i]
                         .scene
