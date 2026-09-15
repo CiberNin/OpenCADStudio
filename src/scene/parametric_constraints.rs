@@ -649,12 +649,21 @@ pub(crate) fn glyph_placement(
             (line.start.z + line.end.z) * 0.5,
         )
     };
-    let line_normal = |line: &acadrust::entities::Line| {
-        let direction = Vector3::new(-(line.end.y - line.start.y), line.end.x - line.start.x, 0.0);
+    let segment_normal = |start: Vector3, end: Vector3| {
+        let direction = Vector3::new(-(end.y - start.y), end.x - start.x, 0.0);
         (direction.length_squared() > 1e-24)
             .then_some(direction)
             .unwrap_or(Vector3::UNIT_Y)
     };
+    let line_normal = |line: &acadrust::entities::Line| segment_normal(line.start, line.end);
+    if let Some(segment) = r.segment_index() {
+        let anchor = resolve_point(
+            entity,
+            POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - segment as i32,
+        )?;
+        let [start, end] = constraint_segment_endpoints(document, *r)?;
+        return Some((anchor, segment_normal(start, end)));
+    }
     match (entity, r.marker) {
         (acadrust::EntityType::Line(line), None) => Some((line_midpoint(line), line_normal(line))),
         (acadrust::EntityType::Circle(circle), None | Some(-3)) => {
@@ -1534,6 +1543,14 @@ mod tests {
         document
             .add_entity(acadrust::EntityType::Circle(circle))
             .unwrap();
+        let mut polyline = acadrust::entities::LwPolyline::from_points(vec![
+            acadrust::types::Vector2::new(0.0, 0.0),
+            acadrust::types::Vector2::new(10.0, 0.0),
+        ]);
+        polyline.common.handle = h(3);
+        document
+            .add_entity(acadrust::EntityType::LwPolyline(polyline))
+            .unwrap();
 
         let constraint = |reference| ParametricConstraint {
             id: 0,
@@ -1559,6 +1576,10 @@ mod tests {
             glyph_placement(&document, &constraint(ParametricRef::center(h(2)))).unwrap();
         assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
         assert_eq!(direction, Vector3::new(5.0, 0.0, 0.0));
+        let (anchor, direction) =
+            glyph_placement(&document, &constraint(ParametricRef::segment(h(3), 0))).unwrap();
+        assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
+        assert_eq!(direction, Vector3::new(0.0, 10.0, 0.0));
     }
 
     #[test]
