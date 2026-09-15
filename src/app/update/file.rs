@@ -86,33 +86,7 @@ fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
     }
 }
 
-type LayoutPlotParams = (
-    std::sync::Arc<Vec<crate::io::pdf_export::PlotWire>>,
-    Vec<crate::scene::model::hatch_model::HatchModel>,
-    Vec<crate::scene::model::hatch_model::HatchModel>,
-    crate::io::pdf_export::PlotGroupSplits,
-    f64,
-    f64,
-    f64,
-    f64,
-    i32,
-    f32,
-    Option<(f32, f32, f32, f32)>,
-);
-
-type ClippedPlotParams = (
-    Vec<crate::io::pdf_export::PlotWire>,
-    Vec<crate::scene::model::hatch_model::HatchModel>,
-    Vec<crate::scene::model::hatch_model::HatchModel>,
-    crate::io::pdf_export::PlotGroupSplits,
-    f64,
-    f64,
-    f64,
-    f64,
-    i32,
-    f32,
-    Option<(f32, f32, f32, f32)>,
-);
+use crate::io::pdf_export::{PdfPageInput, PlotContent};
 
 fn plot_dialog_sheet_mm(d: &crate::ui::window::plot::PlotDialogState) -> (f64, f64) {
     use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
@@ -143,11 +117,8 @@ fn plot_dialog_sheet_mm(d: &crate::ui::window::plot::PlotDialogState) -> (f64, f
     }
 }
 
-fn plot_content_extents(
-    wires: &[crate::io::pdf_export::PlotWire],
-    hatches: &[crate::scene::model::hatch_model::HatchModel],
-    wipeouts: &[crate::scene::model::hatch_model::HatchModel],
-) -> Option<(f64, f64, f64, f64)> {
+fn plot_content_extents(content: &PlotContent) -> Option<(f64, f64, f64, f64)> {
+    let PlotContent { wires, hatches, wipeouts, images, .. } = content;
     let mut bounds = (
         f64::INFINITY,
         f64::INFINITY,
@@ -162,7 +133,7 @@ fn plot_content_extents(
             bounds.3 = bounds.3.max(y);
         }
     };
-    for wire in wires {
+    for wire in wires.iter().filter(|wire| wire.name != "paper_printable_area") {
         let [x0, y0, x1, y1] = wire.aabb;
         include(x0 as f64, y0 as f64);
         include(x1 as f64, y1 as f64);
@@ -173,6 +144,29 @@ fn plot_content_extents(
                 hatch.world_origin[0] + x as f64,
                 hatch.world_origin[1] + y as f64,
             );
+        }
+    }
+    for plot in images {
+        let mut image_bounds = [f64::INFINITY, f64::INFINITY,
+            f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for vertex in &plot.image.verts {
+            for axis in 0..2 {
+                let value = vertex.pos[axis] as f64 + vertex.pos_low[axis] as f64;
+                image_bounds[axis] = image_bounds[axis].min(value);
+                image_bounds[axis + 2] = image_bounds[axis + 2].max(value);
+            }
+        }
+        for clip in &plot.clips {
+            for axis in 0..2 {
+                let min = clip.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
+                let max = clip.iter().map(|p| p[axis]).fold(f64::NEG_INFINITY, f64::max);
+                image_bounds[axis] = image_bounds[axis].max(min);
+                image_bounds[axis + 2] = image_bounds[axis + 2].min(max);
+            }
+        }
+        if image_bounds[0] < image_bounds[2] && image_bounds[1] < image_bounds[3] {
+            include(image_bounds[0], image_bounds[1]);
+            include(image_bounds[2], image_bounds[3]);
         }
     }
     (bounds.0.is_finite()
@@ -188,12 +182,7 @@ fn plot_scene_content(
     scene: &crate::scene::Scene,
     paper_space_last: bool,
     render_mode_override: Option<acadrust::entities::ViewportRenderMode>,
-) -> (
-    std::sync::Arc<Vec<crate::io::pdf_export::PlotWire>>,
-    Vec<crate::scene::model::hatch_model::HatchModel>,
-    Vec<crate::scene::model::hatch_model::HatchModel>,
-    crate::io::pdf_export::PlotGroupSplits,
-) {
+) -> PlotContent {
     let (mut paper_wires, mut model_wires) = scene.plot_wire_groups(render_mode_override);
     let plot_viewport_borders = scene
         .effective_plot_settings()
@@ -227,56 +216,66 @@ fn plot_scene_content(
     let model_wires = with_depth(model_wires);
     let paper_hatches = scene.paper_plot_hatches().as_ref().clone();
     let paper_wipeouts = scene.paper_plot_wipeouts().as_ref().clone();
+    let paper_images = scene.paper_plot_images();
     if scene.current_layout == "Model" {
         let splits = crate::io::pdf_export::PlotGroupSplits {
             wires: paper_wires.len(),
             hatches: paper_hatches.len(),
             wipeouts: paper_wipeouts.len(),
+            images: paper_images.len(),
         };
-        return (
-            std::sync::Arc::new(paper_wires),
-            paper_hatches,
-            paper_wipeouts,
-            splits,
-        );
+        return PlotContent {
+            wires: std::sync::Arc::new(paper_wires),
+            hatches: paper_hatches,
+            wipeouts: paper_wipeouts,
+            images: paper_images,
+            group_splits: splits,
+        };
     }
-    let (mut model_pattern_wires, model_hatches, model_wipeouts) = scene.viewport_plot_fills();
+    let (mut model_pattern_wires, model_hatches, model_wipeouts, model_images) =
+        scene.viewport_plot_fills();
     model_pattern_wires.retain(|(wire, _)| wire.plot_visible);
     let model_pattern_wires = model_pattern_wires
         .into_iter()
         .map(|(wire, draw_depth)| crate::io::pdf_export::PlotWire { wire, draw_depth })
         .collect::<Vec<_>>();
 
-    let (wires, hatches, wipeouts, splits) = if paper_space_last {
+    let (wires, hatches, wipeouts, images, splits) = if paper_space_last {
         let splits = crate::io::pdf_export::PlotGroupSplits {
             wires: model_wires.len() + model_pattern_wires.len(),
             hatches: model_hatches.len(),
             wipeouts: model_wipeouts.len(),
+            images: model_images.len(),
         };
         let mut wires = model_wires;
         let mut hatches = model_hatches;
         let mut wipeouts = model_wipeouts;
+        let mut images = model_images;
         wires.extend(model_pattern_wires);
         wires.extend(paper_wires);
         hatches.extend(paper_hatches);
         wipeouts.extend(paper_wipeouts);
-        (wires, hatches, wipeouts, splits)
+        images.extend(paper_images);
+        (wires, hatches, wipeouts, images, splits)
     } else {
         let splits = crate::io::pdf_export::PlotGroupSplits {
             wires: paper_wires.len(),
             hatches: paper_hatches.len(),
             wipeouts: paper_wipeouts.len(),
+            images: paper_images.len(),
         };
         let mut wires = paper_wires;
         let mut hatches = paper_hatches;
         let mut wipeouts = paper_wipeouts;
+        let mut images = paper_images;
         wires.extend(model_wires);
         wires.extend(model_pattern_wires);
         hatches.extend(model_hatches);
         wipeouts.extend(model_wipeouts);
-        (wires, hatches, wipeouts, splits)
+        images.extend(model_images);
+        (wires, hatches, wipeouts, images, splits)
     };
-    (std::sync::Arc::new(wires), hatches, wipeouts, splits)
+    PlotContent { wires: std::sync::Arc::new(wires), hatches, wipeouts, images, group_splits: splits }
 }
 
 impl OpenCADStudio {
@@ -429,6 +428,10 @@ impl OpenCADStudio {
             backup_on_save: self.backup_on_save,
             file_assoc_enabled: self.file_assoc_enabled,
             show_constraint_values: self.show_constraint_values,
+            auto_constrain: self.auto_constrain_settings.clone(),
+            constraint_solve_mode: self.constraint_solve_mode,
+            constraint_infer: self.constraint_infer,
+            constraint_bar_display: self.constraint_bar_display,
             savetime_min: self.savetime_min,
             default_save_format: self.default_save_format.clone(),
             pick_add: self.pick_add,
@@ -510,6 +513,15 @@ impl OpenCADStudio {
         self.backup_on_save = s.backup_on_save;
         self.file_assoc_enabled = s.file_assoc_enabled;
         self.show_constraint_values = s.show_constraint_values;
+        self.auto_constrain_settings = s.auto_constrain.clone();
+        self.auto_constrain_settings.sanitize();
+        self.auto_constrain_distance_input =
+            format!("{}", self.auto_constrain_settings.distance_tolerance);
+        self.auto_constrain_angle_input =
+            format!("{}", self.auto_constrain_settings.angle_tolerance_deg);
+        self.constraint_solve_mode = s.constraint_solve_mode;
+        self.constraint_infer = s.constraint_infer;
+        self.constraint_bar_display = s.constraint_bar_display.clamp(0, 3);
         self.savetime_min = s.savetime_min;
         self.default_save_format =
             crate::io::canonical_save_format(&s.default_save_format).to_string();
@@ -2951,46 +2963,18 @@ impl OpenCADStudio {
                 self.load_plotsettings_into_dialog(&settings);
             }
         }
-        let Some((
-            wires,
-            hatches,
-            wipeouts,
-            group_splits,
-            page_w,
-            page_h,
-            ox,
-            oy,
-            rotation,
-            scale,
-            clip,
-        )) = self.direct_plot_params()
+        let Some(page) = self.direct_plot_page()
         else {
             self.command_line.push_error(
                 crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref(),
             );
             return Task::none();
         };
-        let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
         let worker_path = path.clone();
         let work = move || {
-            crate::io::pdf_export::export_pdf(
-                &wires,
-                &hatches,
-                &wipeouts,
-                page_w,
-                page_h,
-                ox,
-                oy,
-                rotation,
-                scale,
-                clip,
-                &worker_path,
-                plot_style.as_ref(),
-                render_options,
-            )
-            .map(|_| crate::tf!("Exported: {}", worker_path.display()).into_owned())
-            .map_err(|e| crate::tf!("Export failed: {e}").into_owned())
+            crate::io::pdf_export::export_pdf(&page, &worker_path)
+                .map(|_| crate::tf!("Exported: {}", worker_path.display()).into_owned())
+                .map_err(|e| crate::tf!("Export failed: {e}").into_owned())
         };
         self.run_plot_work(self.plot_dialog.background, false, work)
     }
@@ -3006,55 +2990,27 @@ impl OpenCADStudio {
             "Extents" => self.extents_plot_job(),
             _ => self.window_plot_job(),
         };
-        let Some((
-            wires,
-            hatches,
-            wipeouts,
-            group_splits,
-            page_w,
-            page_h,
-            ox,
-            oy,
-            rotation,
-            scale,
-            clip,
-        )) = job
+        let Some(page) = job
         else {
             self.command_line
                 .push_error(crate::t!("Plot area is empty. Pick a larger window.").as_ref());
             return Task::none();
         };
-        let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
         let worker_path = path.clone();
         self.close_active_modal();
         let work = move || {
-            crate::io::pdf_export::export_pdf(
-                &wires,
-                &hatches,
-                &wipeouts,
-                page_w,
-                page_h,
-                ox,
-                oy,
-                rotation,
-                scale,
-                clip,
-                &worker_path,
-                plot_style.as_ref(),
-                render_options,
-            )
-            .map(|_| {
-                crate::tf!(
-                    "Plotted window to {}",
-                    worker_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                )
-                .into_owned()
-            })
-            .map_err(|e| crate::tf!("Plot failed: {e}").into_owned())
+            crate::io::pdf_export::export_pdf(&page, &worker_path)
+                .map(|_| {
+                    crate::tf!(
+                        "Plotted window to {}",
+                        worker_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                    .into_owned()
+                })
+                .map_err(|e| crate::tf!("Plot failed: {e}").into_owned())
         };
         self.run_plot_work(self.plot_dialog.background, false, work)
     }
@@ -3182,8 +3138,7 @@ impl OpenCADStudio {
                     )
                     .into_owned());
                 }
-                let plot_style = self.dialog_plot_style(&dialog);
-                let params = match dialog.area.as_str() {
+                let area_page = match dialog.area.as_str() {
                     "Display" => self.display_plot_job(),
                     "Extents" => self.extents_plot_job(),
                     "Limits" => self.limits_plot_job(),
@@ -3193,64 +3148,14 @@ impl OpenCADStudio {
                     }
                     _ => None,
                 };
-                let (
-                    wires,
-                    hatches,
-                    wipeouts,
-                    group_splits,
-                    paper_w,
-                    paper_h,
-                    offset_x,
-                    offset_y,
-                    rotation_deg,
-                    scale,
-                    clip,
-                ) = if dialog.area == "Layout" {
-                    self.layout_plot_params_for("Layout")
+                let page = if dialog.area == "Layout" {
+                    self.layout_plot_page_for("Layout")
                 } else {
-                    let (
-                        wires,
-                        hatches,
-                        wipeouts,
-                        group_splits,
-                        paper_w,
-                        paper_h,
-                        offset_x,
-                        offset_y,
-                        rotation_deg,
-                        scale,
-                        clip,
-                    ) = params.ok_or_else(|| {
+                    area_page.ok_or_else(|| {
                         crate::tf!("Layout '{name}' plot area is empty.").into_owned()
-                    })?;
-                    (
-                        std::sync::Arc::new(wires),
-                        hatches,
-                        wipeouts,
-                        group_splits,
-                        paper_w,
-                        paper_h,
-                        offset_x,
-                        offset_y,
-                        rotation_deg,
-                        scale,
-                        clip,
-                    )
+                    })?
                 };
-                pages.push(crate::io::pdf_export::PdfPageInput {
-                    wires,
-                    hatches,
-                    wipeouts,
-                    paper_w,
-                    paper_h,
-                    offset_x,
-                    offset_y,
-                    rotation_deg,
-                    scale,
-                    clip,
-                    options: Self::pdf_plot_options(&dialog, group_splits),
-                    plot_style,
-                });
+                pages.push(page);
             }
             Ok(pages)
         })();
@@ -3328,7 +3233,7 @@ impl OpenCADStudio {
                     return Task::none();
                 }
             };
-            let options = self.plot_print_options(&dialog, Default::default());
+            let options = self.plot_print_options(&dialog);
             let temp_path = crate::io::print_to_printer::temp_pdf_path("print_all");
             self.save_config();
             self.close_active_modal();
@@ -3375,41 +3280,31 @@ impl OpenCADStudio {
         }
     }
 
-    /// Build the render inputs and page geometry for a full-layout plot: wires
-    /// plus hatch / wipeout fills, the effective (rotation-swapped) sheet size,
-    /// draw-origin offset, rotation, unit scale, and optional clip. Shared by
-    /// PDF export, preview, and printer output so all three render identically.
-    pub(super) fn layout_plot_params(&self) -> LayoutPlotParams {
-        self.layout_plot_params_for(&self.plot_dialog.area)
+    /// Assemble a layout page for PDF export, preview, or printing.
+    pub(super) fn layout_plot_page(&self) -> PdfPageInput {
+        self.layout_plot_page_for(&self.plot_dialog.area)
     }
 
-    fn layout_plot_params_for(&self, plot_area: &str) -> LayoutPlotParams {
+    fn layout_plot_page_for(&self, plot_area: &str) -> PdfPageInput {
         let i = self.active_tab;
         let scene = &self.tabs[i].scene;
         let paper_space = scene.current_layout != "Model";
         let selected_sheet = plot_dialog_sheet_mm(&self.plot_dialog);
-        let (source_wires, hatches, wipeouts, mut group_splits) = plot_scene_content(
+        let mut content = plot_scene_content(
             scene,
             self.plot_dialog.paperspace_last,
             plot_render_mode_override(&self.plot_dialog),
         );
         // The printable-area rectangle is an on-screen guide, not drawing
         // content. It used to leak into every paper-space PDF/preview/print.
-        let wires = if paper_space {
-            group_splits.wires = source_wires[..group_splits.wires.min(source_wires.len())]
+        if paper_space {
+            content.group_splits.wires = content.wires[..content.group_splits.wires.min(content.wires.len())]
                 .iter()
                 .filter(|wire| wire.name != "paper_printable_area")
                 .count();
-            std::sync::Arc::new(
-                source_wires
-                    .iter()
-                    .filter(|wire| wire.name != "paper_printable_area")
-                    .cloned()
-                    .collect(),
-            )
-        } else {
-            source_wires
-        };
+            std::sync::Arc::make_mut(&mut content.wires)
+                .retain(|wire| wire.name != "paper_printable_area");
+        }
         if let Some(((x0, y0), (x1, y1))) = scene.paper_limits() {
             // Paper geometry is stored in layout units; PDF pages use mm.
             // Scale both geometry and offsets by the same unit conversion.
@@ -3434,7 +3329,7 @@ impl OpenCADStudio {
 
             let (scale, offset_x, offset_y) = if plot_extents {
                 let (min_x, min_y, max_x, max_y) =
-                    plot_content_extents(&wires, &hatches, &wipeouts).unwrap_or((x0, y0, x1, y1));
+                    plot_content_extents(&content).unwrap_or((x0, y0, x1, y1));
                 let content_w = (max_x - min_x).max(1e-9);
                 let content_h = (max_y - min_y).max(1e-9);
                 let scale = if self.plot_dialog.fit_to_paper {
@@ -3513,19 +3408,18 @@ impl OpenCADStudio {
             } else {
                 None
             };
-            return (
-                wires,
-                hatches,
-                wipeouts,
-                group_splits,
-                page_w,
-                page_h,
+            return PdfPageInput {
+                content,
+                paper_w: page_w,
+                paper_h: page_h,
                 offset_x,
                 offset_y,
-                rotation,
-                scale as f32,
+                rotation_deg: rotation,
+                scale: scale as f32,
                 clip,
-            );
+                options: Self::pdf_plot_options(&self.plot_dialog),
+                plot_style: self.dialog_plot_style(&self.plot_dialog),
+            };
         }
 
         // Model space keeps its established extents + 5% margin behaviour.
@@ -3545,77 +3439,52 @@ impl OpenCADStudio {
             } else {
                 (297.0, 210.0, 0.0, 0.0)
             };
-        (
-            wires,
-            hatches,
-            wipeouts,
-            group_splits,
-            page_w,
-            page_h,
+        PdfPageInput {
+            content,
+            paper_w: page_w,
+            paper_h: page_h,
             offset_x,
             offset_y,
-            0,
-            1.0,
-            None,
-        )
+            rotation_deg: 0,
+            scale: 1.0,
+            clip: None,
+            options: Self::pdf_plot_options(&self.plot_dialog),
+            plot_style: self.dialog_plot_style(&self.plot_dialog),
+        }
     }
 
     /// Build direct PDF/printer output using the physical layout sheet in
     /// paper space and the selected ISO sheet/scale around Model extents.
-    fn direct_plot_params(&self) -> Option<LayoutPlotParams> {
+    fn direct_plot_page(&self) -> Option<PdfPageInput> {
         if self.tabs[self.active_tab].scene.current_layout != "Model" {
-            return Some(self.layout_plot_params_for("Layout"));
+            return Some(self.layout_plot_page_for("Layout"));
         }
-        let (wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip) =
-            self.extents_plot_job()?;
-        if wires.is_empty() && hatches.is_empty() && wipeouts.is_empty() {
+        let page = self.extents_plot_job()?;
+        let content = &page.content;
+        if content.wires.is_empty() && content.hatches.is_empty()
+            && content.wipeouts.is_empty() && content.images.is_empty()
+        {
             return None;
         }
-        Some((
-            std::sync::Arc::new(wires),
-            hatches,
-            wipeouts,
-            group_splits,
-            page_w,
-            page_h,
-            ox,
-            oy,
-            rotation,
-            scale,
-            clip,
-        ))
+        Some(page)
     }
 
     pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
-        let Some((
-            wires,
-            hatches,
-            wipeouts,
-            group_splits,
-            page_w,
-            page_h,
-            ox,
-            oy,
-            rotation,
-            scale,
-            clip,
-        )) = self.direct_plot_params()
+        let Some(page) = self.direct_plot_page()
         else {
             self.command_line.push_error(
                 crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref(),
             );
             return Task::none();
         };
-        let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let options = self.plot_print_options(&self.plot_dialog, group_splits);
+        let options = self.plot_print_options(&self.plot_dialog);
         self.command_line
             .push_info(crate::t!("Sending to system printer…").as_ref());
         background_task(
             move || {
-                iced::futures::executor::block_on(crate::io::print_to_printer::print_wires_with(
-                    wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
-                    plot_style, options,
-                ))
+                iced::futures::executor::block_on(
+                    crate::io::print_to_printer::print_wires_with(page, options),
+                )
             },
             Message::PrintResult,
         )
@@ -4499,7 +4368,6 @@ impl OpenCADStudio {
         self.active_modal = None;
         self.reset_modal_geometry();
 
-        let plot_style = self.dialog_plot_style(&d);
         // Extents, Window and Display use one plot path in both spaces. Only
         // Paper-space Layout is special: it uses the physical sheet bounds.
         if d.area != "Layout" {
@@ -4513,19 +4381,7 @@ impl OpenCADStudio {
                 }
                 _ => None,
             };
-            let Some((
-                w_wires,
-                w_hatches,
-                w_wipeouts,
-                wgroup_splits,
-                sw,
-                sh,
-                wox,
-                woy,
-                wrotation,
-                wscale,
-                wclip,
-            )) = job
+            let Some(page) = job
             else {
                 self.command_line
                     .push_error(crate::t!("Plot area is empty. Pick a larger window.").as_ref());
@@ -4536,26 +4392,11 @@ impl OpenCADStudio {
             // whatever the output target is.
             if preview {
                 let tmp = crate::io::print_to_printer::temp_pdf_path("preview");
-                let render_options = Self::pdf_plot_options(&d, wgroup_splits);
                 let work = move || {
-                    crate::io::pdf_export::export_pdf(
-                        &w_wires,
-                        &w_hatches,
-                        &w_wipeouts,
-                        sw,
-                        sh,
-                        wox,
-                        woy,
-                        wrotation,
-                        wscale,
-                        wclip,
-                        &tmp,
-                        plot_style.as_ref(),
-                        render_options,
-                    )
-                    .and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
-                    .map(|_| crate::t!("Opened plot preview.").into_owned())
-                    .map_err(|e| crate::tf!("Preview failed: {e}").into_owned())
+                    crate::io::pdf_export::export_pdf(&page, &tmp)
+                        .and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
+                        .map(|_| crate::t!("Opened plot preview.").into_owned())
+                        .map_err(|e| crate::tf!("Preview failed: {e}").into_owned())
                 };
                 return self.run_plot_work(d.background, true, work);
             }
@@ -4564,56 +4405,27 @@ impl OpenCADStudio {
                 return Task::done(Message::PlotWindowExport);
             }
             let tmp = crate::io::print_to_printer::temp_pdf_path("print");
-            let render_options = Self::pdf_plot_options(&d, wgroup_splits);
-            let opts = self.plot_print_options(&d, wgroup_splits);
+            let opts = self.plot_print_options(&d);
             let work = move || {
-                crate::io::pdf_export::export_pdf(
-                    &w_wires,
-                    &w_hatches,
-                    &w_wipeouts,
-                    sw,
-                    sh,
-                    wox,
-                    woy,
-                    wrotation,
-                    wscale,
-                    wclip,
-                    &tmp,
-                    plot_style.as_ref(),
-                    render_options,
-                )
-                .and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
-                .map(|printer| crate::tf!("Sent to printer: {printer}").into_owned())
-                .map_err(|e| crate::tf!("Print failed: {e}").into_owned())
+                crate::io::pdf_export::export_pdf(&page, &tmp)
+                    .and_then(|_| {
+                        crate::io::print_to_printer::print_existing_pdf(&tmp, &opts)
+                    })
+                    .map(|printer| crate::tf!("Sent to printer: {printer}").into_owned())
+                    .map_err(|e| crate::tf!("Print failed: {e}").into_owned())
             };
             return self.run_plot_work(true, false, work);
         }
 
-        let (wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip) =
-            self.layout_plot_params();
+        let page = self.layout_plot_page();
 
         if preview {
             let tmp = crate::io::print_to_printer::temp_pdf_path("preview");
-            let render_options = Self::pdf_plot_options(&d, group_splits);
             let work = move || {
-                crate::io::pdf_export::export_pdf(
-                    &wires,
-                    &hatches,
-                    &wipeouts,
-                    page_w,
-                    page_h,
-                    ox,
-                    oy,
-                    rotation,
-                    scale,
-                    clip,
-                    &tmp,
-                    plot_style.as_ref(),
-                    render_options,
-                )
-                .and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
-                .map(|_| crate::t!("Opened plot preview.").into_owned())
-                .map_err(|e| crate::tf!("Preview failed: {e}").into_owned())
+                crate::io::pdf_export::export_pdf(&page, &tmp)
+                    .and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
+                    .map(|_| crate::t!("Opened plot preview.").into_owned())
+                    .map_err(|e| crate::tf!("Preview failed: {e}").into_owned())
             };
             return self.run_plot_work(d.background, true, work);
         }
@@ -4623,16 +4435,15 @@ impl OpenCADStudio {
             return Task::done(Message::PlotExport);
         }
 
-        let opts = self.plot_print_options(&d, group_splits);
+        let opts = self.plot_print_options(&d);
         self.command_line
             .push_info(crate::t!("Sending to system printer…").as_ref());
         let work = move || {
             iced::futures::executor::block_on(crate::io::print_to_printer::print_wires_with(
-                wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
-                plot_style, opts,
+                page, opts,
             ))
-            .map(|printer| crate::tf!("Sent to printer: {printer}").into_owned())
-            .map_err(|error| crate::tf!("Print failed: {error}").into_owned())
+                .map(|printer| crate::tf!("Sent to printer: {printer}").into_owned())
+                .map_err(|error| crate::tf!("Print failed: {error}").into_owned())
         };
         self.run_plot_work(true, false, work)
     }
@@ -4642,19 +4453,16 @@ impl OpenCADStudio {
     fn plot_print_options(
         &self,
         d: &crate::ui::window::plot::PlotDialogState,
-        group_splits: crate::io::pdf_export::PlotGroupSplits,
     ) -> crate::io::print_to_printer::PrintOptions {
         crate::io::print_to_printer::PrintOptions {
             printer: d.printer.clone(),
             copies: d.copies.trim().parse::<u32>().unwrap_or(1).max(1),
             quality: Some(d.quality.clone()),
-            render: Self::pdf_plot_options(d, group_splits),
         }
     }
 
     fn pdf_plot_options(
         d: &crate::ui::window::plot::PlotDialogState,
-        group_splits: crate::io::pdf_export::PlotGroupSplits,
     ) -> crate::io::pdf_export::PdfPlotOptions {
         crate::io::pdf_export::PdfPlotOptions {
             object_lineweights: d.lineweights,
@@ -4662,7 +4470,6 @@ impl OpenCADStudio {
             transparency: d.transparency,
             stamp: d.stamp,
             merge_lines: d.merge_lines,
-            group_splits,
         }
     }
 
@@ -4679,20 +4486,20 @@ impl OpenCADStudio {
             .cloned()
     }
 
-    fn window_plot_job(&self) -> Option<ClippedPlotParams> {
+    fn window_plot_job(&self) -> Option<PdfPageInput> {
         self.area_plot_job(self.plot_window?)
     }
 
-    fn display_plot_job(&self) -> Option<ClippedPlotParams> {
+    fn display_plot_job(&self) -> Option<PdfPageInput> {
         self.area_plot_job(self.display_plot_window()?)
     }
 
-    fn limits_plot_job(&self) -> Option<ClippedPlotParams> {
+    fn limits_plot_job(&self) -> Option<PdfPageInput> {
         let (min, max) = self.tabs[self.active_tab].scene.current_drawing_limits()?;
         self.area_plot_job((min.x, min.y, max.x, max.y))
     }
 
-    fn named_view_plot_job(&self, name: &str) -> Option<ClippedPlotParams> {
+    fn named_view_plot_job(&self, name: &str) -> Option<PdfPageInput> {
         let view = self.tabs[self.active_tab]
             .scene
             .document
@@ -4714,26 +4521,18 @@ impl OpenCADStudio {
         ))
     }
 
-    fn extents_plot_job(&self) -> Option<ClippedPlotParams> {
+    fn extents_plot_job(&self) -> Option<PdfPageInput> {
         let scene = &self.tabs[self.active_tab].scene;
         if scene.current_layout == "Model" {
             let (min, max) = scene.model_space_extents()?;
             return self.area_plot_job((min.x as f64, min.y as f64, max.x as f64, max.y as f64));
         }
-        let (wires, hatches, wipeouts, _) = plot_scene_content(
+        let content = plot_scene_content(
             scene,
             self.plot_dialog.paperspace_last,
             plot_render_mode_override(&self.plot_dialog),
         );
-        let extents = plot_content_extents(
-            &wires
-                .iter()
-                .filter(|wire| wire.name != "paper_printable_area")
-                .cloned()
-                .collect::<Vec<_>>(),
-            &hatches,
-            &wipeouts,
-        )?;
+        let extents = plot_content_extents(&content)?;
         self.area_plot_job(extents)
     }
 
@@ -4790,7 +4589,7 @@ impl OpenCADStudio {
 
     /// Render a selected rectangle through one shared Model/Paper path. The
     /// window may lie partly or wholly outside a paper sheet.
-    fn area_plot_job(&self, window: (f64, f64, f64, f64)) -> Option<ClippedPlotParams> {
+    fn area_plot_job(&self, window: (f64, f64, f64, f64)) -> Option<PdfPageInput> {
         use crate::io::paper_sizes::{window_to_sheet, PlotScale};
         let i = self.active_tab;
         let (x0, y0, x1, y1) = window;
@@ -4829,27 +4628,22 @@ impl OpenCADStudio {
         };
         let scene = &self.tabs[i].scene;
         let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
-        let (all_wires, hatches, wipeouts, mut group_splits) = plot_scene_content(
+        let mut content = plot_scene_content(
             scene,
             self.plot_dialog.paperspace_last,
             plot_render_mode_override(&self.plot_dialog),
         );
-        let first_wire_count = all_wires[..group_splits.wires.min(all_wires.len())]
+        let in_window = |wire: &crate::io::pdf_export::PlotWire| {
+            wire.name != "paper_printable_area"
+                && wire.aabb[0] <= wx1 && wire.aabb[2] >= wx0
+                && wire.aabb[1] <= wy1 && wire.aabb[3] >= wy0
+        };
+        content.group_splits.wires = content.wires
+            [..content.group_splits.wires.min(content.wires.len())]
             .iter()
-            .filter(|w| w.name != "paper_printable_area")
-            .filter(|w| {
-                w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0
-            })
+            .filter(|wire| in_window(wire))
             .count();
-        let wires: Vec<_> = all_wires
-            .iter()
-            .filter(|w| w.name != "paper_printable_area")
-            .filter(|w| {
-                w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0
-            })
-            .cloned()
-            .collect();
-        group_splits.wires = first_wire_count;
+        std::sync::Arc::make_mut(&mut content.wires).retain(in_window);
         let offset_x = (target_x / scale) - x0;
         let offset_y = (target_y / scale) - y0;
         let clip = Some((
@@ -4863,19 +4657,18 @@ impl OpenCADStudio {
             90 | 270 => (sheet_h, sheet_w),
             _ => (sheet_w, sheet_h),
         };
-        Some((
-            wires,
-            hatches,
-            wipeouts,
-            group_splits,
-            page_w,
-            page_h,
+        Some(PdfPageInput {
+            content,
+            paper_w: page_w,
+            paper_h: page_h,
             offset_x,
             offset_y,
-            rotation,
-            scale as f32,
+            rotation_deg: rotation,
+            scale: scale as f32,
             clip,
-        ))
+            options: Self::pdf_plot_options(&self.plot_dialog),
+            plot_style: self.dialog_plot_style(&self.plot_dialog),
+        })
     }
 
     pub(super) fn on_plot_style_panel_apply(&mut self) -> Task<Message> {

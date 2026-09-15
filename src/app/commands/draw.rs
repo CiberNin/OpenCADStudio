@@ -1113,55 +1113,86 @@ impl OpenCADStudio {
                 }
             }
 
+            "CONSTRAINTSETTINGS" => {
+                self.auto_constrain_saved = Some(self.auto_constrain_settings.clone());
+                self.auto_constrain_selected_row = 0;
+                self.auto_constrain_distance_input =
+                    format!("{}", self.auto_constrain_settings.distance_tolerance);
+                self.auto_constrain_angle_input =
+                    format!("{}", self.auto_constrain_settings.angle_tolerance_deg);
+                self.active_modal = Some(crate::app::ModalKind::AutoConstrainSettings);
+            }
+
             "AUTOCONSTRAIN" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
-                    let sel = SelectObjectsCommand::new(cmd);
+                    let sel = SelectObjectsCommand::auto_constrain(cmd);
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
                     let scope = self.tabs[i].current_parametric_scope();
                     let inferred = self.tabs[i]
                         .scene
-                        .inferred_parametric_constraints(scope, &handles);
+                        .inferred_parametric_constraints(
+                            scope,
+                            &handles,
+                            &self.auto_constrain_settings,
+                        );
                     if inferred.is_empty() {
-                        self.command_line
-                            .push_output("No supported geometric relations were found.");
-                        return None;
-                    }
-                    let before = self.tabs[i]
-                        .scene
-                        .parametric_constraint_set(scope)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            crate::scene::parametric_constraints::ParametricConstraintSet::new(
-                                scope,
+                        self.command_line.push_output(
+                            format!(
+                                "0 constraint(s) applied to {} object(s).",
+                                handles.len()
                             )
-                        });
-                    let pending = self.begin_undo(i, "Auto constrain", handles.len(), true);
-                    self.tabs[i]
-                        .scene
-                        .record_undo_parametric_constraints_before(scope, before);
-                    let count = inferred.len();
-                    for (kind, refs) in inferred {
+                            .as_str(),
+                        );
+                        self.tabs[i].scene.deselect_all();
+                        self.refresh_selected_grips();
+                    } else {
+                        let before = self.tabs[i]
+                            .scene
+                            .parametric_constraint_set(scope)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                crate::scene::parametric_constraints::ParametricConstraintSet::new(
+                                    scope,
+                                )
+                            });
+                        let pending = self.begin_undo(i, "Auto constrain", handles.len(), true);
                         self.tabs[i]
                             .scene
-                            .parametric_constraint_set_mut(scope)
-                            .add(kind, refs, None);
-                    }
-                    let changes: Vec<_> = handles
-                        .iter()
-                        .copied()
-                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
-                        .collect();
-                    self.tabs[i].scene.bump_entities(&changes);
-                    self.tabs[i].dirty = true;
-                    self.refresh_properties();
-                    self.command_line
-                        .push_output(format!("{} constraint(s) applied.", count).as_str());
-                    if let Some(pd) = pending {
-                        self.commit_undo_delta(i, pd);
+                            .record_undo_parametric_constraints_before(scope, before);
+                        let count = inferred.len();
+                        for (kind, refs) in inferred {
+                            self.tabs[i]
+                                .scene
+                                .parametric_constraint_set_mut(scope)
+                                .add(kind, refs, None);
+                        }
+                        let changes: Vec<_> = handles
+                            .iter()
+                            .copied()
+                            .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                            .collect();
+                        self.tabs[i].scene.bump_entities_with_parametric_policy(
+                            &changes,
+                            &[],
+                            self.constraint_solve_mode,
+                        );
+                        self.tabs[i].dirty = true;
+                        self.refresh_properties();
+                        self.command_line.push_output(
+                            format!(
+                                "{} constraint(s) applied to {} object(s).",
+                                count,
+                                handles.len()
+                            )
+                            .as_str(),
+                        );
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
                     }
                 }
             }

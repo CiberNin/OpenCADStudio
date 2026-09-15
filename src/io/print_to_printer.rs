@@ -9,9 +9,6 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::io::pdf_export;
-use crate::io::plot_style::PlotStyleTable;
-use crate::scene::model::hatch_model::HatchModel;
-use crate::io::pdf_export::PlotWire;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn temp_pdf_path(kind: &str) -> std::path::PathBuf {
@@ -50,8 +47,6 @@ pub struct PrintOptions {
     /// setting wins, so the field is legitimately unread there.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub quality: Option<String>,
-    /// Controls applied while building the intermediate PDF.
-    pub render: crate::io::pdf_export::PdfPlotOptions,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -60,19 +55,8 @@ pub fn list_printers() -> Vec<String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(clippy::too_many_arguments)]
 pub async fn print_wires_with(
-    _wires: std::sync::Arc<Vec<PlotWire>>,
-    _hatches: Vec<HatchModel>,
-    _wipeouts: Vec<HatchModel>,
-    _paper_w: f64,
-    _paper_h: f64,
-    _offset_x: f64,
-    _offset_y: f64,
-    _rotation_deg: i32,
-    _scale: f32,
-    _clip: Option<(f32, f32, f32, f32)>,
-    _plot_style: Option<PlotStyleTable>,
+    _page: crate::io::pdf_export::PdfPageInput,
     _opts: PrintOptions,
 ) -> Result<String, String> {
     Err("Printing is not available in the web version.".into())
@@ -89,8 +73,7 @@ pub fn print_existing_pdf(_path: &std::path::Path, _opts: &PrintOptions) -> Resu
 }
 
 /// Enumerate installed printers. Linux/macOS query CUPS via `lpstat -e`;
-/// Windows returns an empty list (the "printto" dispatch targets a named
-/// printer directly and the system default is always available).
+/// Windows queries the spooler's cached local and connected printer list.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_printers() -> Vec<String> {
     #[cfg(not(target_os = "windows"))]
@@ -111,7 +94,140 @@ pub fn list_printers() -> Vec<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        Vec::new()
+        windows_printers().unwrap_or_else(|error| {
+            eprintln!("Could not enumerate printers: {error}");
+            Vec::new()
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_printers() -> std::io::Result<Vec<String>> {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
+    use windows_sys::Win32::Graphics::Printing::{
+        EnumPrintersW, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL,
+    };
+
+    let mut bytes_needed = 0;
+    let mut printer_count = 0;
+    let mut buffer = Vec::<usize>::new();
+    // The printer list can grow between the size query and the data query.
+    for _ in 0..4 {
+        let buffer_bytes = u32::try_from(std::mem::size_of_val(buffer.as_slice()))
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+        let data = if buffer.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            buffer.as_mut_ptr().cast::<u8>()
+        };
+        // SAFETY: data is null for the size query, otherwise it points to an
+        // aligned, writable allocation of buffer_bytes bytes.
+        let success = unsafe {
+            EnumPrintersW(
+                PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+                std::ptr::null(),
+                4,
+                data,
+                buffer_bytes,
+                &mut bytes_needed,
+                &mut printer_count,
+            )
+        };
+        if success != 0 {
+            return windows_printer_names(&buffer, printer_count as usize);
+        }
+        let error = unsafe { GetLastError() };
+        if error != ERROR_INSUFFICIENT_BUFFER || bytes_needed <= buffer_bytes {
+            return Err(std::io::Error::from_raw_os_error(error as i32));
+        }
+        buffer.resize(
+            (bytes_needed as usize).div_ceil(std::mem::size_of::<usize>()),
+            0,
+        );
+    }
+    Err(std::io::Error::from_raw_os_error(
+        ERROR_INSUFFICIENT_BUFFER as i32,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_printer_names(buffer: &[usize], printer_count: usize) -> std::io::Result<Vec<String>> {
+    use std::io::{Error, ErrorKind};
+    use windows_sys::Win32::Graphics::Printing::PRINTER_INFO_4W;
+
+    const {
+        assert!(std::mem::align_of::<usize>() >= std::mem::align_of::<PRINTER_INFO_4W>());
+    }
+    let buffer_bytes = std::mem::size_of_val(buffer);
+    if printer_count > buffer_bytes / std::mem::size_of::<PRINTER_INFO_4W>() {
+        return Err(Error::from(ErrorKind::InvalidData));
+    }
+    // SAFETY: the initialized buffer is aligned and large enough for these
+    // records. Raw pointer fields are validated before reading any names.
+    let records = unsafe {
+        std::slice::from_raw_parts(buffer.as_ptr().cast::<PRINTER_INFO_4W>(), printer_count)
+    };
+    let mut names = Vec::with_capacity(printer_count);
+    for record in records {
+        if record.pPrinterName.is_null() {
+            continue;
+        }
+        let offset = (record.pPrinterName as usize)
+            .checked_sub(buffer.as_ptr() as usize)
+            .filter(|offset| *offset < buffer_bytes && offset % 2 == 0)
+            .ok_or(Error::from(ErrorKind::InvalidData))?;
+        // SAFETY: offset is UTF-16 aligned and the slice ends within buffer.
+        let utf16 = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr().cast::<u8>().add(offset).cast::<u16>(),
+                (buffer_bytes - offset) / 2,
+            )
+        };
+        let length = utf16
+            .iter()
+            .position(|&unit| unit == 0)
+            .ok_or(Error::from(ErrorKind::InvalidData))?;
+        if length != 0 {
+            names.push(String::from_utf16_lossy(&utf16[..length]));
+        }
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod printer_buffer_tests {
+    use super::windows_printer_names;
+    use windows_sys::Win32::Graphics::Printing::PRINTER_INFO_4W;
+
+    #[test]
+    fn printer_names_stay_within_the_returned_buffer() {
+        assert!(windows_printer_names(&[], 0).unwrap().is_empty());
+        assert!(windows_printer_names(&[], 1).is_err());
+        let mut buffer = vec![0usize; 16];
+        let name_offset = std::mem::size_of::<PRINTER_INFO_4W>();
+        let name: Vec<u16> = "Printer \u{03b1}\0".encode_utf16().collect();
+        // SAFETY: the aligned allocation holds the record and UTF-16 name.
+        unsafe {
+            let record = buffer.as_mut_ptr().cast::<PRINTER_INFO_4W>();
+            let name_ptr = buffer
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(name_offset)
+                .cast::<u16>();
+            std::ptr::copy_nonoverlapping(name.as_ptr(), name_ptr, name.len());
+            (*record).pPrinterName = name_ptr;
+            assert_eq!(
+                windows_printer_names(&buffer, 1).unwrap(),
+                ["Printer \u{03b1}"]
+            );
+            (*record).pPrinterName = buffer.as_mut_ptr().cast::<u16>().wrapping_sub(1);
+            assert!(windows_printer_names(&buffer, 1).is_err());
+            (*record).pPrinterName = name_ptr;
+        }
+        buffer[name_offset / std::mem::size_of::<usize>()..].fill(usize::MAX);
+        assert!(windows_printer_names(&buffer, 1).is_err());
     }
 }
 
@@ -172,46 +288,18 @@ pub fn open_printer_properties(_printer: Option<&str>) -> Result<(), String> {
     Err("Printer properties are not available in the web version.".into())
 }
 
-/// Like [`print_wires`] but honours a [`PrintOptions`] bundle (printer, copies,
-/// grayscale, quality, DPI).
+/// Render a page and send it to the selected printer.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 pub async fn print_wires_with(
-    wires: std::sync::Arc<Vec<PlotWire>>,
-    hatches: Vec<HatchModel>,
-    wipeouts: Vec<HatchModel>,
-    paper_w: f64,
-    paper_h: f64,
-    offset_x: f64,
-    offset_y: f64,
-    rotation_deg: i32,
-    scale: f32,
-    clip: Option<(f32, f32, f32, f32)>,
-    plot_style: Option<PlotStyleTable>,
+    page: crate::io::pdf_export::PdfPageInput,
     opts: PrintOptions,
 ) -> Result<String, String> {
     let tmp_path = temp_pdf_path("print");
-    pdf_export::export_pdf(
-        &wires,
-        &hatches,
-        &wipeouts,
-        paper_w,
-        paper_h,
-        offset_x,
-        offset_y,
-        rotation_deg,
-        scale,
-        clip,
-        &tmp_path,
-        plot_style.as_ref(),
-        opts.render,
-    )?;
+    pdf_export::export_pdf(&page, &tmp_path)?;
     dispatch_to_printer_opts(&tmp_path, &opts)
 }
 
-/// Send an already-rendered PDF to a printer with [`PrintOptions`]. Used for
-/// clipped window plots, whose PDF is built with a scale + clip the plain
-/// `print_wires_with` path doesn't expose.
+/// Send an already-rendered PDF to the selected printer.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn print_existing_pdf(path: &std::path::Path, opts: &PrintOptions) -> Result<String, String> {
     dispatch_to_printer_opts(path, opts)

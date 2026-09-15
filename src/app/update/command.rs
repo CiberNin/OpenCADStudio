@@ -3247,6 +3247,29 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.tabs[i].properties.active_field = None;
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
+                    let driven_marker = match field {
+                        "start_x" | "start_y" | "start_z" => Some(0),
+                        "end_x" | "end_y" | "end_z" => Some(1),
+                        "center_x" | "center_y" | "center_z" => Some(-3),
+                        _ => None,
+                    };
+                    let retained_originals: Vec<_> = if self.constraint_solve_mode
+                        && driven_marker.is_some()
+                    {
+                        handles
+                            .iter()
+                            .filter_map(|handle| {
+                                self.tabs[i]
+                                    .scene
+                                    .document
+                                    .get_entity(*handle)
+                                    .cloned()
+                                    .map(|entity| (*handle, entity))
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     let evaluates_expression = self.tabs[i]
                         .properties
                         .sections
@@ -3563,7 +3586,22 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 }
                             }
                         }
-                        self.invalidate_property_targets(i, &handles);
+                        let driven_refs: Vec<_> = driven_marker
+                            .into_iter()
+                            .flat_map(|marker| {
+                                handles.iter().copied().map(move |handle| {
+                                    crate::scene::parametric_constraints::ParametricRef::point(
+                                        handle, marker,
+                                    )
+                                })
+                            })
+                            .collect();
+                        self.invalidate_property_targets_with_originals(
+                            i,
+                            &handles,
+                            &driven_refs,
+                            &retained_originals,
+                        );
                         self.tabs[i].dirty = true;
                         self.refresh_properties();
                     }

@@ -25,6 +25,7 @@ impl OpenCADStudio {
             Some(K::DrawingUnits) => crate::t!("Drawing Units").into_owned(),
             Some(K::GeometricTolerance) => crate::t!("Geometric Tolerance").into_owned(),
             Some(K::DraftingSettings) => crate::t!("Drafting Settings").into_owned(),
+            Some(K::AutoConstrainSettings) => crate::t!("Constraint Settings").into_owned(),
             Some(K::LayerStateEditor) => crate::tr!("modal", "edit-layer-state"),
             Some(K::Plot) => crate::tr!("modal", "plot"),
             Some(K::PrintAll) => t!("Print All").into_owned(),
@@ -307,6 +308,20 @@ impl OpenCADStudio {
                     },
                 )
             }
+            super::super::ModalKind::AutoConstrainSettings => sized_flow(
+                ex,
+                620,
+                610,
+                |flow| {
+                    crate::ui::window::auto_constrain_settings::view_window(
+                        &self.auto_constrain_settings,
+                        self.auto_constrain_selected_row,
+                        &self.auto_constrain_distance_input,
+                        &self.auto_constrain_angle_input,
+                        flow,
+                    )
+                },
+            ),
             super::super::ModalKind::FindReplace => automatic_flow(ex, |flow| {
                 crate::ui::window::find_replace::view_window(
                     &self.find_replace.search,

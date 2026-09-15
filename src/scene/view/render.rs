@@ -395,32 +395,23 @@ impl shader::Primitive for Primitive {
                 inner.slot_id = vp.instance_id;
                 inner.forget_cached_keys();
             }
-            // The MSAA / depth / resolve textures are always sized to the
-            // FULL viewport rectangle (not the on-canvas-visible portion)
-            // so the camera matrices render at consistent aspect / scale.
-            // The blit step picks the visible sub-rectangle out via the
-            // shader's UV crop uniform, which lets partially off-canvas
-            // viewports composite to their visible surface area without
-            // drift.
-            let clip_size = Size::new(
-                (vp.screen_rect.width * bounds.width * scale).ceil().max(1.0) as u32,
-                (vp.screen_rect.height * bounds.height * scale).ceil().max(1.0) as u32,
+            // Round texture coverage, retaining fractional raster placement.
+            let placement = physical_viewport(
+                Rectangle {
+                    x: (bounds.x + vp.screen_rect.x * bounds.width) * scale,
+                    y: (bounds.y + vp.screen_rect.y * bounds.height) * scale,
+                    width: vp.screen_rect.width * bounds.width * scale,
+                    height: vp.screen_rect.height * bounds.height * scale,
+                },
+                viewport.physical_size(),
             );
+            let clip_size = placement.size;
+            inner.viewport = Some(placement);
             inner.ensure_depth_texture(device, clip_size);
             let viewcube_side =
                 (crate::scene::VIEWCUBE_RENDER_PX.ceil() * scale).ceil().max(1.0) as u32;
-            inner
-                .viewcube
-                .ensure_depth_texture(device, Size::new(viewcube_side, viewcube_side));
-            // Compute the UV crop for this viewport. `screen_rect` is in
-            // normalized canvas units (0..1) but may extend negative or
-            // beyond 1 when the viewport hangs off the canvas. The on-
-            // canvas portion in viewport-local UV is straightforward to
-            // derive from how much sticks out on each side.
-            let sr = vp.screen_rect;
-            let (uo_x, us_x) = uv_crop_axis(sr.x, sr.width);
-            let (uo_y, us_y) = uv_crop_axis(sr.y, sr.height);
-            inner.upload_blit_uv(queue, [uo_x, uo_y], [us_x, us_y]);
+            inner.viewcube.ensure_depth_texture(device, Size::new(viewcube_side, viewcube_side));
+            inner.upload_blit_uv(queue, placement.uv_offset, placement.uv_scale);
             inner.upload_background_images(
                 device,
                 queue,
@@ -440,7 +431,7 @@ impl shader::Primitive for Primitive {
             // drawing size. The ViewCube is excluded from the signature and
             // keeps updating in its own always-on pass, so cube hover still
             // tracks while the scene is cached.
-            let sig = render_signature(vp, clip_size.width, clip_size.height);
+            let sig = render_signature(vp, &placement);
             // REDRAW bypass: pin render_sig to force a full pass this frame
             // even if the signature is otherwise unchanged. The request is
             // one-shot per viewport (consumed by the builder that produced
@@ -1311,8 +1302,6 @@ retained_contributors={}",
     ) {
         let nav_render_started = iced::time::Instant::now();
         pipeline.frame_rendered.store(true, std::sync::atomic::Ordering::Relaxed);
-        let cw = clip.width as f32;
-        let ch = clip.height as f32;
         let clip_right = clip.x + clip.width;
         let clip_bottom = clip.y + clip.height;
         for vp in &self.viewports {
@@ -1322,27 +1311,25 @@ retained_contributors={}",
             let Some(inner) = pipeline.inners.get(*slot) else {
                 continue;
             };
-            // Where the viewport would land on the surface in absolute
-            // pixels (i32 because either edge may stick off the canvas).
-            let vp_full_x = clip.x as i32 + (vp.screen_rect.x * cw) as i32;
-            let vp_full_y = clip.y as i32 + (vp.screen_rect.y * ch) as i32;
-            let vp_full_w = (vp.screen_rect.width * cw).max(1.0) as i32;
-            let vp_full_h = (vp.screen_rect.height * ch).max(1.0) as i32;
-            // Intersect with the surface clip — that's the slice we blit.
-            let dest_x = vp_full_x.max(clip.x as i32);
-            let dest_y = vp_full_y.max(clip.y as i32);
-            let dest_right = (vp_full_x + vp_full_w).min(clip_right as i32);
-            let dest_bottom = (vp_full_y + vp_full_h).min(clip_bottom as i32);
-            if dest_right <= dest_x || dest_bottom <= dest_y {
+            let Some(placement) = inner.viewport else {
+                continue;
+            };
+            let surface_dest = placement.surface;
+            let left = surface_dest.x.max(clip.x);
+            let top = surface_dest.y.max(clip.y);
+            let surface_clip = Rectangle {
+                x: left,
+                y: top,
+                width: (surface_dest.x + surface_dest.width).min(clip_right).saturating_sub(left),
+                height: (surface_dest.y + surface_dest.height).min(clip_bottom).saturating_sub(top),
+            };
+            if surface_clip.width == 0 || surface_clip.height == 0 {
                 continue;
             }
-            let surface_dest = Rectangle {
-                x: dest_x as u32,
-                y: dest_y as u32,
-                width: (dest_right - dest_x) as u32,
-                height: (dest_bottom - dest_y) as u32,
-            };
-            let vp_size = Size::new(vp_full_w.max(1) as u32, vp_full_h.max(1) as u32);
+            let vp_full_x = surface_dest.x as i32;
+            let vp_full_y = surface_dest.y as i32;
+            let vp_full_w = surface_dest.width as i32;
+            let vp_full_h = surface_dest.height as i32;
             // `mesh_fill` is false for Wireframe 2D / Wireframe 3D — flip
             // the draw path so meshes use the wireframe pipeline + the
             // pre-built triangle-edge index buffer.
@@ -1350,8 +1337,9 @@ retained_contributors={}",
             inner.render(
                 encoder,
                 target,
-                vp_size,
+                placement.raster,
                 surface_dest,
+                surface_clip,
                 self.bg_color,
                 mesh_wireframe,
                 vp.hidden_line,
@@ -1363,6 +1351,8 @@ retained_contributors={}",
             // rejects negative origins, and a clamped cube would scale
             // distortedly. The active viewport is normally fully visible.
             if vp.show_viewcube
+                && surface_dest.width == placement.size.width
+                && surface_dest.height == placement.size.height
                 && vp_full_x >= clip.x as i32
                 && vp_full_y >= clip.y as i32
                 && vp_full_x + vp_full_w <= clip_right as i32
@@ -1408,7 +1398,7 @@ retained_contributors={}",
 /// live preview IS included (its coordinates), so a rubber-band tracking the
 /// cursor still renders, and the frame where the preview clears erases it
 /// instead of freezing the last overlay on screen.
-fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
+fn render_signature(vp: &ViewportData, placement: &PhysicalViewport) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = rustc_hash::FxHasher::default();
     // Camera + per-view shading flags all live in the uniforms (view_rot, eye
@@ -1453,8 +1443,11 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     // frame (skip_hatch flips false) re-renders with hatches and re-caches.
     vp.skip_hatch.hash(&mut h);
     vp.skip_background.hash(&mut h);
-    clip_w.hash(&mut h);
-    clip_h.hash(&mut h);
+    placement.size.width.hash(&mut h);
+    placement.size.height.hash(&mut h);
+    for value in [placement.raster.x, placement.raster.y, placement.raster.width, placement.raster.height] {
+        value.to_bits().hash(&mut h);
+    }
     // Live overlay (command preview / interim / grip drag). Small — a handful
     // of wires — so hashing its coordinates is cheap and catches the endpoint
     // moving with the cursor as well as the preview appearing / clearing.
@@ -1535,18 +1528,282 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     h.finish()
 }
 
-/// On-canvas-visible UV crop on one axis. `pos` and `size` are in the
-/// shader widget's normalized 0..1 coords. Returns `(uv_offset, uv_scale)`
-/// applied as `actual_uv = quad_uv * uv_scale + uv_offset` in the blit
-/// shader — identity `(0.0, 1.0)` for fully on-canvas viewports.
-fn uv_crop_axis(pos: f32, size: f32) -> (f32, f32) {
-    if size <= 0.0 {
-        return (0.0, 1.0);
+#[derive(Clone, Copy)]
+pub(in crate::scene) struct PhysicalViewport {
+    size: Size<u32>,
+    raster: Rectangle,
+    surface: Rectangle<u32>,
+    uv_offset: [f32; 2],
+    uv_scale: [f32; 2],
+}
+
+fn physical_viewport(rect: Rectangle, window: Size<u32>) -> PhysicalViewport {
+    let x = rect.x.floor();
+    let y = rect.y.floor();
+    let right = (rect.x + rect.width).ceil();
+    let bottom = (rect.y + rect.height).ceil();
+    let width = (right - x).max(1.0);
+    let height = (bottom - y).max(1.0);
+    let left = x.clamp(0.0, window.width as f32);
+    let top = y.clamp(0.0, window.height as f32);
+    let visible_w = (right.min(window.width as f32) - left).max(0.0);
+    let visible_h = (bottom.min(window.height as f32) - top).max(0.0);
+    PhysicalViewport {
+        size: Size::new(width as u32, height as u32),
+        raster: Rectangle {
+            x: rect.x - x,
+            y: rect.y - y,
+            width: rect.width.max(0.0),
+            height: rect.height.max(0.0),
+        },
+        surface: Rectangle {
+            x: left as u32,
+            y: top as u32,
+            width: visible_w as u32,
+            height: visible_h as u32,
+        },
+        uv_offset: [(left - x) / width, (top - y) / height],
+        uv_scale: [visible_w / width, visible_h / height],
     }
-    let left_off = (-pos).max(0.0);
-    let right_off = (pos + size - 1.0).max(0.0);
-    let visible = (size - left_off - right_off).max(0.0);
-    (left_off / size, visible / size)
+}
+
+#[cfg(test)]
+mod pixel_placement_tests {
+    use super::*;
+
+    #[test]
+    fn raster_and_blit_preserve_fractional_position_at_different_scales() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for x in [-17.37, 0.25, 13.61, 199.7] {
+                for width in [0.4, 18.73, 181.83] {
+                    let rect = Rectangle {
+                        x: x * scale,
+                        y: 12.13 * scale,
+                        width: width * scale,
+                        height: 91.17 * scale,
+                    };
+                    let placement = physical_viewport(rect, Size::new(256, 256));
+                    assert!(placement.raster.x >= 0.0 && placement.raster.x < 1.0);
+                    assert!(
+                        placement.raster.x + placement.raster.width
+                            <= placement.size.width as f32 + 1e-5
+                    );
+                    if placement.surface.width == 0 {
+                        continue;
+                    }
+                    // Follow a model point through rasterization, texture UV
+                    // crop, then the blit; paper geometry lands directly here.
+                    for u in [0.0, 0.1, 0.5, 0.9, 1.0] {
+                        let texture_x = placement.raster.x + u * placement.raster.width;
+                        let output_x = placement.surface.x as f32
+                            + (texture_x / placement.size.width as f32 - placement.uv_offset[0])
+                                / placement.uv_scale[0]
+                                * placement.surface.width as f32;
+                        assert!((output_x - (rect.x + u * rect.width)).abs() < 0.0001);
+                    }
+                    assert!(
+                        (placement.uv_scale[0] * placement.size.width as f32
+                            - placement.surface.width as f32)
+                            .abs()
+                            < 1e-5
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn integer_translation_reuses_the_same_raster_placement() {
+        let rect = Rectangle {
+            x: 13.25,
+            y: 27.5,
+            width: 100.75,
+            height: 51.25,
+        };
+        let first = physical_viewport(rect, Size::new(512, 512));
+        let moved = physical_viewport(
+            Rectangle {
+                x: rect.x + 20.0,
+                ..rect
+            },
+            Size::new(512, 512),
+        );
+        assert_eq!(first.raster, moved.raster);
+        assert_eq!(first.size, moved.size);
+        assert_eq!(first.uv_scale, moved.uv_scale);
+        assert_eq!(moved.surface.x, first.surface.x + 20);
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn fractional_viewports_keep_wire_pixels_aligned_after_blitting() {
+        use iced::futures::executor::block_on;
+        use iced::wgpu;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("GPU adapter");
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("GPU device");
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut pipeline =
+            crate::scene::pipeline::Pipeline::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pixel placement regression"),
+            size: wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pixel readback"),
+            size: 256 * 256 * 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        for (x, width, parent_clip) in [
+            (13.37, 181.83, false),
+            (-12.61, 187.29, false),
+            (19.75, 173.75, false),
+            (13.37, 181.83, true),
+            (-12.61, 187.29, true),
+            (19.75, 173.75, true),
+        ] {
+            let rect = Rectangle {
+                x,
+                y: 18.37,
+                width,
+                height: 181.83,
+            };
+            let placement = physical_viewport(rect, Size::new(256, 256));
+            pipeline.ensure_depth_texture(&device, placement.size);
+            pipeline.upload_blit_uv(&queue, placement.uv_offset, placement.uv_scale);
+            let mut uniforms = Uniforms::new(
+                &Camera::default(),
+                Rectangle::with_size(Size::new(width, rect.height)),
+                false,
+            );
+            uniforms.eye_high = [0.0; 3];
+            uniforms.eye_low = [0.0; 3];
+            uniforms.view_rot = Mat4::IDENTITY;
+            pipeline.upload_uniforms(&device, &queue, &uniforms);
+            let u = 0.73;
+            let ndc_x = 2.0 * u - 1.0;
+            let wire = WireModel::solid(
+                "alignment".into(),
+                vec![[ndc_x, -0.8, 0.5], [ndc_x, 0.8, 0.5]],
+                [1.0; 4],
+                false,
+            );
+            pipeline.upload_preview_wires(&device, &queue, &[wire], &Default::default());
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            let clip = if parent_clip {
+                Rectangle {
+                    x: placement.surface.x + 11,
+                    y: 64,
+                    width: placement.surface.width - 22,
+                    height: 96,
+                }
+            } else {
+                placement.surface
+            };
+            pipeline.render(
+                &mut encoder,
+                &view,
+                placement.raster,
+                placement.surface,
+                clip,
+                [0.0, 0.0, 0.0, 1.0],
+                false,
+                false,
+                false,
+            );
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &target,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256 * 4),
+                        rows_per_image: Some(256),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 256,
+                    height: 256,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    tx.send(result).unwrap();
+                });
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            rx.recv().unwrap().unwrap();
+            {
+                let bytes = readback.slice(..).get_mapped_range();
+                let row = (rect.y + rect.height * 0.5) as usize;
+                let expected = rect.x + u * rect.width;
+                let row_has_wire = bytes[48 * 256 * 4..49 * 256 * 4]
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[..3] != [0, 0, 0]);
+                assert_eq!(
+                    row_has_wire, !parent_clip,
+                    "parent clip must exclude the wire at row 48"
+                );
+                let mut weight = 0.0;
+                let mut center = 0.0;
+                for column in (expected as usize - 4)..=(expected as usize + 4) {
+                    let value = bytes[(row * 256 + column) * 4] as f32;
+                    weight += value;
+                    center += (column as f32 + 0.5) * value;
+                }
+                assert!(weight > 0.0, "wire must produce pixels");
+                assert!(
+                    (center / weight - expected).abs() < 0.25,
+                    "x={x}, width={width}, expected={expected}, actual={}",
+                    center / weight
+                );
+            }
+            readback.unmap();
+        }
+        assert!(
+            block_on(validation.pop()).is_none(),
+            "GPU validation failed"
+        );
+    }
 }
 
 /// Apply a clip-space crop to `view_proj` so the sub-rect of the original
@@ -3435,7 +3692,10 @@ impl Scene {
         &self,
         inst: &ViewportInstance,
     ) -> Arc<Vec<WireModel>> {
-        if self.selected.is_empty() && self.hover_highlight.is_none() {
+        if self.selected.is_empty()
+            && self.hover_highlight.is_none()
+            && self.constraint_hover_highlights.is_empty()
+        {
             return Arc::new(Vec::new());
         }
 

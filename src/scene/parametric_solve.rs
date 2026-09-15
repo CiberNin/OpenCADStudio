@@ -1692,6 +1692,44 @@ type SolveResult = (
     )>,
 );
 
+fn retained_line_length(entity: &EntityType, segment: Option<usize>) -> Option<f64> {
+    match (entity, segment) {
+        (EntityType::Line(line), None) => Some((line.end - line.start).length()),
+        (EntityType::LwPolyline(polyline), Some(index)) => {
+            let world = crate::entities::curve::lwpolyline_world_xy(polyline)?;
+            let a = world.vertices.get(index)?.location;
+            let b = if let Some(vertex) = world.vertices.get(index + 1) {
+                vertex.location
+            } else if world.is_closed {
+                world.vertices.first()?.location
+            } else {
+                return None;
+            };
+            Some((b - a).length())
+        }
+        (EntityType::Polyline2D(polyline), Some(index)) => {
+            let a = polyline.vertices.get(index)?.location;
+            let b = if let Some(vertex) = polyline.vertices.get(index + 1) {
+                vertex.location
+            } else if polyline.is_closed() {
+                polyline.vertices.first()?.location
+            } else {
+                return None;
+            };
+            Some((b - a).length())
+        }
+        _ => None,
+    }
+}
+
+fn retained_radius(entity: &EntityType) -> Option<f64> {
+    match entity {
+        EntityType::Circle(circle) => Some(circle.radius),
+        EntityType::Arc(arc) => Some(arc.radius),
+        _ => None,
+    }
+}
+
 /// Rebuilds `set`'s entire `cadkernel_constraints::System` from current document
 /// geometry, solves it, and returns the resulting entity states for every
 /// handle whose registered coordinates actually moved beyond floating-point
@@ -1708,6 +1746,8 @@ fn solve_scope(
     drawing_params: &ParameterTable,
     set: &ParametricConstraintSet,
     driven_refs: &[ParametricRef],
+    retain_size: bool,
+    retained_before: &HashMap<Handle, std::sync::Arc<EntityType>>,
 ) -> Option<SolveResult> {
     let params = if set.local_parameters.is_empty() {
         drawing_params
@@ -1739,6 +1779,82 @@ fn solve_scope(
         .any(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth);
     if cache.is_empty() && !has_smooth {
         return None;
+    }
+
+    // Preserve current line lengths and radii for this solve when
+    // CONSTRAINTSOLVEMODE requests it. These temporary equations guide the
+    // solution without becoming persistent dimensional constraints.
+    if retain_size {
+        for (handle, geom) in &cache {
+            match geom {
+                EntityGeom::Line(line) => {
+                    let current_length = {
+                        let store = sys.store();
+                        let dx = store.get(line.p2.x) - store.get(line.p1.x);
+                        let dy = store.get(line.p2.y) - store.get(line.p1.y);
+                        (dx * dx + dy * dy).sqrt()
+                    };
+                    let length = retained_before
+                        .get(handle)
+                        .and_then(|entity| retained_line_length(entity, None))
+                        .unwrap_or(current_length);
+                    let target = sys.add_param(length, true);
+                    sys.add_constraint(Rc::new(P2PDistance::new(line.p1, line.p2, target)));
+                }
+                EntityGeom::Polyline {
+                    points,
+                    straight,
+                    closed,
+                    ..
+                } => {
+                    for index in 0..straight.len() {
+                        if !straight[index] {
+                            continue;
+                        }
+                        let Some(a) = points.get(index).copied() else {
+                            continue;
+                        };
+                        let b = if let Some(point) = points.get(index + 1).copied() {
+                            Some(point)
+                        } else if *closed {
+                            points.first().copied()
+                        } else {
+                            None
+                        };
+                        let Some(b) = b else { continue };
+                        let current_length = {
+                            let store = sys.store();
+                            let dx = store.get(b.x) - store.get(a.x);
+                            let dy = store.get(b.y) - store.get(a.y);
+                            (dx * dx + dy * dy).sqrt()
+                        };
+                        let length = retained_before
+                            .get(handle)
+                            .and_then(|entity| retained_line_length(entity, Some(index)))
+                            .unwrap_or(current_length);
+                        let target = sys.add_param(length, true);
+                        sys.add_constraint(Rc::new(P2PDistance::new(a, b, target)));
+                    }
+                }
+                EntityGeom::Circle(circle) => {
+                    let radius = retained_before
+                        .get(handle)
+                        .and_then(|entity| retained_radius(entity))
+                        .unwrap_or_else(|| sys.store().get(circle.rad));
+                    let target = sys.add_param(radius, true);
+                    sys.add_constraint(Rc::new(Equal::new(circle.rad, target, 1.0)));
+                }
+                EntityGeom::Arc(arc) => {
+                    let radius = retained_before
+                        .get(handle)
+                        .and_then(|entity| retained_radius(entity))
+                        .unwrap_or_else(|| sys.store().get(arc.circle.rad));
+                    let target = sys.add_param(radius, true);
+                    sys.add_constraint(Rc::new(Equal::new(arc.circle.rad, target, 1.0)));
+                }
+                _ => {}
+            }
+        }
     }
 
     // Arc rules (this module's doc comment): keep every registered arc's
@@ -2375,18 +2491,43 @@ impl Scene {
     /// the resulting `(Handle, ChangeKind::Modified)` entries the same way
     /// `refresh_associative_dimensions`/`_hatches` do, for `bump_entities`
     /// to fold into its own `changes` vec.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn refresh_parametric_constraints(
         &mut self,
         changes: &[(Handle, ChangeKind)],
     ) -> Vec<(Handle, ChangeKind)> {
-        self.refresh_parametric_constraints_with_driven(changes, &[])
+        self.refresh_parametric_constraints_with_policy(changes, &[], false)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn refresh_parametric_constraints_with_driven(
         &mut self,
         changes: &[(Handle, ChangeKind)],
         driven_refs: &[ParametricRef],
+    ) -> Vec<(Handle, ChangeKind)> {
+        self.refresh_parametric_constraints_with_policy(changes, driven_refs, false)
+    }
+
+    pub(crate) fn refresh_parametric_constraints_with_policy(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[ParametricRef],
+        retain_size: bool,
+    ) -> Vec<(Handle, ChangeKind)> {
+        self.refresh_parametric_constraints_with_originals(
+            changes,
+            driven_refs,
+            retain_size,
+            &[],
+        )
+    }
+
+    pub(crate) fn refresh_parametric_constraints_with_originals(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[ParametricRef],
+        retain_size: bool,
+        retained_originals: &[(Handle, EntityType)],
     ) -> Vec<(Handle, ChangeKind)> {
         // An erased entity takes its constraints with it instead of leaving
         // dangling references. Done first,
@@ -2418,6 +2559,25 @@ impl Scene {
             }
         }
 
+        let retained_before: HashMap<Handle, std::sync::Arc<EntityType>> = if retain_size {
+            let mut retained: HashMap<Handle, std::sync::Arc<EntityType>> = self
+                .undo_recording
+                .as_ref()
+                .into_iter()
+                .flat_map(|recording| recording.before.iter())
+                .filter_map(|(handle, entity)| {
+                    entity
+                        .as_ref()
+                        .map(|entity| (*handle, std::sync::Arc::clone(entity)))
+                })
+                .collect();
+            for (handle, entity) in retained_originals {
+                retained.insert(*handle, std::sync::Arc::new(entity.clone()));
+            }
+            retained
+        } else {
+            HashMap::new()
+        };
         let mut result = Vec::new();
         for i in 0..self.parametric_constraints.len() {
             let touched = changes.iter().any(|(handle, _)| {
@@ -2434,6 +2594,8 @@ impl Scene {
                 &self.named_parameters,
                 &self.parametric_constraints[i],
                 driven_refs,
+                retain_size,
+                &retained_before,
             ) else {
                 continue;
             };
@@ -2458,10 +2620,17 @@ impl Scene {
     pub(crate) fn solve_parametric_constraints_preview(
         &self,
         touched: &[Handle],
+        driven_refs: &[ParametricRef],
+        retain_size: bool,
+        retained_originals: &[(Handle, EntityType)],
     ) -> Vec<(Handle, EntityType)> {
         if self.parametric_constraints.is_empty() || touched.is_empty() {
             return Vec::new();
         }
+        let retained_before: HashMap<Handle, std::sync::Arc<EntityType>> = retained_originals
+            .iter()
+            .map(|(handle, entity)| (*handle, std::sync::Arc::new(entity.clone())))
+            .collect();
         let mut result = Vec::new();
         for set in &self.parametric_constraints {
             let is_touched = touched
@@ -2470,8 +2639,14 @@ impl Scene {
             if !is_touched {
                 continue;
             }
-            let Some((solved, _dof, _conflicts)) =
-                solve_scope(&self.document, &self.named_parameters, set, &[])
+            let Some((solved, _dof, _conflicts)) = solve_scope(
+                &self.document,
+                &self.named_parameters,
+                set,
+                driven_refs,
+                retain_size,
+                &retained_before,
+            )
             else {
                 continue;
             };
@@ -2749,7 +2924,7 @@ mod tests {
         }
         let b_before = scene.document.get_entity(b).cloned();
 
-        let solved = scene.solve_parametric_constraints_preview(&[a]);
+        let solved = scene.solve_parametric_constraints_preview(&[a], &[], false, &[]);
 
         assert_eq!(
             scene.document.get_entity(b),

@@ -4289,6 +4289,112 @@ impl OpenCADStudio {
                 self.drafting_settings_close_confirm = false;
                 Task::none()
             }
+            Message::AutoConstrainSelectRow(index) => {
+                if index < self.auto_constrain_settings.priority.len() {
+                    self.auto_constrain_selected_row = index;
+                }
+                Task::none()
+            }
+            Message::AutoConstrainToggleKind(kind) => {
+                if let Some(index) = self
+                    .auto_constrain_settings
+                    .enabled
+                    .iter()
+                    .position(|candidate| *candidate == kind)
+                {
+                    self.auto_constrain_settings.enabled.remove(index);
+                } else {
+                    self.auto_constrain_settings.enabled.push(kind);
+                }
+                Task::none()
+            }
+            Message::AutoConstrainMoveUp => {
+                let index = self.auto_constrain_selected_row;
+                if index > 0 && index < self.auto_constrain_settings.priority.len() {
+                    self.auto_constrain_settings.priority.swap(index, index - 1);
+                    self.auto_constrain_selected_row -= 1;
+                }
+                Task::none()
+            }
+            Message::AutoConstrainMoveDown => {
+                let index = self.auto_constrain_selected_row;
+                if index + 1 < self.auto_constrain_settings.priority.len() {
+                    self.auto_constrain_settings.priority.swap(index, index + 1);
+                    self.auto_constrain_selected_row += 1;
+                }
+                Task::none()
+            }
+            Message::AutoConstrainSelectAll => {
+                self.auto_constrain_settings.enabled =
+                    super::settings::AutoConstraintKind::ALL.to_vec();
+                Task::none()
+            }
+            Message::AutoConstrainClearAll => {
+                self.auto_constrain_settings.enabled.clear();
+                Task::none()
+            }
+            Message::AutoConstrainReset => {
+                self.auto_constrain_settings =
+                    super::settings::AutoConstrainSettings::default();
+                self.auto_constrain_selected_row = 0;
+                self.auto_constrain_distance_input =
+                    format!("{}", self.auto_constrain_settings.distance_tolerance);
+                self.auto_constrain_angle_input =
+                    format!("{}", self.auto_constrain_settings.angle_tolerance_deg);
+                Task::none()
+            }
+            Message::AutoConstrainToggleTangentPoint => {
+                self.auto_constrain_settings.tangent_must_share_point =
+                    !self.auto_constrain_settings.tangent_must_share_point;
+                Task::none()
+            }
+            Message::AutoConstrainTogglePerpendicularIntersection => {
+                self.auto_constrain_settings.perpendicular_must_intersect =
+                    !self.auto_constrain_settings.perpendicular_must_intersect;
+                Task::none()
+            }
+            Message::AutoConstrainDistanceChanged(value) => {
+                self.auto_constrain_distance_input = value;
+                Task::none()
+            }
+            Message::AutoConstrainAngleChanged(value) => {
+                self.auto_constrain_angle_input = value;
+                Task::none()
+            }
+            action @ (Message::AutoConstrainApply | Message::AutoConstrainOk) => {
+                let distance = self.auto_constrain_distance_input.trim().parse::<f64>();
+                let angle = self.auto_constrain_angle_input.trim().parse::<f64>();
+                match (distance, angle) {
+                    (Ok(distance), Ok(angle))
+                        if distance.is_finite()
+                            && distance >= 0.0
+                            && angle.is_finite()
+                            && angle >= 0.0 =>
+                    {
+                        self.auto_constrain_settings.distance_tolerance = distance;
+                        self.auto_constrain_settings.angle_tolerance_deg = angle;
+                        self.auto_constrain_settings.sanitize();
+                        self.auto_constrain_saved =
+                            Some(self.auto_constrain_settings.clone());
+                        self.persist_settings_if_changed();
+                        if matches!(action, Message::AutoConstrainOk) {
+                            self.close_active_modal();
+                        }
+                    }
+                    _ => self.command_line.push_error(
+                        crate::t!("Distance and angle tolerances must be non-negative numbers.")
+                            .as_ref(),
+                    ),
+                }
+                Task::none()
+            }
+            Message::AutoConstrainCancel => {
+                if let Some(saved) = self.auto_constrain_saved.take() {
+                    self.auto_constrain_settings = saved;
+                }
+                self.close_active_modal();
+                Task::none()
+            }
 
             // ── Ribbon dropdowns ──────────────────────────────────────────
             Message::ToggleRibbonDropdown(id) => {
@@ -6857,6 +6963,11 @@ impl OpenCADStudio {
                     return Task::none();
                 }
                 self.drafting_settings_close_confirm = false;
+                if self.active_modal == Some(super::ModalKind::AutoConstrainSettings) {
+                    if let Some(saved) = self.auto_constrain_saved.take() {
+                        self.auto_constrain_settings = saved;
+                    }
+                }
                 let resume_open_queue = self.active_modal == Some(super::ModalKind::Recovery);
                 self.close_active_modal();
                 if resume_open_queue {

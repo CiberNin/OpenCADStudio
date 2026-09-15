@@ -547,7 +547,8 @@ fn test_selected_circle_arc_ellipse_highlight_overlay() {
     pipeline.render(
         &mut encoder,
         &target,
-        iced::Size::new(512, 512),
+        iced::Rectangle::with_size(iced::Size::new(512.0, 512.0)),
+        iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         [0.0, 0.0, 0.0, 1.0],
         false,
@@ -635,7 +636,8 @@ fn test_thick_and_tapered_arc_gpu_rendering() {
     pipeline.render(
         &mut encoder,
         &target,
-        iced::Size::new(512, 512),
+        iced::Rectangle::with_size(iced::Size::new(512.0, 512.0)),
+        iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         [0.0, 0.0, 0.0, 1.0],
         false,
@@ -740,7 +742,8 @@ fn test_tilted_3d_donut_and_thick_arc_gpu_rendering() {
     pipeline.render(
         &mut encoder,
         &target,
-        iced::Size::new(512, 512),
+        iced::Rectangle::with_size(iced::Size::new(512.0, 512.0)),
+        iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         [0.0, 0.0, 0.0, 1.0],
         false,
@@ -855,7 +858,8 @@ fn test_selected_ellipse_overlay() {
     pipeline.render(
         &mut encoder,
         &target,
-        iced::Size::new(512, 512),
+        iced::Rectangle::with_size(iced::Size::new(512.0, 512.0)),
+        iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
         [0.0, 0.0, 0.0, 1.0],
         false,
@@ -926,7 +930,8 @@ fn test_pline_arc_switch_preview_and_render() {
             pipeline.render(
                 &mut encoder,
                 &target,
-                iced::Size::new(512, 512),
+                iced::Rectangle::with_size(iced::Size::new(512.0, 512.0)),
+                iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
                 iced::Rectangle { x: 0, y: 0, width: 512, height: 512 },
                 [0.0, 0.0, 0.0, 1.0],
                 false,

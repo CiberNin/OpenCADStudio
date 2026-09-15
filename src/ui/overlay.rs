@@ -1017,6 +1017,18 @@ impl canvas::Program<Message> for SelectionCanvas {
                 }
             }
         }
+        if let Some(pos) = cursor.position_in(bounds) {
+            let glyphs: Vec<_> = self
+                .constraint_glyphs
+                .iter()
+                .map(|(anchor, outward, label, conflict, _)| {
+                    (*anchor, *outward, label.clone(), *conflict)
+                })
+                .collect();
+            if constraint_glyph_hit_test(&glyphs, pos).is_some() {
+                return mouse::Interaction::Pointer;
+            }
+        }
         // The resize cursor over a divider is supplied by the input pane_grid
         // layered above this overlay; `draw` only suppresses the CAD crosshair
         // there (see `divider_under`).
@@ -1777,11 +1789,13 @@ impl canvas::Program<Message> for SelectionCanvas {
                 frame.fill_text(canvas::Text {
                     content: label.clone(),
                     position: Point::new(
-                        top_left.x + CONSTRAINT_GLYPH_PAD_X,
-                        top_left.y + CONSTRAINT_GLYPH_PAD_Y,
+                        top_left.x + size.width * 0.5,
+                        top_left.y + size.height * 0.5,
                     ),
                     color: fg,
                     size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
+                    align_x: iced::alignment::Horizontal::Center.into(),
+                    align_y: iced::alignment::Vertical::Center,
                     shaping: iced::advanced::text::Shaping::Advanced,
                     ..Default::default()
                 });

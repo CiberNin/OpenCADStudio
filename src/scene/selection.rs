@@ -1007,6 +1007,7 @@ impl Scene {
                 self.hover_highlight = None;
                 hover_changed = true;
             }
+            hover_changed |= self.constraint_hover_highlights.remove(&h);
             self.hatches.remove(&h);
             self.images.remove(&h);
             self.meshes.remove(&h);

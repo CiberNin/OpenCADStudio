@@ -927,6 +927,19 @@ fn explode_dimension(dim: &Dimension, doc: &CadDocument) -> Vec<EntityType> {
                 .collect();
         }
     }
+    if let Some((local, normal)) = crate::entities::dimension::linear_dimension_in_ocs(dim) {
+        let (x_axis, y_axis) =
+            crate::scene::view::transform::ocs_axes((normal.x, normal.y, normal.z));
+        let plane = WorkingPlane::new(
+            DVec3::ZERO,
+            DVec3::new(x_axis.0, x_axis.1, x_axis.2),
+            DVec3::new(y_axis.0, y_axis.1, y_axis.2),
+        );
+        return explode_dimension(&local, doc)
+            .into_iter()
+            .map(|entity| plane.place_entity(entity))
+            .collect();
+    }
 
     let base = dim.base();
     let met = dim_metrics(dim, doc);
@@ -1657,6 +1670,58 @@ mod tests {
             .filter(|e| matches!(e, EntityType::Solid(s) if s.common.owner_handle == rec.handle))
             .count();
         assert_eq!(solids, 2, "expected 2 filled (SOLID) arrowheads, got {solids}");
+    }
+
+    /// The line segments EXPLODE turns the dimension into.
+    fn exploded_segments(dim: &Dimension, doc: &CadDocument) -> Vec<(DVec3, DVec3)> {
+        let point = |v: Vector3| DVec3::new(v.x, v.y, v.z);
+        explode_dimension(dim, doc)
+            .into_iter()
+            .filter_map(|entity| match entity {
+                EntityType::Line(line) => Some((point(line.start), point(line.end))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// EXPLODE of a linear dimension in a working plane off world Z leaves
+    /// its lines in that plane. Turned 90° about X, the dimension has to
+    /// explode into the same lines turned with it; its offset, now along Z,
+    /// used to be read in world XY only.
+    #[test]
+    fn exploding_a_linear_dimension_off_world_z_keeps_its_plane() {
+        use crate::command::EntityTransform;
+        let doc = CadDocument::new();
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        let flat = Dimension::Linear(d);
+        let turn = glam::DQuat::from_axis_angle(DVec3::X, std::f64::consts::FRAC_PI_2);
+        let expected: Vec<(DVec3, DVec3)> = exploded_segments(&flat, &doc)
+            .into_iter()
+            .map(|(a, b)| (turn * a, turn * b))
+            .collect();
+        assert!(!expected.is_empty(), "the dimension explodes into no lines");
+
+        let mut turned = EntityType::Dimension(flat);
+        crate::scene::view::dispatch::apply_transform(
+            &mut turned,
+            &EntityTransform::Rotate {
+                center: DVec3::ZERO,
+                axis: DVec3::X,
+                angle_rad: std::f64::consts::FRAC_PI_2,
+            },
+        );
+        let EntityType::Dimension(turned) = turned else {
+            panic!("dimension expected");
+        };
+        let lines = exploded_segments(&turned, &doc);
+        assert_eq!(lines.len(), expected.len(), "line count");
+        for (index, (got, want)) in lines.iter().zip(&expected).enumerate() {
+            assert!(
+                got.0.abs_diff_eq(want.0, 1e-9) && got.1.abs_diff_eq(want.1, 1e-9),
+                "line {index}: expected {want:?}, got {got:?}"
+            );
+        }
     }
 
     // An angular dimension must bake its swept ARC (not just two rays), else a
