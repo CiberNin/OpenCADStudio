@@ -6137,9 +6137,9 @@ mod selection_preview_tests {
                 .normalize()
             };
             assert!(direction(current[0]).dot(direction(current[1])).abs() < 1e-8);
-            assert_ne!(
+            assert_eq!(
                 current[1], before[1],
-                "constrained neighbor must follow each grip frame"
+                "geometry outside the grip edit must stay fixed"
             );
             assert_eq!(
                 current[0][0], before[0][0],
