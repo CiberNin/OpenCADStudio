@@ -536,18 +536,12 @@ impl<'a> GroupBuilder<'a> {
         }
         let entity = self.document.get_entity(handle)?;
         let points = super::dimension_assoc::source_points(entity);
-        let closed = match entity {
+        let (closed, bulge) = match entity {
             EntityType::LwPolyline(polyline) => {
-                if polyline.vertices.get(index)?.bulge.abs() > 1e-9 {
-                    return None;
-                }
-                polyline.is_closed
+                (polyline.is_closed, polyline.vertices.get(index)?.bulge)
             }
             EntityType::Polyline2D(polyline) => {
-                if polyline.vertices.get(index)?.bulge.abs() > 1e-9 {
-                    return None;
-                }
-                polyline.is_closed()
+                (polyline.is_closed(), polyline.vertices.get(index)?.bulge)
             }
             _ => return None,
         };
@@ -560,19 +554,44 @@ impl<'a> GroupBuilder<'a> {
             return None;
         };
         let node_id = self.alloc_node_id();
-        self.push_node(
-            node_id,
-            "AcConstrainedBoundedLine",
-            AssocConstraintNodeData::BoundedLine {
-                geometry_dependency: Handle::NULL,
-                geometry_node_id: node_id,
-                point: start,
-                direction: (end - start).normalize(),
-                is_ray: false,
-                start_point: start,
-                end_point: end,
-            },
-        );
+        if bulge.abs() <= 1e-9 {
+            self.push_node(
+                node_id,
+                "AcConstrainedBoundedLine",
+                AssocConstraintNodeData::BoundedLine {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: start,
+                    direction: (end - start).normalize(),
+                    is_ray: false,
+                    start_point: start,
+                    end_point: end,
+                },
+            );
+        } else {
+            let arc = cadkernel::geom2d::BulgeArc::from_bulge(
+                [start.x, start.y],
+                [end.x, end.y],
+                bulge,
+            )?;
+            self.push_node(
+                node_id,
+                "AcConstrainedArc",
+                AssocConstraintNodeData::Arc {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    center: Vector3::new(arc.center[0], arc.center[1], start.z),
+                    normal: Vector3::UNIT_Z,
+                    direction: Vector3::UNIT_X,
+                    radius: arc.radius,
+                    start_parameter: arc.start_angle,
+                    end_parameter: arc.start_angle + arc.sweep,
+                    reserved: 0.0,
+                    start_point: start,
+                    end_point: end,
+                },
+            );
+        }
         self.entities
             .entry(handle)
             .or_default()
@@ -1537,7 +1556,7 @@ fn dependency_entity(
         (Some(EntityType::Line(_)), AssocConstraintNodeData::BoundedLine { is_ray, .. }) => !is_ray,
         (
             Some(EntityType::LwPolyline(_) | EntityType::Polyline2D(_)),
-            AssocConstraintNodeData::BoundedLine { .. },
+            AssocConstraintNodeData::BoundedLine { .. } | AssocConstraintNodeData::Arc { .. },
         ) => true,
         (Some(EntityType::Ray(_)), AssocConstraintNodeData::BoundedLine { is_ray, .. }) => *is_ray,
         (Some(EntityType::XLine(_)), AssocConstraintNodeData::Line { .. }) => true,
@@ -1580,13 +1599,18 @@ fn polyline_segment_reference(
     data: &AssocConstraintNodeData,
     work_plane: &[Vector3; 3],
 ) -> Option<ParametricRef> {
-    let AssocConstraintNodeData::BoundedLine {
-        start_point,
-        end_point,
-        ..
-    } = data
-    else {
-        return None;
+    let (start_point, end_point) = match data {
+        AssocConstraintNodeData::BoundedLine {
+            start_point,
+            end_point,
+            ..
+        }
+        | AssocConstraintNodeData::Arc {
+            start_point,
+            end_point,
+            ..
+        } => (*start_point, *end_point),
+        _ => return None,
     };
     let [origin, axis_x, axis_y] = *work_plane;
     let normal = Vector3::new(
@@ -1595,8 +1619,8 @@ fn polyline_segment_reference(
         axis_x.x * axis_y.y - axis_x.y * axis_y.x,
     );
     let to_world = |point: Vector3| origin + axis_x * point.x + axis_y * point.y + normal * point.z;
-    let start_point = to_world(*start_point);
-    let end_point = to_world(*end_point);
+    let start_point = to_world(start_point);
+    let end_point = to_world(end_point);
     let entity_value = document.get_entity(entity)?;
     let closed = match entity_value {
         EntityType::LwPolyline(polyline) => polyline.is_closed,
@@ -3290,6 +3314,60 @@ mod tests {
             set.constraints[0].refs,
             vec![ParametricRef::segment(polyline, 1)]
         );
+    }
+
+    #[test]
+    fn bulged_polyline_point_on_curve_round_trips_with_its_segment() {
+        for ext in ["dwg", "dxf"] {
+            let mut source = LwPolyline::new();
+            source.add_point(Vector2::new(0.0, 0.0));
+            source.add_point_with_bulge(Vector2::new(5.0, 0.0), 0.5);
+            source.add_point(Vector2::new(10.0, 5.0));
+            let mut scene = Scene::new();
+            let polyline = scene.add_entity(EntityType::LwPolyline(source));
+            let point = line_entity(&mut scene, (8.0, 2.0), (9.0, 2.0));
+            scene
+                .parametric_constraint_set_mut(ParametricScope::ModelSpace)
+                .add(
+                    ConstraintKind::PointOnCurve,
+                    vec![
+                        ParametricRef::point(point, 0),
+                        ParametricRef::segment(polyline, 1),
+                    ],
+                    None,
+                );
+
+            scene.sync_native_parametric_graph();
+            let group = native_group(
+                &scene.document,
+                scene.document.header.model_space_block_handle,
+            );
+            assert!(group
+                .nodes
+                .iter()
+                .any(|node| node.class_name == "AcConstrainedArc"));
+
+            let bytes = crate::io::save_to_bytes(&scene.document, ext, scene.document.version)
+                .unwrap_or_else(|error| panic!("save {ext}: {error}"));
+            let mut restored = Scene::new();
+            restored.document = crate::io::load_bytes(&format!("bulged_segment.{ext}"), bytes)
+                .unwrap_or_else(|error| panic!("reload {ext}: {error}"));
+            restored.load_parametric_constraints_from_document();
+
+            let set = restored
+                .parametric_constraint_set(ParametricScope::ModelSpace)
+                .expect("native point-on-curve constraint should be imported");
+            assert_eq!(set.constraints.len(), 1, "{ext}");
+            assert_eq!(set.constraints[0].kind, ConstraintKind::PointOnCurve);
+            assert_eq!(
+                set.constraints[0].refs,
+                vec![
+                    ParametricRef::point(point, 0),
+                    ParametricRef::segment(polyline, 1),
+                ],
+                "{ext}"
+            );
+        }
     }
 
     fn distance_with_named_parameter_scene() -> (Scene, Handle) {
