@@ -94,6 +94,27 @@ fn constraint_glyph_offsets(glyphs: &[(Point, [f32; 2], String, bool)]) -> Vec<f
     offsets
 }
 
+pub(crate) fn constraint_glyph_hit(
+    glyphs: &[(Point, [f32; 2], String, bool)],
+    cursor: Point,
+) -> Option<usize> {
+    let offsets = constraint_glyph_offsets(glyphs);
+    glyphs
+        .iter()
+        .zip(offsets)
+        .enumerate()
+        .rev()
+        .find_map(|(index, ((anchor, outward, label, _), tangent_offset))| {
+            let (top_left, size) =
+                constraint_glyph_box(*anchor, *outward, label, tangent_offset);
+            (cursor.x >= top_left.x
+                && cursor.x <= top_left.x + size.width
+                && cursor.y >= top_left.y
+                && cursor.y <= top_left.y + size.height)
+                .then_some(index)
+        })
+}
+
 /// Convert CURSORSIZE to a screen-space arm length while keeping the original
 /// 60 px cursor at the default value and the full-viewport result at 100.
 pub(crate) fn crosshair_arm_px(bounds: iced::Rectangle, value: i32) -> f32 {
@@ -989,6 +1010,11 @@ impl canvas::Program<Message> for SelectionCanvas {
                 }
             }
         }
+        if let Some(pos) = cursor.position_in(bounds) {
+            if constraint_glyph_hit(&self.constraint_glyphs, pos).is_some() {
+                return mouse::Interaction::Pointer;
+            }
+        }
         // The resize cursor over a divider is supplied by the input pane_grid
         // layered above this overlay; `draw` only suppresses the CAD crosshair
         // there (see `divider_under`).
@@ -1703,7 +1729,6 @@ impl canvas::Program<Message> for SelectionCanvas {
             frame.stroke(&b1, stroke.clone());
             frame.stroke(&b2, stroke);
         }
-        // Constraint glyphs are visual-only and have no hit testing.
         if !self.constraint_glyphs.is_empty() {
             let offsets = constraint_glyph_offsets(&self.constraint_glyphs);
             let normal_bg = theme.palette().primary.base.color;

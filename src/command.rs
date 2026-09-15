@@ -1466,6 +1466,8 @@ pub enum CmdResult {
         /// Undo-history label, e.g. `"Horizontal constraint"`.
         label: &'static str,
     },
+    /// Opens the Auto Constrain settings dialog from the selection prompt.
+    OpenAutoConstrainSettings,
     /// Adds a Coincident constraint between the sub-entity points nearest
     /// the two picked positions. The host resolves the raw points because
     /// `CadCommand` has no document access.

@@ -11,6 +11,103 @@
 use crate::snap::SnapType;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AutoConstraintKind {
+    Coincident,
+    Collinear,
+    Parallel,
+    Perpendicular,
+    Tangent,
+    Concentric,
+    Horizontal,
+    Vertical,
+    Equal,
+}
+
+impl AutoConstraintKind {
+    pub const ALL: [Self; 9] = [
+        Self::Coincident,
+        Self::Collinear,
+        Self::Parallel,
+        Self::Perpendicular,
+        Self::Tangent,
+        Self::Concentric,
+        Self::Horizontal,
+        Self::Vertical,
+        Self::Equal,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Coincident => "Coincident",
+            Self::Collinear => "Collinear",
+            Self::Parallel => "Parallel",
+            Self::Perpendicular => "Perpendicular",
+            Self::Tangent => "Tangent",
+            Self::Concentric => "Concentric",
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+            Self::Equal => "Equal",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoConstrainSettings {
+    pub priority: Vec<AutoConstraintKind>,
+    pub enabled: Vec<AutoConstraintKind>,
+    pub tangent_must_share_point: bool,
+    pub perpendicular_must_intersect: bool,
+    pub distance_tolerance: f64,
+    pub angle_tolerance_deg: f64,
+}
+
+impl Default for AutoConstrainSettings {
+    fn default() -> Self {
+        Self {
+            priority: AutoConstraintKind::ALL.to_vec(),
+            enabled: AutoConstraintKind::ALL.to_vec(),
+            tangent_must_share_point: true,
+            perpendicular_must_intersect: true,
+            distance_tolerance: 0.05,
+            angle_tolerance_deg: 1.0,
+        }
+    }
+}
+
+impl AutoConstrainSettings {
+    pub fn sanitize(&mut self) {
+        let mut priority = Vec::with_capacity(AutoConstraintKind::ALL.len());
+        for kind in self
+            .priority
+            .iter()
+            .copied()
+            .chain(AutoConstraintKind::ALL)
+        {
+            if !priority.contains(&kind) {
+                priority.push(kind);
+            }
+        }
+        self.priority = priority;
+        self.enabled
+            .retain(|kind| AutoConstraintKind::ALL.contains(kind));
+        self.enabled.sort_by_key(|kind| {
+            self.priority
+                .iter()
+                .position(|candidate| candidate == kind)
+                .unwrap_or(usize::MAX)
+        });
+        self.enabled.dedup();
+        if !self.distance_tolerance.is_finite() || self.distance_tolerance < 0.0 {
+            self.distance_tolerance = 0.05;
+        }
+        if !self.angle_tolerance_deg.is_finite() || self.angle_tolerance_deg < 0.0 {
+            self.angle_tolerance_deg = 1.0;
+        }
+    }
+}
+
 /// Cursor shown over the drawing viewport.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CursorType {
@@ -289,6 +386,19 @@ pub struct UserSettings {
     /// canvas detail on a dense sketch.
     #[serde(default = "default_show_constraint_values")]
     pub show_constraint_values: bool,
+    /// Inference types, priority, intersection rules, and tolerances used by
+    /// the Auto Constrain command.
+    #[serde(default)]
+    pub auto_constrain: AutoConstrainSettings,
+    /// Keep existing geometry size while solving after a constraint edit.
+    #[serde(default = "default_constraint_solve_mode")]
+    pub constraint_solve_mode: bool,
+    /// Apply eligible geometric constraints while creating geometry.
+    #[serde(default)]
+    pub constraint_infer: bool,
+    /// Constraint bar display bit mask: 1 after applying, 2 on selection.
+    #[serde(default = "default_constraint_bar_display")]
+    pub constraint_bar_display: i16,
     /// Minutes between autosaves to a `.sv$` recovery file (SAVETIME command).
     /// 0 disables autosave.
     pub savetime_min: i32,
@@ -359,6 +469,14 @@ fn default_show_constraint_values() -> bool {
     true
 }
 
+fn default_constraint_solve_mode() -> bool {
+    true
+}
+
+fn default_constraint_bar_display() -> i16 {
+    3
+}
+
 fn deserialize_clipromptlines<'de, D>(de: D) -> Result<i32, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -415,6 +533,10 @@ impl Default for UserSettings {
             backup_on_save: true,
             file_assoc_enabled: true,
             show_constraint_values: true,
+            auto_constrain: AutoConstrainSettings::default(),
+            constraint_solve_mode: true,
+            constraint_infer: false,
+            constraint_bar_display: 3,
             savetime_min: 10,
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             pick_add: true,

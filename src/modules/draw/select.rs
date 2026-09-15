@@ -34,6 +34,8 @@ pub struct SelectObjectsCommand {
     /// Whether the polygon being picked takes what it merely touches. Ignored
     /// by a fence, which has no inside to speak of.
     pick_crossing: bool,
+    /// Add the command-specific Settings keyword used by Auto Constrain.
+    auto_constrain_settings: bool,
 }
 
 impl SelectObjectsCommand {
@@ -47,6 +49,7 @@ impl SelectObjectsCommand {
             show_options: true,
             pick: None,
             pick_crossing: true,
+            auto_constrain_settings: false,
         }
     }
 
@@ -61,6 +64,7 @@ impl SelectObjectsCommand {
             show_options: false,
             pick: None,
             pick_crossing: true,
+            auto_constrain_settings: false,
         }
     }
 
@@ -75,7 +79,14 @@ impl SelectObjectsCommand {
             show_options: false,
             pick: None,
             pick_crossing: true,
+            auto_constrain_settings: false,
         }
+    }
+
+    pub fn auto_constrain(pending_cmd: &str) -> Self {
+        let mut command = Self::new(pending_cmd);
+        command.auto_constrain_settings = true;
+        command
     }
 }
 
@@ -101,6 +112,14 @@ impl CadCommand for SelectObjectsCommand {
             .into_owned();
         }
         if self.commit_on_enter && !self.handles.is_empty() {
+            if self.auto_constrain_settings {
+                return t!(
+                    "%{cmd}  Select objects or [Settings] (%{count} selected, Enter to apply):",
+                    cmd = self.prompt_cmd,
+                    count = self.handles.len()
+                )
+                .into_owned();
+            }
             t!(
                 "%{cmd}  Select objects (%{count} selected, Enter to apply):",
                 cmd = self.prompt_cmd,
@@ -108,6 +127,13 @@ impl CadCommand for SelectObjectsCommand {
             )
             .into_owned()
         } else {
+            if self.auto_constrain_settings {
+                return t!(
+                    "%{cmd}  Select objects or [Settings]:",
+                    cmd = self.prompt_cmd
+                )
+                .into_owned();
+            }
             t!("%{cmd}  Select objects:", cmd = self.prompt_cmd).into_owned()
         }
     }
@@ -130,7 +156,10 @@ impl CadCommand for SelectObjectsCommand {
     // the on-screen keyboard-less case needs.
     fn options(&self) -> Vec<CmdOption> {
         if self.commit_on_enter && self.show_options {
-            vec![
+            if self.auto_constrain_settings {
+                return vec![CmdOption::new(t!("Settings").as_ref(), "S")];
+            }
+            let options = vec![
                 CmdOption::new(t!("Window").as_ref(), "W"),
                 CmdOption::new(t!("Crossing").as_ref(), "C"),
                 CmdOption::new(t!("Fence").as_ref(), "F"),
@@ -141,7 +170,8 @@ impl CadCommand for SelectObjectsCommand {
                 CmdOption::new(t!("Remove").as_ref(), "R"),
                 CmdOption::new(t!("Previous").as_ref(), "P"),
                 CmdOption::new(t!("Last").as_ref(), "L"),
-            ]
+            ];
+            options
         } else {
             Vec::new()
         }
@@ -181,6 +211,9 @@ impl CadCommand for SelectObjectsCommand {
             return None;
         }
         match text.trim().to_uppercase().as_str() {
+            "S" | "SETTINGS" if self.auto_constrain_settings => {
+                Some(CmdResult::OpenAutoConstrainSettings)
+            }
             "F" | "FENCE" => {
                 self.pick = Some(FencePick::fence());
                 Some(CmdResult::NeedPoint)

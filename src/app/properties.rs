@@ -2772,6 +2772,25 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
     }
 
     pub(super) fn invalidate_property_targets(&mut self, i: usize, handles: &[Handle]) {
+        self.invalidate_property_targets_with_driven(i, handles, &[]);
+    }
+
+    pub(super) fn invalidate_property_targets_with_driven(
+        &mut self,
+        i: usize,
+        handles: &[Handle],
+        driven_refs: &[crate::scene::parametric_constraints::ParametricRef],
+    ) {
+        self.invalidate_property_targets_with_originals(i, handles, driven_refs, &[]);
+    }
+
+    pub(super) fn invalidate_property_targets_with_originals(
+        &mut self,
+        i: usize,
+        handles: &[Handle],
+        driven_refs: &[crate::scene::parametric_constraints::ParametricRef],
+        retained_originals: &[(Handle, acadrust::EntityType)],
+    ) {
         let mut context_object_changed = false;
         for &handle in handles {
             // A dimension is drawn from the block holding its picture, and that
@@ -2801,7 +2820,14 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             .iter()
             .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
             .collect();
-        self.tabs[i].scene.bump_entities(&changes);
+        self.tabs[i]
+            .scene
+            .bump_entities_with_parametric_originals(
+                &changes,
+                driven_refs,
+                self.constraint_solve_mode && !driven_refs.is_empty(),
+                retained_originals,
+            );
     }
 
     /// Apply a single-property edit to every handle in `handles`, recording the

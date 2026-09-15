@@ -835,7 +835,17 @@ bg={bg_ms:.1}ms n={view_count}"
                         set.constraints
                             .iter()
                             .filter(|c| c.enabled)
-                            .filter(|c| tab.scene.is_parametric_constraint_visible(scope, c.id))
+                            .filter(|c| {
+                                let selected = c.refs.iter().any(|reference| {
+                                    tab.scene.selected.contains(&reference.entity)
+                                });
+                                tab.scene.should_display_parametric_constraint(
+                                    scope,
+                                    c.id,
+                                    selected,
+                                    self.constraint_bar_display,
+                                )
+                            })
                             .filter_map(|c| {
                                 let (anchor, outward) =
                                     crate::scene::parametric_constraints::glyph_placement(

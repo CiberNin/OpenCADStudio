@@ -1676,6 +1676,8 @@ pub struct Scene {
     /// Entity drawn with the selection-highlight colour without being part
     /// of the real selection — used to preview a row in the cycling list box.
     pub hover_highlight: Option<Handle>,
+    /// All entities related to the constraint indicator currently under the cursor.
+    constraint_hover_highlights: HashSet<Handle>,
     /// Color used to draw the selection highlight overlay wires (SELECTIONEFFECTCOLOR).
     pub selection_color: [f32; 4],
     /// Whether selection visual effect (glow/highlight) is enabled (SELECTIONEFFECT).
@@ -1956,6 +1958,11 @@ pub struct Scene {
         parametric_constraints::ParametricScope,
         parametric_constraints::ConstraintId,
     )>,
+    /// Constraint glyphs explicitly shown through the constraint-bar commands.
+    shown_parametric_constraints: HashSet<(
+        parametric_constraints::ParametricScope,
+        parametric_constraints::ConstraintId,
+    )>,
     /// Document-wide named-parameter and expression table decoded from
     /// standard associative variables.
     pub(crate) named_parameters: named_parameters::ParameterTable,
@@ -2199,6 +2206,7 @@ impl Scene {
             command_preview_hidden: HashSet::default(),
             refedit_keep: None,
             hover_highlight: None,
+            constraint_hover_highlights: HashSet::default(),
             selection_color: crate::scene::model::wire_model::WireModel::SELECTED,
             selection_effect: true,
             transparency_display: true,
@@ -2273,6 +2281,7 @@ impl Scene {
             associative_hatch_source_cache: RefCell::new(None),
             parametric_constraints: Vec::new(),
             hidden_parametric_constraints: HashSet::default(),
+            shown_parametric_constraints: HashSet::default(),
             named_parameters: named_parameters::ParameterTable::new(),
             has_associative_centers: std::cell::Cell::new(None),
             block_defn_cache: RefCell::new(HashMap::default()),
@@ -2832,6 +2841,33 @@ impl Scene {
     }
 
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        self.bump_entities_with_parametric_policy(changes, &[], false);
+    }
+
+    pub fn bump_entities_with_parametric_driven(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[parametric_constraints::ParametricRef],
+    ) {
+        self.bump_entities_with_parametric_policy(changes, driven_refs, false);
+    }
+
+    pub fn bump_entities_with_parametric_policy(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[parametric_constraints::ParametricRef],
+        retain_size: bool,
+    ) {
+        self.bump_entities_with_parametric_originals(changes, driven_refs, retain_size, &[]);
+    }
+
+    pub fn bump_entities_with_parametric_originals(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[parametric_constraints::ParametricRef],
+        retain_size: bool,
+        retained_originals: &[(Handle, EntityType)],
+    ) {
         if changes.iter().any(|(handle, kind)| {
             matches!(kind, ChangeKind::Removed)
                 || self
@@ -2865,7 +2901,12 @@ impl Scene {
             }
         }
         if !self.parametric_constraints.is_empty() {
-            for change in self.refresh_parametric_constraints(&changes) {
+            for change in self.refresh_parametric_constraints_with_originals(
+                &changes,
+                driven_refs,
+                retain_size,
+                retained_originals,
+            ) {
                 if !changes.iter().any(|(handle, _)| *handle == change.0) {
                     changes.push(change);
                 }
@@ -5069,9 +5110,20 @@ impl Scene {
     /// remains the picked member for hit-test/UI bookkeeping; rendering expands
     /// it to the same selectable group that a click would select.
     pub fn hover_highlight_handles(&self) -> HashSet<Handle> {
-        self.hover_highlight
+        let mut handles = self
+            .hover_highlight
             .map(|handle| self.handles_expanded_for_selectable_groups(&[handle]))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        handles.extend(self.constraint_hover_highlights.iter().copied());
+        handles
+    }
+
+    pub fn set_constraint_hover_highlights(&mut self, handles: &[Handle]) {
+        let desired: HashSet<_> = handles.iter().copied().collect();
+        if desired != self.constraint_hover_highlights {
+            self.constraint_hover_highlights = desired;
+            self.bump_selection();
+        }
     }
 
     /// Keep the current selection visible and temporarily filter every other

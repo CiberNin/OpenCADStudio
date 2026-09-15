@@ -83,6 +83,45 @@ impl ParametricRef {
     }
 }
 
+/// Point reference driven by a native entity grip. Segment midpoint and
+/// scalar radius grips deliberately return None because they do not identify
+/// one stored point parameter.
+pub(crate) fn driven_ref_for_grip(
+    entity: &acadrust::EntityType,
+    handle: Handle,
+    grip_id: usize,
+) -> Option<ParametricRef> {
+    match entity {
+        acadrust::EntityType::Line(_) if grip_id <= 1 => {
+            Some(ParametricRef::point(handle, grip_id as i32))
+        }
+        acadrust::EntityType::LwPolyline(polyline) if grip_id < polyline.vertices.len() => {
+            Some(ParametricRef::point(handle, grip_id as i32))
+        }
+        acadrust::EntityType::Polyline2D(polyline) if grip_id < polyline.vertices.len() => {
+            Some(ParametricRef::point(handle, grip_id as i32))
+        }
+        acadrust::EntityType::Arc(_) => match grip_id {
+            0 => Some(ParametricRef::center(handle)),
+            1 => Some(ParametricRef::point(handle, 0)),
+            3 => Some(ParametricRef::point(handle, 1)),
+            _ => None,
+        },
+        acadrust::EntityType::Circle(_) if grip_id == 0 => {
+            Some(ParametricRef::center(handle))
+        }
+        acadrust::EntityType::Point(_)
+        | acadrust::EntityType::Insert(_)
+        | acadrust::EntityType::Text(_)
+        | acadrust::EntityType::MText(_)
+            if grip_id == 0 =>
+        {
+            Some(ParametricRef::point(handle, 0))
+        }
+        _ => None,
+    }
+}
+
 /// The friendly, user-facing constraint types — the "what button did they
 /// click" vocabulary, one layer above the `cadkernel_constraints` primitives each maps
 /// onto (that mapping is `constraint_map`, a later stage; see the design
@@ -576,6 +615,18 @@ impl super::Scene {
         !self.hidden_parametric_constraints.contains(&(scope, id))
     }
 
+    pub fn should_display_parametric_constraint(
+        &self,
+        scope: ParametricScope,
+        id: ConstraintId,
+        related_entity_selected: bool,
+        display_mode: i16,
+    ) -> bool {
+        self.shown_parametric_constraints.contains(&(scope, id))
+            || (display_mode & 1 != 0 && self.is_parametric_constraint_visible(scope, id))
+            || (display_mode & 2 != 0 && related_entity_selected)
+    }
+
     pub fn set_parametric_constraint_visibility(
         &mut self,
         scope: ParametricScope,
@@ -601,8 +652,10 @@ impl super::Scene {
         for id in &ids {
             if visible {
                 self.hidden_parametric_constraints.remove(&(scope, *id));
+                self.shown_parametric_constraints.insert((scope, *id));
             } else {
                 self.hidden_parametric_constraints.insert((scope, *id));
+                self.shown_parametric_constraints.remove(&(scope, *id));
             }
         }
         ids.len()
@@ -613,40 +666,155 @@ impl super::Scene {
         &self,
         scope: ParametricScope,
         handles: &[Handle],
+        settings: &crate::app::settings::AutoConstrainSettings,
     ) -> Vec<(ConstraintKind, Vec<ParametricRef>)> {
         use cadkernel::geom2d::{
-            infer_constraints, Arc, Circle, ConstraintEndpoint, InferredConstraint, Line,
-            ParametricPrimitive, Tolerance,
+            infer_constraints_with_settings, Arc, Circle, ConstraintEndpoint, InferenceKind,
+            InferenceSettings, InferredConstraint, Line, ParametricPrimitive,
         };
+        struct Source {
+            handle: Handle,
+            primitive: ParametricPrimitive,
+            whole: ParametricRef,
+            endpoints: [ParametricRef; 2],
+        }
         let mut sources = Vec::new();
         for handle in handles {
-            let primitive = match self.document.get_entity(*handle) {
-                Some(acadrust::EntityType::Line(line)) => ParametricPrimitive::Line(Line {
-                    start: [line.start.x, line.start.y],
-                    end: [line.end.x, line.end.y],
+            match self.document.get_entity(*handle) {
+                Some(acadrust::EntityType::Line(line)) => sources.push(Source {
+                    handle: *handle,
+                    primitive: ParametricPrimitive::Line(Line {
+                        start: [line.start.x, line.start.y],
+                        end: [line.end.x, line.end.y],
+                    }),
+                    whole: ParametricRef::whole(*handle),
+                    endpoints: [
+                        ParametricRef::point(*handle, 0),
+                        ParametricRef::point(*handle, 1),
+                    ],
                 }),
-                Some(acadrust::EntityType::Circle(circle)) => ParametricPrimitive::Circle(Circle {
-                    centre: [circle.center.x, circle.center.y],
-                    radius: circle.radius,
+                Some(acadrust::EntityType::Circle(circle)) => sources.push(Source {
+                    handle: *handle,
+                    primitive: ParametricPrimitive::Circle(Circle {
+                        centre: [circle.center.x, circle.center.y],
+                        radius: circle.radius,
+                    }),
+                    whole: ParametricRef::whole(*handle),
+                    endpoints: [
+                        ParametricRef::center(*handle),
+                        ParametricRef::center(*handle),
+                    ],
                 }),
-                Some(acadrust::EntityType::Arc(arc)) => ParametricPrimitive::Arc(Arc {
-                    centre: [arc.center.x, arc.center.y],
-                    radius: arc.radius,
-                    start_angle: arc.start_angle,
-                    end_angle: arc.end_angle,
+                Some(acadrust::EntityType::Arc(arc)) => sources.push(Source {
+                    handle: *handle,
+                    primitive: ParametricPrimitive::Arc(Arc {
+                        centre: [arc.center.x, arc.center.y],
+                        radius: arc.radius,
+                        start_angle: arc.start_angle,
+                        end_angle: arc.end_angle,
+                    }),
+                    whole: ParametricRef::whole(*handle),
+                    endpoints: [
+                        ParametricRef::point(*handle, 0),
+                        ParametricRef::point(*handle, 1),
+                    ],
                 }),
+                Some(acadrust::EntityType::LwPolyline(polyline)) => {
+                    let Some(world) = crate::entities::curve::lwpolyline_world_xy(polyline) else {
+                        continue;
+                    };
+                    let count = world.vertices.len();
+                    for index in 0..count {
+                        let next = index + 1;
+                        if next >= count && !world.is_closed {
+                            break;
+                        }
+                        if world.vertices[index].bulge.abs() > 1e-9 {
+                            continue;
+                        }
+                        let a = world.vertices[index].location;
+                        let b = world.vertices[next % count].location;
+                        sources.push(Source {
+                            handle: *handle,
+                            primitive: ParametricPrimitive::Line(Line {
+                                start: [a.x, a.y],
+                                end: [b.x, b.y],
+                            }),
+                            whole: ParametricRef::segment(*handle, index),
+                            endpoints: [
+                                ParametricRef::point(*handle, index as i32),
+                                ParametricRef::point(*handle, (next % count) as i32),
+                            ],
+                        });
+                    }
+                }
+                Some(acadrust::EntityType::Polyline2D(polyline)) => {
+                    let count = polyline.vertices.len();
+                    for index in 0..count {
+                        let next = index + 1;
+                        if next >= count && !polyline.is_closed() {
+                            break;
+                        }
+                        if polyline.vertices[index].bulge.abs() > 1e-9 {
+                            continue;
+                        }
+                        let a = polyline.vertices[index].location;
+                        let b = polyline.vertices[next % count].location;
+                        sources.push(Source {
+                            handle: *handle,
+                            primitive: ParametricPrimitive::Line(Line {
+                                start: [a.x, a.y],
+                                end: [b.x, b.y],
+                            }),
+                            whole: ParametricRef::segment(*handle, index),
+                            endpoints: [
+                                ParametricRef::point(*handle, index as i32),
+                                ParametricRef::point(*handle, (next % count) as i32),
+                            ],
+                        });
+                    }
+                }
                 _ => continue,
-            };
-            sources.push((*handle, primitive));
+            }
         }
-        let primitives: Vec<_> = sources.iter().map(|(_, primitive)| *primitive).collect();
+        let primitives: Vec<_> = sources.iter().map(|source| source.primitive).collect();
         let marker = |endpoint| match endpoint {
-            ConstraintEndpoint::Start => 0,
-            ConstraintEndpoint::End => 1,
+            ConstraintEndpoint::Start => 0usize,
+            ConstraintEndpoint::End => 1usize,
+        };
+        let kind = |kind| match kind {
+            crate::app::settings::AutoConstraintKind::Coincident => InferenceKind::Coincident,
+            crate::app::settings::AutoConstraintKind::Collinear => InferenceKind::Collinear,
+            crate::app::settings::AutoConstraintKind::Parallel => InferenceKind::Parallel,
+            crate::app::settings::AutoConstraintKind::Perpendicular => {
+                InferenceKind::Perpendicular
+            }
+            crate::app::settings::AutoConstraintKind::Tangent => InferenceKind::Tangent,
+            crate::app::settings::AutoConstraintKind::Concentric => InferenceKind::Concentric,
+            crate::app::settings::AutoConstraintKind::Horizontal => InferenceKind::Horizontal,
+            crate::app::settings::AutoConstraintKind::Vertical => InferenceKind::Vertical,
+            crate::app::settings::AutoConstraintKind::Equal => InferenceKind::Equal,
+        };
+        let inference_settings = InferenceSettings {
+            priority: settings
+                .priority
+                .iter()
+                .copied()
+                .filter(|candidate| settings.enabled.contains(candidate))
+                .map(kind)
+                .collect(),
+            distance_tolerance: settings.distance_tolerance,
+            angle_tolerance_radians: settings.angle_tolerance_deg.to_radians(),
+            tangent_must_share_point: settings.tangent_must_share_point,
+            perpendicular_must_intersect: settings.perpendicular_must_intersect,
         };
         let mut mapped: Vec<_> =
-            infer_constraints(&primitives, Tolerance::new(1e-6), 0.5_f64.to_radians())
+            infer_constraints_with_settings(&primitives, &inference_settings)
                 .into_iter()
+                .filter(|relation| {
+                    !matches!(relation, InferredConstraint::Coincident { first, second, .. }
+                        if sources[*first].handle == sources[*second].handle)
+                })
                 .map(|relation| match relation {
                     InferredConstraint::Coincident {
                         first,
@@ -656,52 +824,56 @@ impl super::Scene {
                     } => (
                         ConstraintKind::Coincident,
                         vec![
-                            ParametricRef::point(sources[first].0, marker(first_endpoint)),
-                            ParametricRef::point(sources[second].0, marker(second_endpoint)),
+                            sources[first].endpoints[marker(first_endpoint)],
+                            sources[second].endpoints[marker(second_endpoint)],
                         ],
                     ),
                     InferredConstraint::Collinear { first, second } => (
                         ConstraintKind::Colinear,
                         vec![
-                            ParametricRef::whole(sources[first].0),
-                            ParametricRef::whole(sources[second].0),
+                            sources[first].whole,
+                            sources[second].whole,
                         ],
                     ),
                     InferredConstraint::Concentric { first, second } => (
                         ConstraintKind::Concentric,
                         vec![
-                            ParametricRef::center(sources[first].0),
-                            ParametricRef::center(sources[second].0),
+                            ParametricRef::center(sources[first].handle),
+                            ParametricRef::center(sources[second].handle),
                         ],
                     ),
                     InferredConstraint::Parallel { first, second } => (
                         ConstraintKind::Parallel,
                         vec![
-                            ParametricRef::whole(sources[first].0),
-                            ParametricRef::whole(sources[second].0),
+                            sources[first].whole,
+                            sources[second].whole,
                         ],
                     ),
                     InferredConstraint::Perpendicular { first, second } => (
                         ConstraintKind::Perpendicular,
                         vec![
-                            ParametricRef::whole(sources[first].0),
-                            ParametricRef::whole(sources[second].0),
+                            sources[first].whole,
+                            sources[second].whole,
                         ],
                     ),
                     InferredConstraint::Horizontal { entity } => (
                         ConstraintKind::Horizontal,
-                        vec![ParametricRef::whole(sources[entity].0)],
+                        vec![sources[entity].whole],
                     ),
                     InferredConstraint::Vertical { entity } => (
                         ConstraintKind::Vertical,
-                        vec![ParametricRef::whole(sources[entity].0)],
+                        vec![sources[entity].whole],
                     ),
                     InferredConstraint::Tangent { first, second } => (
                         ConstraintKind::Tangent,
                         vec![
-                            ParametricRef::whole(sources[first].0),
-                            ParametricRef::whole(sources[second].0),
+                            sources[first].whole,
+                            sources[second].whole,
                         ],
+                    ),
+                    InferredConstraint::Equal { first, second } => (
+                        ConstraintKind::Equal,
+                        vec![sources[first].whole, sources[second].whole],
                     ),
                 })
                 .collect();
@@ -1174,7 +1346,11 @@ mod tests {
             );
 
         let inferred =
-            scene.inferred_parametric_constraints(ParametricScope::ModelSpace, &[first, second]);
+            scene.inferred_parametric_constraints(
+                ParametricScope::ModelSpace,
+                &[first, second],
+                &crate::app::settings::AutoConstrainSettings::default(),
+            );
 
         assert!(!inferred.iter().any(|(kind, refs)| {
             *kind == ConstraintKind::Horizontal && *refs == [ParametricRef::whole(first)]
