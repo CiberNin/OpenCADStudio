@@ -41,6 +41,7 @@ pub mod named_parameters;
 mod named_parameters_persist;
 mod mspace;
 pub mod viewport_ref;
+pub mod viewport_dim_seam;
 mod page_setup;
 mod paper;
 mod preview;
