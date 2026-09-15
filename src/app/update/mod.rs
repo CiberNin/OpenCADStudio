@@ -2333,7 +2333,16 @@ impl OpenCADStudio {
                 }
                 // Row-scoped op: select the row first, then run the op.
                 self.xref_manager.right_click_select(index);
+                self.xref_manager.row_change_path_open = false;
                 self.xref_manager_op(op);
+                Task::none()
+            }
+            Message::XrefRowChangePathEnter => {
+                self.xref_manager.row_change_path_open = true;
+                Task::none()
+            }
+            Message::XrefRowChangePathLeave => {
+                self.xref_manager.row_change_path_open = false;
                 Task::none()
             }
             Message::XrefFindReplacePrompt => {

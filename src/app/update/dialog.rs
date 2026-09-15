@@ -1191,8 +1191,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     }
                 }
             }
-            XrefPaletteOp::Open | XrefPaletteOp::Attach => {
-                // Handled in update/mod.rs XrefRowOp dispatch (navigation / picker), not here.
+            XrefPaletteOp::Open => {
+                // Handled in update/mod.rs XrefRowOp dispatch (navigation), not here.
             }
         }
         if done > 0 {

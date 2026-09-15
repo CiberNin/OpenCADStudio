@@ -125,6 +125,7 @@ pub struct XrefManagerPanel {
     pub attach_open: bool,
     pub refresh_open: bool,
     pub path_open: bool,
+    pub row_change_path_open: bool,
     /// Decoded preview images keyed by `(entry key, resolved path)` — rebuilt
     /// on every refresh for the anchor entry only, so the per-frame `view`
     /// stays pure and file I/O never happens during rendering.
@@ -160,6 +161,7 @@ impl Default for XrefManagerPanel {
             attach_open: false,
             refresh_open: false,
             path_open: false,
+            row_change_path_open: false,
             previews: HashMap::new(),
             show_preview: false,
         }
@@ -901,6 +903,7 @@ impl XrefManagerPanel {
                 is_expanded,
                 table_w,
                 &self.col_widths,
+                self.row_change_path_open,
             ));
         }
         // ── Reference table: header + rows scroll together. A horizontal
@@ -946,6 +949,7 @@ impl XrefManagerPanel {
                     is_sel,
                     has_children,
                     is_expanded,
+                    self.row_change_path_open,
                 ));
             }
             scrollable(tree_col).height(Length::Fixed(self.table_h)).into()
@@ -1485,15 +1489,6 @@ fn menu_row(label: String, msg: Message) -> Element<'static, Message> {
         .into()
 }
 
-fn menu_header(label: String) -> Element<'static, Message> {
-    container(text(label).size(11).style(|theme: &Theme| iced::widget::text::Style {
-        color: Some(theme.palette().background.base.text.scale_alpha(0.55)),
-    }))
-    .padding([6, 12])
-    .width(Fill)
-    .into()
-}
-
 fn menu_separator() -> Element<'static, Message> {
     container(iced::widget::Space::new().height(Length::Fixed(1.0)))
         .style(|theme: &Theme| container::Style {
@@ -1507,25 +1502,34 @@ fn menu_separator() -> Element<'static, Message> {
 
 /// Per-row right-click menu. Eight items exactly: universal tools +
 /// path tools. No Bind, no Attach/Overlay — those are DWG-only and
-/// hidden entirely. Change Path Type renders as an indented group
-/// because iced_aw ContextMenu has no nested flyout.
-fn row_menu_for(index: usize) -> Element<'static, Message> {
+/// hidden entirely. Change Path Type shows a right triangle and a
+/// second list in front with the 3 sub-options on hover.
+fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Message> {
     let item = |label: &str, op: XrefPaletteOp| -> Element<'static, Message> {
         menu_row(label.to_string(), Message::XrefRowOp(index, op))
     };
     let pathtype_item = |label: &str, pt: Pathtype| -> Element<'static, Message> {
-        container(menu_row(
+        menu_row(
             label.to_string(),
             Message::XrefRowOp(index, XrefPaletteOp::Pathtype(pt)),
-        ))
-        .padding(Padding {
-            left: 12.0,
-            ..Padding::default()
-        })
-        .width(Fill)
-        .into()
+        )
     };
-    container(
+    let change_path_row: Element<'static, Message> = mouse_area(
+        container(
+            row![
+                text(crate::t!("Change Path Type").into_owned()).size(12).width(Fill),
+                crate::ui::icons::themed_arrow_right(10.0),
+            ]
+            .align_y(iced::Center)
+            .spacing(8),
+        )
+        .padding([4, 12])
+        .width(Fill),
+    )
+    .on_enter(Message::XrefRowChangePathEnter)
+    .on_exit(Message::XrefRowChangePathLeave)
+    .into();
+    let main: Element<'static, Message> = container(
         column![
             item(&crate::t!("Open").into_owned(), XrefPaletteOp::Open),
             item(&crate::t!("Attach...").into_owned(), XrefPaletteOp::Attach),
@@ -1533,16 +1537,7 @@ fn row_menu_for(index: usize) -> Element<'static, Message> {
             item(&crate::t!("Reload").into_owned(), XrefPaletteOp::Reload),
             item(&crate::t!("Detach").into_owned(), XrefPaletteOp::Detach),
             menu_separator(),
-            menu_header(crate::t!("Change Path Type").into_owned()),
-            pathtype_item(
-                &crate::t!("Make Absolute").into_owned(),
-                Pathtype::Full
-            ),
-            pathtype_item(
-                &crate::t!("Make Relative").into_owned(),
-                Pathtype::Relative
-            ),
-            pathtype_item(&crate::t!("Remove Path").into_owned(), Pathtype::None),
+            change_path_row,
             menu_separator(),
             menu_row(
                 crate::t!("Select New Path").into_owned(),
@@ -1568,7 +1563,43 @@ fn row_menu_for(index: usize) -> Element<'static, Message> {
         ..Default::default()
     })
     .width(Length::Fixed(220.0))
-    .into()
+    .into();
+    if !change_path_open {
+        return main;
+    }
+    let flyout: Element<'static, Message> = mouse_area(
+        container(
+            column![
+                pathtype_item(
+                    &crate::t!("Make Absolute").into_owned(),
+                    Pathtype::Full
+                ),
+                pathtype_item(
+                    &crate::t!("Make Relative").into_owned(),
+                    Pathtype::Relative
+                ),
+                pathtype_item(&crate::t!("Remove Path").into_owned(), Pathtype::None),
+            ]
+            .spacing(1)
+            .padding(4),
+        )
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.palette().background.base.color,
+            )),
+            border: Border {
+                color: theme.palette().background.neutral.color,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fixed(180.0)),
+    )
+    .on_enter(Message::XrefRowChangePathEnter)
+    .on_exit(Message::XrefRowChangePathLeave)
+    .into();
+    row![main, flyout].spacing(4).align_y(iced::alignment::Vertical::Top).into()
 }
 
 fn xref_row<'a>(
@@ -1579,6 +1610,7 @@ fn xref_row<'a>(
     is_expanded: bool,
     table_w: f32,
     cw: &[f32; 6],
+    change_path_open: bool,
 ) -> Element<'a, Message> {
     let mut name = entry.name.clone();
     if display.is_nested {
@@ -1662,7 +1694,7 @@ fn xref_row<'a>(
     )
     .on_press(Message::XrefManagerSelect(index))
     .on_right_press(Message::XrefRowRightClick(index));
-    iced_aw::ContextMenu::new(row, move || row_menu_for(index)).into()
+    iced_aw::ContextMenu::new(row, move || row_menu_for(index, change_path_open)).into()
 }
 
 /// One tree-mode row: indent + optional expand arrow + file icon + name.
@@ -1673,6 +1705,7 @@ fn tree_row(
     is_selected: bool,
     show_expand: bool,
     is_expanded: bool,
+    change_path_open: bool,
 ) -> Element<'_, Message> {
     let mut cells = row![].spacing(2).align_y(iced::Center);
     cells = cells.push(tree_indent(display.depth));
@@ -1722,7 +1755,7 @@ fn tree_row(
     )
     .on_press(Message::XrefManagerSelect(index))
     .on_right_press(Message::XrefRowRightClick(index));
-    iced_aw::ContextMenu::new(row, move || row_menu_for(index)).into()
+    iced_aw::ContextMenu::new(row, move || row_menu_for(index, change_path_open)).into()
 }
 
 /// Tree-mode host root: home icon + name with the current-drawing marker.
