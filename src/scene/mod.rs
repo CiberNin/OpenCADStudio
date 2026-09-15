@@ -5296,6 +5296,10 @@ impl Scene {
         self.document
             .set_viewport_annotation_scale(viewport, scale_handle);
 
+        // Viewport scale changed: the dimensions drawn on the sheet
+        // through it measure the same model geometry at a new paper
+        // size and have to be re-placed.
+        self.notify_viewport_changed(viewport);
         self.resident_wire_sets.borrow_mut().clear();
         self.bump_geometry();
 
@@ -5349,6 +5353,10 @@ impl Scene {
         vp.view_height = vp.height / factor;
         self.document
             .set_viewport_annotation_scale(viewport, scale_handle);
+        // Viewport scale changed: the dimensions drawn on the sheet
+        // through it measure the same model geometry at a new paper
+        // size and have to be re-placed.
+        self.notify_viewport_changed(viewport);
         self.resident_wire_sets.borrow_mut().clear();
         self.bump_geometry();
         true

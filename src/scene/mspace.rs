@@ -259,6 +259,9 @@ impl Scene {
                 vp.view_height = eff_h;
             }
         }
+        // A viewport's view changed, so every dimension drawn on the
+        // sheet through it has to be re-placed and re-measured.
+        self.notify_viewport_changed(vp_handle);
     }
 
     /// Fit model-space bounds into the active floating viewport without moving
@@ -297,6 +300,7 @@ impl Scene {
                 viewport.custom_scale = viewport.height / viewport.view_height;
             }
         }
+        self.notify_viewport_changed(viewport_handle);
         self.camera_generation += 1;
         true
     }
@@ -348,6 +352,9 @@ impl Scene {
             vp.view_target.y += model_delta.y as f64;
             vp.view_target.z += model_delta.z as f64;
         }
+        // A viewport's view changed, so every dimension drawn on the
+        // sheet through it has to be re-placed and re-measured.
+        self.notify_viewport_changed(vp_handle);
     }
 
     /// Zoom the active viewport's model-space view by `steps` notches.
@@ -397,6 +404,9 @@ impl Scene {
                 }
             }
         }
+        // A viewport's view changed, so every dimension drawn on the
+        // sheet through it has to be re-placed and re-measured.
+        self.notify_viewport_changed(vp_handle);
     }
 
     /// Orbit the active viewport's view direction by the given screen-pixel delta.
@@ -474,6 +484,9 @@ impl Scene {
             vp.view_direction.z = dir.z as f64;
             vp.twist_angle = twist;
         }
+        // Twisting a viewport rotates model geometry on the sheet; the
+        // dimensions drawn through it follow.
+        self.notify_viewport_changed(vp_handle);
     }
 
     /// Mutate the active viewport's camera through a closure, then re-encode the
@@ -502,6 +515,7 @@ impl Scene {
             .normalize_or(glam::Vec3::Y);
         let roll = up0.cross(desired_up).dot(dir).atan2(up0.dot(desired_up));
         let twist = -roll as f64;
+        let mut changed = false;
         if let Some(acadrust::EntityType::Viewport(vp)) = self.document.get_entity_mut(vp_handle) {
             if vp.status.locked {
                 return false;
@@ -514,9 +528,14 @@ impl Scene {
                 tmp.projection == view::camera::Projection::Perspective;
             vp.lens_length =
                 (12.0 / (tmp.fov_y * 0.5).tan().max(1e-6)) as f64;
-            return true;
+            changed = true;
         }
-        false
+        if changed {
+            // The view (and with it the sheet placement of everything drawn
+            // through this viewport) moved.
+            self.notify_viewport_changed(vp_handle);
+        }
+        changed
     }
 
     /// Render mode of the active paper-space viewport, or `None` when no
