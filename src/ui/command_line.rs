@@ -84,6 +84,23 @@ fn strip_option_listing(s: &str) -> String {
     out.replace(" :", ":").trim().to_string()
 }
 
+// Font swaps must preserve U+276F, U+24D8, and U+2715.
+const COMMAND_PREFIX: &str = "❯  ";
+const INFO_PREFIX: &str = "ⓘ ";
+const ERROR_PREFIX: &str = "✕ ";
+
+fn format_info(msg: &str) -> String {
+    if msg.starts_with(INFO_PREFIX) {
+        msg.to_string()
+    } else {
+        format!("{INFO_PREFIX}{msg}")
+    }
+}
+
+fn format_error(msg: &str) -> String {
+    format!("{ERROR_PREFIX}{}: {msg}", t!("Invalid").to_uppercase())
+}
+
 const MAX_HISTORY: usize = 64;
 
 #[derive(Clone)]
@@ -335,7 +352,10 @@ impl CommandLine {
     }
 
     pub fn push_command(&mut self, cmd: &str) {
-        self.push(EntryKind::Command, format!("{} {cmd}", t!("Command:")));
+        self.push(
+            EntryKind::Command,
+            format!("{COMMAND_PREFIX}{} {cmd}", t!("Command:")),
+        );
     }
     pub fn push_output(&mut self, msg: &str) {
         self.push(EntryKind::Output, msg.to_string());
@@ -343,7 +363,7 @@ impl CommandLine {
     pub fn push_error(&mut self, msg: &str) {
         self.error_revision = self.error_revision.wrapping_add(1);
         self.last_error = Some(msg.to_owned());
-        self.push(EntryKind::Error, format!("*{}*  {msg}", t!("Invalid")));
+        self.push(EntryKind::Error, format_error(msg));
     }
     /// Append an error unless it is already the latest history line. Repeated
     /// retry failures should refresh the concise message, not flood history
@@ -352,7 +372,7 @@ impl CommandLine {
     pub fn push_error_once(&mut self, msg: &str) {
         self.error_revision = self.error_revision.wrapping_add(1);
         self.last_error = Some(msg.to_owned());
-        let text = format!("*{}*  {msg}", t!("Invalid"));
+        let text = format_error(msg);
         if let Some(last) = self
             .history
             .last_mut()
@@ -372,12 +392,7 @@ impl CommandLine {
         self.push(EntryKind::Error, format!("*{}*  {msg}", t!("Warning")));
     }
     pub fn push_info(&mut self, msg: &str) {
-        let text = if msg.starts_with("i  ") {
-            msg.to_string()
-        } else {
-            format!("i  {msg}")
-        };
-        self.push(EntryKind::Info, text);
+        self.push(EntryKind::Info, format_info(msg));
     }
     fn push(&mut self, kind: EntryKind, text: String) {
         self.history.push(HistoryEntry {
@@ -407,11 +422,7 @@ impl CommandLine {
             e.created_at = Instant::now();
         }
         if let Some(p) = &prompt {
-            let formatted = if p.starts_with("i  ") {
-                p.clone()
-            } else {
-                format!("i  {p}")
-            };
+            let formatted = format_info(p);
             // Reuse the prompt line dispatch/step-transition just pushed;
             // otherwise add it.
             if self.history.last().map(|e| &e.text) != Some(&formatted) {
@@ -583,13 +594,18 @@ impl CommandLine {
             .iter()
             .fold(column![].spacing(0), |col, entry| {
                 let kind = entry.kind.clone();
+                let is_error = kind == EntryKind::Error;
                 let entry_text = |value: String| {
-                    text(value).size(11).style({
+                    let mut txt = text(value).size(11).style({
                         let kind = kind.clone();
                         move |theme: &Theme| iced::widget::text::Style {
                             color: Some(history_color(theme, &kind)),
                         }
-                    })
+                    });
+                    if is_error {
+                        txt = txt.font(iced::Font::DEFAULT.weight(iced::font::Weight::Bold));
+                    }
+                    txt
                 };
                 // The current step's prompt is the single pinned line. When the
                 // step offers options, render them as clickable buttons inline
@@ -1041,13 +1057,19 @@ fn history_highlight_format(
 ) -> iced::advanced::text::highlighter::Format<iced::Font> {
     iced::advanced::text::highlighter::Format {
         color: Some(history_color(theme, kind)),
-        font: None,
+        font: match kind {
+            EntryKind::Error => Some(iced::Font::DEFAULT.weight(iced::font::Weight::Bold)),
+            _ => None,
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{mcp_status, ranked_matches, CommandLine};
+    use super::{
+        format_error, history_highlight_format, mcp_status, ranked_matches, CommandLine, EntryKind,
+        ERROR_PREFIX, INFO_PREFIX,
+    };
     use crate::t;
     use rustc_hash::FxHashMap;
 
@@ -1122,12 +1144,80 @@ mod tests {
     }
 
     #[test]
+    fn history_markers_and_copy_text_are_clean() {
+        let mut line = CommandLine::new();
+        line.clear_history();
+        let command = "LINE";
+        let info = "Object selected.";
+        let error = "Unable to save: file is in use.";
+        let output = "12.5, 7.0\nraw output";
+
+        line.push_command(command);
+        line.push_info(info);
+        line.push_error(error);
+        line.push_output(output);
+
+        let expected = vec![
+            format!("❯ {} {command}", t!("Command:")),
+            format!("{INFO_PREFIX}{info}"),
+            format!("{ERROR_PREFIX}{}: {error}", t!("Invalid").to_uppercase()),
+            output.to_string(),
+        ];
+        let actual = line
+            .history
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            expected.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            line.history
+                .iter()
+                .map(|entry| entry.kind.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                EntryKind::Command,
+                EntryKind::Info,
+                EntryKind::Error,
+                EntryKind::Output,
+            ]
+        );
+
+        let plain = line.history_plain_text();
+        assert!(!plain.contains('*'));
+        assert_eq!(plain, expected.join("\n"));
+        assert_eq!(line.history[3].text.as_bytes(), output.as_bytes());
+    }
+
+    #[test]
+    fn error_history_uses_bold_highlight_format() {
+        let theme = iced::Theme::Light;
+        let bold = iced::Font::DEFAULT.weight(iced::font::Weight::Bold);
+        assert_eq!(
+            history_highlight_format(&EntryKind::Error, &theme).font,
+            Some(bold)
+        );
+        for kind in [EntryKind::Command, EntryKind::Info, EntryKind::Output] {
+            assert_eq!(history_highlight_format(&kind, &theme).font, None);
+        }
+    }
+
+    #[test]
     fn issue_498_repeated_save_error_is_not_duplicated() {
         let mut line = CommandLine::new();
         let initial_len = line.history.len();
-        line.push_error_once(t!("Unable to save: file is in use.").as_ref());
-        line.push_error_once(t!("Unable to save: file is in use.").as_ref());
+        let message = t!("Unable to save: file is in use.");
+        let expected_error = format_error(message.as_ref());
+        line.push_error_once(message.as_ref());
+        line.push_error_once(message.as_ref());
         assert_eq!(line.history.len(), initial_len + 1);
+        assert_eq!(
+            line.history.last().map(|entry| entry.text.as_str()),
+            Some(expected_error.as_str())
+        );
+        assert!(!line.history_plain_text().contains('*'));
     }
 
     #[test]
@@ -1193,8 +1283,14 @@ mod tests {
     fn info_entries_carry_prefix_marker() {
         let mut line = CommandLine::new();
         line.push_info("Object selected.");
-        assert_eq!(line.history.last().map(|e| e.text.as_str()), Some("i  Object selected."));
-        assert_eq!(line.history.last().map(|e| &e.kind), Some(&super::EntryKind::Info));
+        assert_eq!(
+            line.history.last().map(|entry| entry.text.as_str()),
+            Some("ⓘ Object selected.")
+        );
+        assert_eq!(
+            line.history.last().map(|entry| &entry.kind),
+            Some(&EntryKind::Info)
+        );
     }
 
     #[test]
@@ -1204,9 +1300,13 @@ mod tests {
         line.push_info("Specify first point:");
         assert_eq!(line.history.len(), initial_len + 1);
         line.set_step_prompt(Some("Specify first point:".to_string()));
-        assert_eq!(line.history.len(), initial_len + 1, "prompt must reuse push_info entry without duplicating");
+        assert_eq!(
+            line.history.len(),
+            initial_len + 1,
+            "prompt must reuse push_info entry without duplicating"
+        );
         let last = line.history.last().unwrap();
         assert!(last.pinned);
-        assert_eq!(last.text, "i  Specify first point:");
+        assert_eq!(last.text, "ⓘ Specify first point:");
     }
 }
