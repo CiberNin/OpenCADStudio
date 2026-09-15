@@ -31,6 +31,10 @@ mod camera_ops;
 pub(crate) mod centerline;
 pub(crate) mod dimension_assoc;
 pub(crate) mod dimension_assoc_chain;
+// The association surface PR2, the UI and the tests address: create an
+// association from accepted snaps, ask whether its references still
+// resolve, and resolve one by hand.
+pub use dimension_assoc::{ReferenceStatus, ResolvedReference};
 pub(crate) mod centermark;
 mod dwg_native_constraints;
 mod entity;

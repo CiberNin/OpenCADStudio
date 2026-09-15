@@ -3,7 +3,7 @@ use acadrust::objects::{
     AssocDimensionAssociation, AssocDimensionReference, AssociativeData,
     AssociativeObject, ObjectType,
 };
-use acadrust::types::{Handle, Vector3};
+use acadrust::types::{Handle, Transform, Vector3};
 use acadrust::EntityType;
 use cadkernel::geom2d::{
     angle_within_arc, arc as tessellate_arc, arc_span, closest_point, Arc as KernelArc,
@@ -14,6 +14,10 @@ use std::f64::consts::TAU;
 
 use crate::command::DimensionAssociationSource;
 
+use super::dimension_assoc_chain::{
+    self as chain, ChainError, FeatureContext, ReferenceChain,
+};
+use super::viewport_ref::{AcceptedSnap, MeasurementScale, ViewportFrame};
 use super::{ChangeKind, Scene};
 
 pub(crate) const POLYLINE_ARC_CENTER_MARKER: i32 = -4;
@@ -99,6 +103,13 @@ impl RadialSourceGeometry {
 }
 
 type DPoint = [f64; 3];
+
+/// The shared-contract vector (`glam`) as the codec's vector. `AcceptedSnap`
+/// speaks `glam` because the snap engine does; everything stored in a
+/// drawing speaks `acadrust`.
+fn dvec3(point: glam::DVec3) -> Vector3 {
+    Vector3::new(point.x, point.y, point.z)
+}
 
 fn vector3(point: DPoint) -> Vector3 {
     Vector3::new(point[0], point[1], point[2])
@@ -351,9 +362,237 @@ fn source_marker(entity: &EntityType, point: Vector3) -> Option<i32> {
         .map(|(index, _)| index as i32)
 }
 
-fn resolve_reference(scene: &Scene, reference: &AssocDimensionReference) -> Option<Vector3> {
-    let source = *reference.xrefs.first()?;
-    let entity = scene.document.get_entity(source)?;
+// ── Chain-aware reference resolution ──────────────────────────────────────
+
+/// How a resolved feature point travels from the entity it belongs to up into
+/// the space the dimension is drawn in.
+///
+/// `transform` is the block-instance path (entity-local -> model).
+/// `frame` is the layout viewport the chain looks through, when it has one;
+/// with a frame the dimension lives on the sheet and every point it holds is
+/// a *paper* point, while the value it displays is a *model* length. Keeping
+/// both directions in one place is what stops the viewport compensation from
+/// being applied twice (see [`MeasurementScale`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChainMap {
+    pub transform: Transform,
+    pub frame: Option<ViewportFrame>,
+}
+
+impl ChainMap {
+    fn identity() -> Self {
+        Self {
+            transform: Transform::identity(),
+            frame: None,
+        }
+    }
+
+    /// Entity-local -> model.
+    pub(crate) fn to_model(&self, point: Vector3) -> Vector3 {
+        self.transform.apply(point)
+    }
+
+    /// Model -> the dimension's own space (paper through a viewport).
+    pub(crate) fn model_to_space(&self, point: Vector3) -> Vector3 {
+        match &self.frame {
+            Some(frame) => {
+                let mapped =
+                    frame.model_to_paper(glam::DVec3::new(point.x, point.y, point.z));
+                Vector3::new(mapped.x, mapped.y, mapped.z)
+            }
+            None => point,
+        }
+    }
+
+    /// The dimension's own space -> model.
+    pub(crate) fn space_to_model(&self, point: Vector3) -> Vector3 {
+        match &self.frame {
+            Some(frame) => {
+                let mapped =
+                    frame.paper_to_model(glam::DVec3::new(point.x, point.y, point.z));
+                Vector3::new(mapped.x, mapped.y, mapped.z)
+            }
+            None => point,
+        }
+    }
+
+    /// Entity-local -> the dimension's own space.
+    pub(crate) fn to_space(&self, point: Vector3) -> Vector3 {
+        self.model_to_space(self.to_model(point))
+    }
+
+    /// Entity-local -> the dimension's own space, for a direction (the linear
+    /// part only: block rotation/scale, then the viewport's twist and scale).
+    fn direction_to_space(&self, direction: Vector3) -> Vector3 {
+        let direction = self.transform.apply_rotation(direction);
+        match &self.frame {
+            Some(frame) => {
+                let xy = frame.model_to_paper_dir(glam::DVec2::new(direction.x, direction.y));
+                Vector3::new(xy.x, xy.y, direction.z)
+            }
+            None => direction,
+        }
+    }
+
+    /// Carry a plane into the dimension's space.
+    ///
+    /// A plane is an origin and two axes, and `Plane::point_at` is affine in
+    /// them, so mapping the origin by the full transform and each axis by its
+    /// linear part maps every point *on* the plane correctly — including under
+    /// a non-uniformly scaled block, where the axes simply stop being
+    /// orthonormal.
+    fn map_plane(&self, plane: Plane) -> Plane {
+        Plane::from_axes(
+            dpoint(self.to_space(vector3(plane.origin))),
+            dpoint(self.direction_to_space(vector3(plane.x_axis))),
+            dpoint(self.direction_to_space(vector3(plane.y_axis))),
+        )
+    }
+
+    /// Carry a radial source into the dimension's space.
+    ///
+    /// Only the plane moves: the centre, radius and angles are coordinates
+    /// *within* the plane, so they stay as they are and every point the
+    /// geometry produces comes out in the dimension's space already.
+    fn map_radial(&self, radial: RadialSourceGeometry) -> RadialSourceGeometry {
+        RadialSourceGeometry {
+            plane: self.map_plane(radial.plane),
+            ..radial
+        }
+    }
+}
+
+/// One reference resolved all the way down the chain.
+#[derive(Clone, Copy, Debug)]
+pub struct ResolvedReference {
+    /// The feature point in model space, through the block-instance path.
+    pub model: Vector3,
+    /// The same point in the dimension's own space — projected onto the sheet
+    /// when the chain goes through a viewport, otherwise equal to `model`.
+    pub space: Vector3,
+    /// The viewport the chain looks through, if any.
+    pub viewport: Option<Handle>,
+}
+
+/// Why a reference did not produce a point. The reference's stored data is
+/// never modified on a failure — a dimension whose source went away keeps its
+/// last valid appearance, and an undo that restores the source restores the
+/// link with no extra bookkeeping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReferenceStatus {
+    /// Resolved to a live feature point.
+    Resolved,
+    /// A handle in the chain is no longer in the document.
+    Broken(Handle),
+    /// The chain is intact but the feature could not be evaluated — an osnap
+    /// type we do not support, or geometry that no longer has the feature.
+    Unresolved,
+}
+
+fn chain_map(scene: &Scene, walked: &ReferenceChain) -> ChainMap {
+    ChainMap {
+        transform: walked.transform,
+        frame: walked.viewport.and_then(|handle| scene.viewport_frame(handle)),
+    }
+}
+
+/// How far `point` (entity-local) is from `entity`'s geometry. Used only to
+/// choose between two readings of a stored osnap point, so an approximate
+/// answer for exotic entities is fine.
+fn hint_error(entity: &EntityType, point: Vector3) -> f64 {
+    if let Some(distance) = source_distance_squared(entity, point) {
+        if distance.is_finite() {
+            return distance;
+        }
+    }
+    if let Some(planar) = crate::entities::curve::entity_curve(entity) {
+        if let Some(uv) = planar.plane.project(dpoint(point)) {
+            let near = closest_point(&planar.curve, uv);
+            let world = planar.plane.point_at(near.point);
+            return point_distance_squared(vector3(world), point);
+        }
+    }
+    f64::INFINITY
+}
+
+/// The stored osnap point, brought into the entity's own coordinates.
+///
+/// Which space the file wrote it in is not recoverable from the record: our
+/// own pre-PR3 writer stored a model/WCS point, AutoCAD's trans-space records
+/// hold the point in the space the dimension is drawn in, and both appear in
+/// the same drawing. Rather than guess, both readings are mapped down to the
+/// entity and the one that actually lands on the geometry wins. The point is
+/// only ever a *hint* — it disambiguates candidates, it is never the answer.
+fn local_hint(scene: &Scene, map: &ChainMap, entity: &EntityType, stored: Vector3) -> Option<Vector3> {
+    let _ = scene;
+    let inverse = chain::invert(&map.transform)?;
+    let mut candidates = vec![inverse.apply(stored)];
+    if map.frame.is_some() {
+        candidates.push(inverse.apply(map.space_to_model(stored)));
+    }
+    candidates
+        .into_iter()
+        .filter(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite())
+        .min_by(|first, second| hint_error(entity, *first).total_cmp(&hint_error(entity, *second)))
+}
+
+/// Resolve one reference through its full chain.
+///
+/// `from_space` is the *other* definition point of the same dimension, in the
+/// dimension's own space. PERPENDICULAR and TANGENT have no meaning without
+/// it, so the caller resolves the independent references first and comes back
+/// for these.
+pub fn resolve_reference_chain(
+    scene: &Scene,
+    reference: &AssocDimensionReference,
+    from_space: Option<Vector3>,
+) -> Result<ResolvedReference, ReferenceStatus> {
+    let walked = match chain::walk_chain(&scene.document, &reference.xrefs) {
+        Ok(walked) => walked,
+        Err(ChainError::Missing(handle)) => return Err(ReferenceStatus::Broken(handle)),
+        Err(ChainError::Empty) => return Err(ReferenceStatus::Unresolved),
+    };
+    let Some(entity) = scene.document.get_entity(walked.entity) else {
+        return Err(ReferenceStatus::Broken(walked.entity));
+    };
+    let map = chain_map(scene, &walked);
+    let inverse = chain::invert(&map.transform);
+
+    let mut local = None;
+    if chain::evaluates(reference.osnap_type) {
+        let hint = local_hint(scene, &map, entity, reference.osnap_point);
+        let from = from_space
+            .zip(inverse)
+            .map(|(point, inverse)| inverse.apply(map.space_to_model(point)));
+        local = chain::feature_point(
+            &scene.document,
+            entity,
+            reference,
+            FeatureContext { hint, from },
+        );
+    }
+    // Every reference — including one whose osnap type we do not evaluate —
+    // falls back to the marker/parameter convention, which is what the
+    // pre-PR3 writer and plain END references use.
+    let local = match local.or_else(|| resolve_local_by_marker(entity, reference)) {
+        Some(local) => local,
+        None => return Err(ReferenceStatus::Unresolved),
+    };
+    let model = map.to_model(local);
+    Ok(ResolvedReference {
+        model,
+        space: map.model_to_space(model),
+        viewport: walked.viewport,
+    })
+}
+
+/// The pre-PR3 marker/parameter resolution, unchanged in behaviour but now
+/// evaluated in the *entity's own* coordinates rather than assumed to be in
+/// model space. Lifting through the block path is the caller's job.
+fn resolve_local_by_marker(
+    entity: &EntityType,
+    reference: &AssocDimensionReference,
+) -> Option<Vector3> {
     if reference.main_gs_marker == ARC_DIMENSION_POINT_MARKER {
         let radial = radial_source_for_marker(entity, 0)?;
         let sweep = positive_sweep(radial.start_angle, radial.end_angle);
@@ -548,6 +787,13 @@ fn remap_plane_offset(
     ]))
 }
 
+/// Whether `dimension` still has at least one reference whose whole chain
+/// resolves to a live entity.
+///
+/// The chain matters: an imported trans-space reference has the VIEWPORT as
+/// its first handle, so "some handle in `xrefs` exists" was true even for a
+/// reference whose actual source had been erased. Walking the chain asks the
+/// question that was meant — is the geometry still there.
 pub(crate) fn dimension_is_associative(
     document: &acadrust::CadDocument,
     dimension: Handle,
@@ -562,10 +808,7 @@ pub(crate) fn dimension_is_associative(
         association.dimension == dimension
             && association.associativity != 0
             && association.references.iter().flatten().any(|reference| {
-                reference
-                    .xrefs
-                    .iter()
-                    .any(|source| document.get_entity(*source).is_some())
+                chain::walk_chain(document, &reference.xrefs).is_ok()
             })
     })
 }
@@ -846,30 +1089,352 @@ impl Scene {
         associativity: i32,
         sources: Vec<Option<DimensionAssociationSource>>,
     ) {
+        self.store_dimension_association_full(
+            dimension,
+            references,
+            associativity,
+            false,
+            sources.into_iter().flatten().map(|s| s.handle).collect(),
+        );
+    }
+
+    /// Create the DIMASSOC object for `dimension` and wire its reactors.
+    ///
+    /// `reactor_targets` is every handle the association depends on —
+    /// including the viewport and each INSERT on a block path, not just the
+    /// innermost entity — so a change to any link in the chain reaches
+    /// [`Scene::refresh_associative_dimensions`] through the normal
+    /// dependency index.
+    ///
+    /// The new object and every entity whose reactor list is touched are
+    /// journalled into the open undo recording, so creating an associative
+    /// dimension is a single undoable step rather than something that survives
+    /// its own undo.
+    fn store_dimension_association_full(
+        &mut self,
+        dimension: Handle,
+        references: [Vec<AssocDimensionReference>; 4],
+        associativity: i32,
+        trans_space: bool,
+        reactor_targets: Vec<Handle>,
+    ) {
         let association_handle = self.document.allocate_handle();
         let mut object = AssociativeObject::new("DIMASSOC", "AcDbDimAssoc");
         object.handle = association_handle;
         object.reactors.push(dimension);
         object.data = AssociativeData::DimensionAssociation(AssocDimensionAssociation {
             associativity,
+            trans_space,
             dimension,
             references,
             ..AssocDimensionAssociation::default()
         });
+        // A brand-new object: its before-image is "absent", so undo erases it.
+        self.record_undo_object_before(association_handle, None);
         self.document
             .objects
             .insert(association_handle, ObjectType::Associative(object));
 
-        let mut reactor_targets = vec![dimension];
-        reactor_targets.extend(sources.into_iter().flatten().map(|source| source.handle));
+        let mut reactor_targets = reactor_targets;
+        reactor_targets.push(dimension);
+        reactor_targets.retain(|handle| !handle.is_null());
         reactor_targets.sort_by_key(|handle| handle.value());
         reactor_targets.dedup();
         for handle in reactor_targets {
-            if let Some(entity) = self.document.get_entity_mut(handle) {
-                if !entity.common().reactors.contains(&association_handle) {
+            if self
+                .document
+                .get_entity(handle)
+                .is_some_and(|entity| !entity.common().reactors.contains(&association_handle))
+            {
+                if self.is_recording_undo() {
+                    let before = self.document.get_entity_arc(handle);
+                    self.record_undo_before(handle, before);
+                }
+                if let Some(entity) = self.document.get_entity_mut(handle) {
                     entity.common_mut().reactors.push(association_handle);
                 }
             }
+        }
+    }
+
+    /// Persist the association for a dimension whose points were picked
+    /// through [`AcceptedSnap`]s — the entry point PR2 calls once it has
+    /// created a paper-space dimension that measures model geometry.
+    ///
+    /// `snaps` is positional: one slot per definition point, in the same order
+    /// [`dimension_reference_points`] returns them (linear/aligned: first,
+    /// second; angular: see that function). A `None` slot, or a snap that
+    /// landed on empty space, leaves that slot non-associative.
+    ///
+    /// Each reference records the whole chain — viewport, block-instance path,
+    /// entity — plus the osnap type and the sub-entity marker / parameter, so
+    /// the feature survives an edit to the source rather than being
+    /// re-inferred by proximity.
+    pub fn attach_viewport_dimension_association(
+        &mut self,
+        dimension: Handle,
+        snaps: &[Option<AcceptedSnap>],
+    ) {
+        let Some(EntityType::Dimension(_)) = self.document.get_entity(dimension) else {
+            return;
+        };
+        let mut references: [Vec<AssocDimensionReference>; 4] =
+            std::array::from_fn(|_| Vec::new());
+        let mut associativity = 0;
+        let mut trans_space = false;
+        let mut reactor_targets = Vec::new();
+
+        for (index, snap) in snaps.iter().enumerate().take(references.len()) {
+            let Some(snap) = snap else { continue };
+            let Some(source) = snap.source.as_ref() else {
+                continue;
+            };
+            let entity_handle = source.source.handle;
+            let Some(entity) = self.document.get_entity(entity_handle) else {
+                continue;
+            };
+            // dimension -> [viewport] -> [insert ...] -> entity
+            let mut xrefs = Vec::new();
+            if let Some(viewport) = snap.viewport {
+                xrefs.push(viewport);
+                trans_space = true;
+            }
+            xrefs.extend(source.block_path.iter().copied());
+            xrefs.push(entity_handle);
+            reactor_targets.extend(xrefs.iter().copied());
+
+            let osnap_type = chain::osnap_type_for(source.snap_type);
+            // An explicitly-acquired sub-entity wins; otherwise fall back to
+            // the same marker inference model-space creation already uses, in
+            // the entity's own coordinates.
+            let (marker, parameter) = match source.source.marker {
+                Some(marker) => (marker, source.source.parameter),
+                None => {
+                    let local = Self::point_in_entity_space(
+                        &self.document,
+                        &source.block_path,
+                        dvec3(snap.model_point),
+                    );
+                    source_reference(entity, local).unwrap_or((0, 0.0))
+                }
+            };
+            associativity |= 1 << index;
+            references[index].push(AssocDimensionReference {
+                class_name: "AcDbOsnapPointRef".to_string(),
+                osnap_type,
+                xrefs,
+                main_subent_type: 1,
+                main_gs_marker: marker,
+                osnap_distance: parameter,
+                // Stored in MODEL space. `local_hint` reads either convention,
+                // so an imported paper-space point still resolves.
+                osnap_point: dvec3(snap.model_point),
+                ..AssocDimensionReference::default()
+            });
+        }
+        if associativity == 0 {
+            return;
+        }
+        self.store_dimension_association_full(
+            dimension,
+            references,
+            associativity,
+            trans_space,
+            reactor_targets,
+        );
+    }
+
+    /// A model-space point brought down into the coordinates of the entity at
+    /// the end of `block_path`. Identity for top-level geometry.
+    fn point_in_entity_space(
+        document: &acadrust::CadDocument,
+        block_path: &[Handle],
+        point: Vector3,
+    ) -> Vector3 {
+        if block_path.is_empty() {
+            return point;
+        }
+        chain::invert(&chain::block_transform(document, block_path))
+            .map(|inverse| inverse.apply(point))
+            .unwrap_or(point)
+    }
+
+    /// Per-slot health of a dimension's association, for the UI and for tests.
+    ///
+    /// Nothing here is persisted: brokenness is *derived* from whether the
+    /// chain still resolves. That is what makes undo restore a link for free —
+    /// the erased source comes back and the same query starts answering
+    /// [`ReferenceStatus::Resolved`] again, with the reference record itself
+    /// never having been rewritten.
+    pub fn dimension_association_status(
+        &self,
+        dimension: Handle,
+    ) -> Vec<(usize, ReferenceStatus)> {
+        let Some(association) = self.dimension_association(dimension) else {
+            return Vec::new();
+        };
+        association
+            .references
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let reference = slot.first()?;
+                Some((
+                    index,
+                    match resolve_reference_chain(self, reference, None) {
+                        Ok(_) => ReferenceStatus::Resolved,
+                        Err(status) => status,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Every entity `dimension` depends on: the viewport it looks through,
+    /// each INSERT on the block path, and the source geometry itself — for
+    /// each reference chain, plus the second chain of an intersection.
+    ///
+    /// Layer visibility and viewport clipping are deliberately not consulted:
+    /// hiding a layer or clipping a viewport changes what a *new* snap may
+    /// acquire (PR1's concern), never what an existing association points at.
+    pub fn dimension_association_sources(&self, dimension: Handle) -> Vec<Handle> {
+        let Some(association) = self.dimension_association(dimension) else {
+            return Vec::new();
+        };
+        let mut sources = Vec::new();
+        for reference in association.references.iter().flatten() {
+            for xrefs in [&reference.xrefs, &reference.intersection_objects] {
+                let Ok(walked) = chain::walk_chain(&self.document, xrefs) else {
+                    continue;
+                };
+                sources.extend(walked.viewport);
+                sources.extend(walked.block_path.iter().copied());
+                sources.push(walked.entity);
+            }
+        }
+        sources.sort_by_key(|handle| handle.value());
+        sources.dedup();
+        sources
+    }
+
+    /// The DIMASSOC payload attached to `dimension`, if there is one.
+    pub fn dimension_association(
+        &self,
+        dimension: Handle,
+    ) -> Option<&AssocDimensionAssociation> {
+        self.document.objects.values().find_map(|object| {
+            let ObjectType::Associative(object) = object else {
+                return None;
+            };
+            let AssociativeData::DimensionAssociation(association) = &object.data else {
+                return None;
+            };
+            (association.dimension == dimension).then_some(association)
+        })
+    }
+
+    /// Duplicate dimension associations across a COPY/MIRROR/ARRAY handle map.
+    ///
+    /// A copied dimension only keeps an association when *every* handle in
+    /// every chain was copied too — the viewport, each INSERT on the path and
+    /// the source entity. Then the whole chain is remapped onto the copies, so
+    /// the copy measures the copied geometry. Copying a dimension on its own
+    /// leaves it with no association at all, which is exactly what the model
+    /// space path did before this: an all-or-nothing rule, never a copy that
+    /// silently drives off the original's geometry.
+    pub(crate) fn copy_dimension_associations(
+        &mut self,
+        handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
+    ) {
+        if handle_map.is_empty() {
+            return;
+        }
+        let copies: Vec<_> = self
+            .document
+            .objects
+            .values()
+            .filter_map(|object| {
+                let ObjectType::Associative(object) = object else {
+                    return None;
+                };
+                let AssociativeData::DimensionAssociation(association) = &object.data else {
+                    return None;
+                };
+                let dimension = *handle_map.get(&association.dimension)?;
+                let complete = association.references.iter().flatten().all(|reference| {
+                    reference
+                        .xrefs
+                        .iter()
+                        .chain(reference.intersection_objects.iter())
+                        .all(|handle| handle.is_null() || handle_map.contains_key(handle))
+                });
+                if !complete {
+                    return None;
+                }
+                let remap = |handles: &Vec<Handle>| -> Vec<Handle> {
+                    handles
+                        .iter()
+                        .map(|handle| handle_map.get(handle).copied().unwrap_or(*handle))
+                        .collect()
+                };
+                let references = std::array::from_fn(|index| {
+                    association.references[index]
+                        .iter()
+                        .map(|reference| AssocDimensionReference {
+                            xrefs: remap(&reference.xrefs),
+                            intersection_objects: remap(&reference.intersection_objects),
+                            ..reference.clone()
+                        })
+                        .collect::<Vec<_>>()
+                });
+                Some((
+                    dimension,
+                    references,
+                    association.associativity,
+                    association.trans_space,
+                ))
+            })
+            .collect();
+        for (dimension, references, associativity, trans_space) in copies {
+            let reactor_targets: Vec<Handle> = {
+                let references: &[Vec<AssocDimensionReference>; 4] = &references;
+                references
+                    .iter()
+                    .flatten()
+                    .flat_map(|reference| {
+                        reference
+                            .xrefs
+                            .iter()
+                            .chain(reference.intersection_objects.iter())
+                            .copied()
+                    })
+                    .collect()
+            };
+            self.store_dimension_association_full(
+                dimension,
+                references,
+                associativity,
+                trans_space,
+                reactor_targets,
+            );
+        }
+    }
+
+    /// Report a layout viewport as changed so the dimensions drawn through it
+    /// are regenerated.
+    ///
+    /// A viewport move / pan / zoom / twist changes where model geometry lands
+    /// on the sheet without touching that geometry, so nothing in the ordinary
+    /// entity-change path would notice. Every reference that looks through a
+    /// viewport carries that viewport's handle as `xrefs[0]`, so announcing the
+    /// viewport itself is all that is needed — the existing dependency lookup
+    /// in `refresh_associative_dimensions` finds the associations from there.
+    pub fn notify_viewport_changed(&mut self, viewport: Handle) {
+        if matches!(
+            self.document.get_entity(viewport),
+            Some(EntityType::Viewport(_))
+        ) {
+            self.bump_entities(&[(viewport, ChangeKind::Modified)]);
         }
     }
 
@@ -962,31 +1527,100 @@ impl Scene {
                 let AssociativeData::DimensionAssociation(association) = &object.data else {
                     return None;
                 };
+                // Any link in a chain counts: the source entity, an INSERT on
+                // the block path, or the viewport the reference looks through
+                // (that last one is how a pan / zoom / twist of a layout
+                // viewport reaches the dimensions drawn through it).
                 association
                     .references
                     .iter()
                     .flatten()
-                    .any(|reference| reference.xrefs.iter().any(|handle| changed.contains(handle)))
+                    .any(|reference| {
+                        reference
+                            .xrefs
+                            .iter()
+                            .chain(reference.intersection_objects.iter())
+                            .any(|handle| changed.contains(handle))
+                    })
                     .then_some(association.clone())
             })
             .collect();
 
         let mut refreshed = Vec::new();
         for association in associations {
-            let resolved: [Option<Vector3>; 4] = std::array::from_fn(|index| {
-                association.references[index]
-                    .first()
-                    .and_then(|reference| resolve_reference(self, reference))
+            // Two passes. PERPENDICULAR and TANGENT are measured *from* the
+            // other definition point, so the independent references have to
+            // land first; a dimension with two dependent references keeps its
+            // old points as the from-points, which is stable because they were
+            // valid the last time round.
+            let mut resolved: [Option<ResolvedReference>; 4] = std::array::from_fn(|index| {
+                let reference = association.references[index].first()?;
+                if chain::needs_from_point(reference.osnap_type) {
+                    return None;
+                }
+                resolve_reference_chain(self, reference, None).ok()
             });
+            let previous = self
+                .document
+                .get_entity(association.dimension)
+                .and_then(|entity| match entity {
+                    EntityType::Dimension(dimension) => {
+                        Some(dimension_reference_points(dimension))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            for index in 0..resolved.len() {
+                let Some(reference) = association.references[index].first() else {
+                    continue;
+                };
+                if !chain::needs_from_point(reference.osnap_type) {
+                    continue;
+                }
+                // The other point: freshly resolved where possible, else the
+                // one the dimension is currently drawn with.
+                let from = (0..resolved.len())
+                    .filter(|other| *other != index)
+                    .find_map(|other| {
+                        resolved[other]
+                            .map(|value| value.space)
+                            .or_else(|| previous.get(other).copied())
+                    });
+                resolved[index] = resolve_reference_chain(self, reference, from).ok();
+            }
+            // The map of the first live reference governs how the whole
+            // dimension is placed and measured — all of a dimension's points
+            // are in one space.
+            let map = resolved
+                .iter()
+                .flatten()
+                .next()
+                .and_then(|value| value.viewport)
+                .and_then(|handle| self.viewport_frame(handle))
+                .map(|frame| ChainMap {
+                    transform: Transform::identity(),
+                    frame: Some(frame),
+                })
+                .unwrap_or_else(ChainMap::identity);
+            let model_points: [Option<Vector3>; 4] =
+                std::array::from_fn(|index| resolved[index].map(|value| value.model));
+            let resolved: [Option<Vector3>; 4] =
+                std::array::from_fn(|index| resolved[index].map(|value| value.space));
+
             let radial_source = association.references[0].first().and_then(|reference| {
-                let source = *reference.xrefs.first()?;
-                let entity = self.document.get_entity(source)?;
+                let walked = chain::walk_chain(&self.document, &reference.xrefs).ok()?;
+                let entity = self.document.get_entity(walked.entity)?;
                 let radial = radial_source_for_marker(entity, reference.main_gs_marker)?;
-                Some((radial, reference.osnap_distance))
+                // Mapped once, here: everything the match arms below build out
+                // of it then lands in the dimension's own space.
+                Some((
+                    chain_map(self, &walked).map_radial(radial),
+                    reference.osnap_distance,
+                ))
             });
             let arc_source = association.references[0].first().and_then(|reference| {
-                let source = *reference.xrefs.first()?;
-                let entity = self.document.get_entity(source)?;
+                let walked = chain::walk_chain(&self.document, &reference.xrefs).ok()?;
+                let entity = self.document.get_entity(walked.entity)?;
                 let segment = match reference.main_gs_marker {
                     -3 => 0,
                     POLYLINE_ARC_CENTER_MARKER => {
@@ -994,11 +1628,32 @@ impl Scene {
                     }
                     _ => return None,
                 };
-                radial_source_for_marker(entity, segment)
+                let radial = radial_source_for_marker(entity, segment)?;
+                Some(chain_map(self, &walked).map_radial(radial))
             });
             if radial_source.is_none() && resolved.iter().all(Option::is_none) {
                 continue;
             }
+            if self.is_recording_undo() {
+                let before = self.document.get_entity_arc(association.dimension);
+                self.record_undo_before(association.dimension, before);
+            }
+            // The user's DIMLFAC override travels with the dimension (PR2
+            // persists it when it creates a viewport dimension); split it from
+            // the viewport compensation so the compensation is applied exactly
+            // once, on the model length, and never again on the paper one.
+            let scale = MeasurementScale::from_dimlfac(
+                self.document
+                    .get_entity(association.dimension)
+                    .and_then(|entity| {
+                        crate::entities::dim_override::real(
+                            &entity.common().extended_data,
+                            crate::entities::dim_override::DIMLFAC,
+                        )
+                    })
+                    .unwrap_or(0.0),
+                map.frame.as_ref(),
+            );
             let Some(EntityType::Dimension(dimension)) =
                 self.document.get_entity_mut(association.dimension)
             else {
@@ -1006,22 +1661,45 @@ impl Scene {
             };
             match dimension {
                 Dimension::Linear(linear) => {
+                    // The sheet annotation the user placed — the dimension
+                    // line's standoff and, when they dragged it, the text — is
+                    // held relative to the measured points. Carry it by the
+                    // centroid shift so an edit to the source keeps the
+                    // drafting the user did instead of collapsing it.
+                    let carry = centroid_shift(
+                        [Some(linear.first_point), Some(linear.second_point)],
+                        [resolved[0], resolved[1]],
+                    );
                     if let Some(point) = resolved[0] {
                         linear.first_point = point;
                     }
                     if let Some(point) = resolved[1] {
                         linear.second_point = point;
                     }
+                    linear.definition_point = linear.definition_point + carry;
                     linear.base.definition_point = linear.definition_point;
+                    if linear.base.text_user_positioned {
+                        linear.base.text_middle_point = linear.base.text_middle_point + carry;
+                        linear.base.insertion_point = linear.base.insertion_point + carry;
+                    }
                 }
                 Dimension::Aligned(aligned) => {
+                    let carry = centroid_shift(
+                        [Some(aligned.first_point), Some(aligned.second_point)],
+                        [resolved[0], resolved[1]],
+                    );
                     if let Some(point) = resolved[0] {
                         aligned.first_point = point;
                     }
                     if let Some(point) = resolved[1] {
                         aligned.second_point = point;
                     }
+                    aligned.definition_point = aligned.definition_point + carry;
                     aligned.base.definition_point = aligned.definition_point;
+                    if aligned.base.text_user_positioned {
+                        aligned.base.text_middle_point = aligned.base.text_middle_point + carry;
+                        aligned.base.insertion_point = aligned.base.insertion_point + carry;
+                    }
                 }
                 Dimension::Angular3Pt(angular) => {
                     if let Some(point) = resolved[0] {
@@ -1219,11 +1897,70 @@ impl Scene {
                 Dimension::Linear(linear) => linear_measurement(linear),
                 _ => dimension.measurement(),
             };
+            // A dimension drawn on the sheet through a viewport has just been
+            // rebuilt from *paper* points, so measuring those gives the paper
+            // length. The number it shows is the model one: take it from the
+            // model points the same references resolved to, and apply only the
+            // user's DIMLFAC on top (`model_factor`) — the viewport
+            // compensation is already inherent in having measured in model
+            // space, and applying it again is the double-scaling this whole
+            // three-PR effort exists to stop.
+            let measurement = match (map.frame.as_ref(), &*dimension) {
+                (Some(_), Dimension::Linear(_) | Dimension::Aligned(_)) => {
+                    match (model_points[0], model_points[1]) {
+                        (Some(first), Some(second)) => {
+                            let raw = match &*dimension {
+                                // Rotated linear measures only along its axis.
+                                Dimension::Linear(linear) => {
+                                    axis_distance(first, second, linear.rotation)
+                                }
+                                _ => first.distance(&second),
+                            };
+                            raw * scale.model_factor()
+                        }
+                        _ => measurement,
+                    }
+                }
+                _ => measurement,
+            };
             dimension.base_mut().actual_measurement = measurement;
             refreshed.push((association.dimension, ChangeKind::Modified));
         }
         refreshed
     }
+}
+
+/// Distance between two points measured along the direction `rotation`.
+///
+/// The rotated-linear rule, evaluated in whatever space the two points are in
+/// — the same formula [`linear_measurement`] applies on the sheet, reused for
+/// the model points a trans-space dimension measures.
+fn axis_distance(first: Vector3, second: Vector3, rotation: f64) -> f64 {
+    let axis = [rotation.cos(), rotation.sin()];
+    ((second.x - first.x) * axis[0] + (second.y - first.y) * axis[1]).abs()
+}
+
+/// How far the midpoint of a dimension's measured points moved.
+///
+/// Used to carry the sheet annotation — the dimension line's standoff and a
+/// user-dragged text position — along with the geometry. Slots that did not
+/// resolve keep their old point, so a one-ended edit shifts the annotation by
+/// half the movement, which is what keeps the dimension line centred.
+fn centroid_shift(before: [Option<Vector3>; 2], after: [Option<Vector3>; 2]) -> Vector3 {
+    let mut delta = Vector3::new(0.0, 0.0, 0.0);
+    let mut count = 0.0;
+    for index in 0..2 {
+        if let (Some(old), Some(new)) = (before[index], after[index]) {
+            delta = delta + (new - old);
+            count += 1.0;
+        }
+    }
+    if count == 0.0 {
+        return Vector3::new(0.0, 0.0, 0.0);
+    }
+    // Averaged over the slots that actually moved, not over both, so a
+    // dimension with one broken reference still tracks the live one.
+    Vector3::new(delta.x / count, delta.y / count, delta.z / count)
 }
 
 fn linear_measurement(linear: &acadrust::entities::DimensionLinear) -> f64 {
