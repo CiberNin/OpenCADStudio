@@ -9,9 +9,6 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::io::pdf_export;
-use crate::io::plot_style::PlotStyleTable;
-use crate::scene::model::hatch_model::HatchModel;
-use crate::io::pdf_export::PlotWire;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn temp_pdf_path(kind: &str) -> std::path::PathBuf {
@@ -50,8 +47,6 @@ pub struct PrintOptions {
     /// setting wins, so the field is legitimately unread there.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub quality: Option<String>,
-    /// Controls applied while building the intermediate PDF.
-    pub render: crate::io::pdf_export::PdfPlotOptions,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -60,19 +55,8 @@ pub fn list_printers() -> Vec<String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(clippy::too_many_arguments)]
 pub async fn print_wires_with(
-    _wires: std::sync::Arc<Vec<PlotWire>>,
-    _hatches: Vec<HatchModel>,
-    _wipeouts: Vec<HatchModel>,
-    _paper_w: f64,
-    _paper_h: f64,
-    _offset_x: f64,
-    _offset_y: f64,
-    _rotation_deg: i32,
-    _scale: f32,
-    _clip: Option<(f32, f32, f32, f32)>,
-    _plot_style: Option<PlotStyleTable>,
+    _page: crate::io::pdf_export::PdfPageInput,
     _opts: PrintOptions,
 ) -> Result<String, String> {
     Err("Printing is not available in the web version.".into())
@@ -304,46 +288,18 @@ pub fn open_printer_properties(_printer: Option<&str>) -> Result<(), String> {
     Err("Printer properties are not available in the web version.".into())
 }
 
-/// Like [`print_wires`] but honours a [`PrintOptions`] bundle (printer, copies,
-/// grayscale, quality, DPI).
+/// Render a page and send it to the selected printer.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 pub async fn print_wires_with(
-    wires: std::sync::Arc<Vec<PlotWire>>,
-    hatches: Vec<HatchModel>,
-    wipeouts: Vec<HatchModel>,
-    paper_w: f64,
-    paper_h: f64,
-    offset_x: f64,
-    offset_y: f64,
-    rotation_deg: i32,
-    scale: f32,
-    clip: Option<(f32, f32, f32, f32)>,
-    plot_style: Option<PlotStyleTable>,
+    page: crate::io::pdf_export::PdfPageInput,
     opts: PrintOptions,
 ) -> Result<String, String> {
     let tmp_path = temp_pdf_path("print");
-    pdf_export::export_pdf(
-        &wires,
-        &hatches,
-        &wipeouts,
-        paper_w,
-        paper_h,
-        offset_x,
-        offset_y,
-        rotation_deg,
-        scale,
-        clip,
-        &tmp_path,
-        plot_style.as_ref(),
-        opts.render,
-    )?;
+    pdf_export::export_pdf(&page, &tmp_path)?;
     dispatch_to_printer_opts(&tmp_path, &opts)
 }
 
-/// Send an already-rendered PDF to a printer with [`PrintOptions`]. Used for
-/// clipped window plots, whose PDF is built with a scale + clip the plain
-/// `print_wires_with` path doesn't expose.
+/// Send an already-rendered PDF to the selected printer.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn print_existing_pdf(path: &std::path::Path, opts: &PrintOptions) -> Result<String, String> {
     dispatch_to_printer_opts(path, opts)
