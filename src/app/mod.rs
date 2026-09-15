@@ -2403,6 +2403,10 @@ pub enum Message {
     /// Prefill the command line for Find & Replace across references
     /// (`XREF Path Find <old> <new>`); the CLI parses and runs it.
     XrefFindReplacePrompt,
+    /// Pick a new path for a specific row index.
+    XrefRowPathPick(usize),
+    /// Prefill the command line for Find & Replace for a specific row index.
+    XrefRowFindReplacePrompt(usize),
     XrefRowChangePathEnter,
     XrefRowChangePathLeave,
     LayerToggleVisible(usize),

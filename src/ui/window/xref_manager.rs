@@ -1478,38 +1478,197 @@ fn menu_item(label: String, msg: Option<Message>, gate: Option<String>) -> Eleme
     }
 }
 
+/// Wrapper that publishes a right-click message before delegating to child
+/// (which may capture right-clicks, e.g. `ContextMenu`).
+struct RightClickArea<'a> {
+    child: Element<'a, Message>,
+    on_right_press: Message,
+}
+
+impl<'a> RightClickArea<'a> {
+    pub fn new(child: impl Into<Element<'a, Message>>, on_right_press: Message) -> Self {
+        Self {
+            child: child.into(),
+            on_right_press,
+        }
+    }
+}
+
+impl<'a> iced_core::Widget<Message, Theme, iced::Renderer> for RightClickArea<'a> {
+    fn diff(&mut self, tree: &mut iced_core::widget::Tree) {
+        tree.diff_children(std::slice::from_mut(&mut self.child));
+    }
+
+    fn size(&self) -> iced::Size<Length> {
+        self.child.as_widget().size()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut iced_core::widget::Tree,
+        renderer: &iced::Renderer,
+        limits: &iced_core::layout::Limits,
+    ) -> iced_core::layout::Node {
+        self.child
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut iced_core::widget::Tree,
+        event: &iced_core::Event,
+        layout: iced_core::Layout<'_>,
+        cursor: iced_core::mouse::Cursor,
+        renderer: &iced::Renderer,
+        shell: &mut iced_core::Shell<'_, Message>,
+        viewport: &iced::Rectangle,
+    ) {
+        if let iced_core::Event::Mouse(iced_core::mouse::Event::ButtonPressed(
+            iced_core::mouse::Button::Right,
+        )) = event
+        {
+            if cursor.is_over(layout.bounds()) {
+                shell.publish(self.on_right_press.clone());
+            }
+        }
+        self.child.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &iced_core::widget::Tree,
+        layout: iced_core::Layout<'_>,
+        cursor: iced_core::mouse::Cursor,
+        viewport: &iced::Rectangle,
+        renderer: &iced::Renderer,
+    ) -> iced_core::mouse::Interaction {
+        self.child
+            .as_widget()
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut iced_core::widget::Tree,
+        layout: iced_core::Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn iced_core::widget::Operation,
+    ) {
+        self.child
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn draw(
+        &self,
+        tree: &iced_core::widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &iced_core::renderer::Style,
+        layout: iced_core::Layout<'_>,
+        cursor: iced_core::mouse::Cursor,
+        viewport: &iced::Rectangle,
+    ) {
+        self.child.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut iced_core::widget::Tree,
+        layout: iced_core::Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &iced::Rectangle,
+        translation: iced::Vector,
+    ) -> Option<iced_core::overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        self.child.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+impl<'a> From<RightClickArea<'a>> for Element<'a, Message> {
+    fn from(widget: RightClickArea<'a>) -> Self {
+        Element::new(widget)
+    }
+}
+
+const MENU_ROW_H: f32 = 24.0;
+const MENU_SEP_H: f32 = 5.0;
+const MENU_PADDING: f32 = 4.0;
+const MENU_SPACING: f32 = 1.0;
+
 /// One right-click menu row, styled like the model-space context menu:
-/// borderless subtle text rows, not toolbar buttons.
+/// borderless subtle text rows. Hovering a regular row dismisses any open flyout.
 fn menu_row(label: String, msg: Message) -> Element<'static, Message> {
+    mouse_area(
+        button(text(label).size(12))
+            .on_press(msg)
+            .style(button::subtle)
+            .padding([4, 12])
+            .height(Length::Fixed(MENU_ROW_H))
+            .width(Fill),
+    )
+    .on_enter(Message::XrefRowChangePathLeave)
+    .into()
+}
+
+/// One flyout submenu row: does not close the flyout on hover.
+fn submenu_row(label: String, msg: Message) -> Element<'static, Message> {
     button(text(label).size(12))
         .on_press(msg)
         .style(button::subtle)
         .padding([4, 12])
+        .height(Length::Fixed(MENU_ROW_H))
         .width(Fill)
         .into()
 }
 
 fn menu_separator() -> Element<'static, Message> {
-    container(iced::widget::Space::new().height(Length::Fixed(1.0)))
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.palette().background.neutral.color)),
-            ..Default::default()
-        })
-        .padding([0, 8])
-        .width(Fill)
-        .into()
+    container(
+        container(iced::widget::Space::new().height(Length::Fixed(1.0)))
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(theme.palette().background.neutral.color)),
+                ..Default::default()
+            })
+            .width(Fill),
+    )
+    .padding([2, 8])
+    .height(Length::Fixed(MENU_SEP_H))
+    .width(Fill)
+    .into()
 }
 
 /// Per-row right-click menu. Eight items exactly: universal tools +
 /// path tools. No Bind, no Attach/Overlay — those are DWG-only and
 /// hidden entirely. Change Path Type shows a right triangle and a
-/// second list in front with the 3 sub-options on hover.
+/// second list adjacent to "Change Path Type" on hover.
 fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Message> {
     let item = |label: &str, op: XrefPaletteOp| -> Element<'static, Message> {
         menu_row(label.to_string(), Message::XrefRowOp(index, op))
     };
     let pathtype_item = |label: &str, pt: Pathtype| -> Element<'static, Message> {
-        menu_row(
+        submenu_row(
             label.to_string(),
             Message::XrefRowOp(index, XrefPaletteOp::Pathtype(pt)),
         )
@@ -1523,12 +1682,29 @@ fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Messag
             .align_y(iced::Center)
             .spacing(8),
         )
+        .style(move |theme: &Theme| {
+            let palette = theme.palette();
+            let bg = if change_path_open {
+                Some(Background::Color(palette.background.weak.color))
+            } else {
+                None
+            };
+            container::Style {
+                background: bg,
+                border: Border {
+                    radius: 2.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
         .padding([4, 12])
+        .height(Length::Fixed(MENU_ROW_H))
         .width(Fill),
     )
     .on_enter(Message::XrefRowChangePathEnter)
-    .on_exit(Message::XrefRowChangePathLeave)
     .into();
+
     let main: Element<'static, Message> = container(
         column![
             item(&crate::t!("Open").into_owned(), XrefPaletteOp::Open),
@@ -1541,15 +1717,15 @@ fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Messag
             menu_separator(),
             menu_row(
                 crate::t!("Select New Path").into_owned(),
-                Message::XrefPathPick
+                Message::XrefRowPathPick(index),
             ),
             menu_row(
                 crate::t!("Find and Replace...").into_owned(),
-                Message::XrefFindReplacePrompt
+                Message::XrefRowFindReplacePrompt(index),
             ),
         ]
-        .spacing(1)
-        .padding(4),
+        .spacing(MENU_SPACING)
+        .padding(MENU_PADDING),
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
@@ -1564,9 +1740,15 @@ fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Messag
     })
     .width(Length::Fixed(220.0))
     .into();
+
     if !change_path_open {
         return main;
     }
+
+    // Top offset so the flyout top border aligns directly with the "Change Path Type" row.
+    // 5 items * 24.0 + 5 * 1.0 (spacing) + 5.0 (separator) + 1.0 (spacing) + 4.0 (container padding) = 135.0
+    let flyout_offset = MENU_PADDING + 5.0 * MENU_ROW_H + 5.0 * MENU_SPACING + MENU_SEP_H + MENU_SPACING;
+
     let flyout: Element<'static, Message> = mouse_area(
         container(
             column![
@@ -1580,8 +1762,8 @@ fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Messag
                 ),
                 pathtype_item(&crate::t!("Remove Path").into_owned(), Pathtype::None),
             ]
-            .spacing(1)
-            .padding(4),
+            .spacing(MENU_SPACING)
+            .padding(MENU_PADDING),
         )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
@@ -1599,7 +1781,16 @@ fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Messag
     .on_enter(Message::XrefRowChangePathEnter)
     .on_exit(Message::XrefRowChangePathLeave)
     .into();
-    row![main, flyout].spacing(4).align_y(iced::alignment::Vertical::Top).into()
+
+    let flyout_column = column![
+        iced::widget::Space::new().height(Length::Fixed(flyout_offset)),
+        flyout,
+    ];
+
+    row![main, flyout_column]
+        .spacing(0)
+        .align_y(iced::alignment::Vertical::Top)
+        .into()
 }
 
 fn xref_row<'a>(
@@ -1692,9 +1883,9 @@ fn xref_row<'a>(
             .height(Length::Fixed(ROW_H))
             .width(Fill),
     )
-    .on_press(Message::XrefManagerSelect(index))
-    .on_right_press(Message::XrefRowRightClick(index));
-    iced_aw::ContextMenu::new(row, move || row_menu_for(index, change_path_open)).into()
+    .on_press(Message::XrefManagerSelect(index));
+    let cm = iced_aw::ContextMenu::new(row, move || row_menu_for(index, change_path_open));
+    RightClickArea::new(cm, Message::XrefRowRightClick(index)).into()
 }
 
 /// One tree-mode row: indent + optional expand arrow + file icon + name.
@@ -1753,9 +1944,9 @@ fn tree_row(
             })
             .width(Fill),
     )
-    .on_press(Message::XrefManagerSelect(index))
-    .on_right_press(Message::XrefRowRightClick(index));
-    iced_aw::ContextMenu::new(row, move || row_menu_for(index, change_path_open)).into()
+    .on_press(Message::XrefManagerSelect(index));
+    let cm = iced_aw::ContextMenu::new(row, move || row_menu_for(index, change_path_open));
+    RightClickArea::new(cm, Message::XrefRowRightClick(index)).into()
 }
 
 /// Tree-mode host root: home icon + name with the current-drawing marker.

@@ -2163,6 +2163,7 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::XrefRowRightClick(index) => {
+                self.xref_manager.row_change_path_open = false;
                 self.xref_manager.right_click_select(index);
                 Task::none()
             }
@@ -2237,6 +2238,7 @@ impl OpenCADStudio {
                 self.xref_manager.attach_open = false;
                 self.xref_manager.refresh_open = false;
                 self.xref_manager.path_open = false;
+                self.xref_manager.row_change_path_open = false;
                 Task::none()
             }
             Message::XrefPathPick => Task::perform(
@@ -2307,12 +2309,14 @@ impl OpenCADStudio {
                 // Open is not a palette op — it navigates to the file.
                 if op == crate::ui::window::xref_manager::XrefPaletteOp::Open {
                     self.xref_manager.right_click_select(index);
+                    self.xref_manager.row_change_path_open = false;
                     if let Some(entry) = self.xref_manager.entries.get(index) {
                         if let Some(found) = entry.found_at.clone() {
                             let is_dwg = found.to_ascii_lowercase().ends_with(".dwg")
                                 || found.to_ascii_lowercase().ends_with(".dxf");
+                            self.command_line.push_output(crate::tf!("XOPEN: opening \"{}\".", found).as_ref());
                             if is_dwg {
-                                return Task::done(Message::OpenRecent(std::path::PathBuf::from(found)));
+                                return self.update(Message::OpenRecent(std::path::PathBuf::from(found)));
                             } else {
                                 let _ = open::that_detached(&found);
                             }
@@ -2324,18 +2328,48 @@ impl OpenCADStudio {
                     }
                     return Task::none();
                 }
-                // For XrefPathPick the row menu just sets the anchor; the
-                // picker's result handler does the work. Don't run it through
-                // xref_manager_op.
+                // Attach prompts the file dialog to pick a drawing to attach.
                 if matches!(op, crate::ui::window::xref_manager::XrefPaletteOp::Attach) {
                     self.xref_manager.right_click_select(index);
-                    return Task::done(Message::XAttachPick);
+                    self.xref_manager.row_change_path_open = false;
+                    self.command_line.push_output(crate::t!("XATTACH").as_ref());
+                    return self.update(Message::XAttachPick);
                 }
                 // Row-scoped op: select the row first, then run the op.
                 self.xref_manager.right_click_select(index);
                 self.xref_manager.row_change_path_open = false;
                 self.xref_manager_op(op);
                 Task::none()
+            }
+            Message::XrefRowPathPick(index) => {
+                self.xref_manager.right_click_select(index);
+                self.xref_manager.row_change_path_open = false;
+                self.update(Message::XrefPathPick)
+            }
+            Message::XrefRowFindReplacePrompt(index) => {
+                self.xref_manager.right_click_select(index);
+                self.xref_manager.row_change_path_open = false;
+                let prefill = if let Some(entry) = self.xref_manager.entries.get(index) {
+                    let saved = &entry.saved_path;
+                    if let Some(parent) = std::path::Path::new(saved).parent().and_then(|p| p.to_str()) {
+                        if !parent.is_empty() {
+                            format!("XREF Path Find \"{}\" ", parent)
+                        } else {
+                            "XREF Path Find ".to_string()
+                        }
+                    } else {
+                        "XREF Path Find ".to_string()
+                    }
+                } else {
+                    "XREF Path Find ".to_string()
+                };
+                self.command_line.input = prefill;
+                self.command_line.autocomplete_cursor = None;
+                self.command_line.cancel_history_navigation();
+                self.command_line.push_info(
+                    crate::t!("Specify replacement path: XREF Path Find <old> <new>").as_ref(),
+                );
+                return self.focus_cmd_input();
             }
             Message::XrefRowChangePathEnter => {
                 self.xref_manager.row_change_path_open = true;
