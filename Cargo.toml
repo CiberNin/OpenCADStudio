@@ -57,6 +57,7 @@ lyon_tessellation = "1.0.20"
 
 [dev-dependencies]
 fluent-syntax = "0.12"
+iced_test = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 naga = { version = "27", features = ["wgsl-in"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

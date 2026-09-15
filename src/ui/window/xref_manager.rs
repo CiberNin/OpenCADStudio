@@ -1620,28 +1620,40 @@ const MENU_SPACING: f32 = 1.0;
 
 /// One right-click menu row, styled like the model-space context menu:
 /// borderless subtle text rows. Hovering a regular row dismisses any open flyout.
+///
+/// NOTE: this must stay a SINGLE interactive widget (`mouse_area` alone).
+/// Wrapping a `button` in a `mouse_area` here breaks click delivery inside
+/// the `ContextMenu` overlay: the overlay subtree state (including a button's
+/// press state) is wiped on every view rebuild, so a press → release button
+/// never publishes. `on_press` fires in the press batch itself and needs no
+/// saved state.
 fn menu_row(label: String, msg: Message) -> Element<'static, Message> {
     mouse_area(
-        button(text(label).size(12))
-            .on_press(msg)
-            .style(button::subtle)
+        container(text(label).size(12))
             .padding([4, 12])
             .height(Length::Fixed(MENU_ROW_H))
             .width(Fill),
     )
+    .on_press(msg)
     .on_enter(Message::XrefRowChangePathLeave)
+    .interaction(iced::mouse::Interaction::Pointer)
     .into()
 }
 
-/// One flyout submenu row: does not close the flyout on hover.
+/// One flyout submenu row: does not close the flyout on hover. Same
+/// single-`mouse_area` rule as [`menu_row`] — no nested `button`.
 fn submenu_row(label: String, msg: Message) -> Element<'static, Message> {
-    button(text(label).size(12))
-        .on_press(msg)
-        .style(button::subtle)
-        .padding([4, 12])
-        .height(Length::Fixed(MENU_ROW_H))
-        .width(Fill)
-        .into()
+    mouse_area(
+        container(text(label).size(12))
+            .padding([4, 12])
+            .height(Length::Fixed(MENU_ROW_H))
+            .width(Fill),
+    )
+    .on_press(msg)
+    .on_enter(Message::XrefRowChangePathEnter)
+    .on_exit(Message::XrefRowChangePathLeave)
+    .interaction(iced::mouse::Interaction::Pointer)
+    .into()
 }
 
 fn menu_separator() -> Element<'static, Message> {
@@ -1749,37 +1761,37 @@ fn row_menu_for(index: usize, change_path_open: bool) -> Element<'static, Messag
     // 5 items * 24.0 + 5 * 1.0 (spacing) + 5.0 (separator) + 1.0 (spacing) + 4.0 (container padding) = 135.0
     let flyout_offset = MENU_PADDING + 5.0 * MENU_ROW_H + 5.0 * MENU_SPACING + MENU_SEP_H + MENU_SPACING;
 
-    let flyout: Element<'static, Message> = mouse_area(
-        container(
-            column![
-                pathtype_item(
-                    &crate::t!("Make Absolute").into_owned(),
-                    Pathtype::Full
-                ),
-                pathtype_item(
-                    &crate::t!("Make Relative").into_owned(),
-                    Pathtype::Relative
-                ),
-                pathtype_item(&crate::t!("Remove Path").into_owned(), Pathtype::None),
-            ]
-            .spacing(MENU_SPACING)
-            .padding(MENU_PADDING),
-        )
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.base.color,
-            )),
-            border: Border {
-                color: theme.palette().background.neutral.color,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(180.0)),
+    // Plain container on purpose: each submenu row tracks hover itself
+    // (`on_enter` keeps the flyout open, `on_exit` closes it). Wrapping the
+    // clickable rows in an outer `mouse_area` would nest interactives and
+    // break click delivery inside the `ContextMenu` overlay — see `menu_row`.
+    let flyout: Element<'static, Message> = container(
+        column![
+            pathtype_item(
+                &crate::t!("Make Absolute").into_owned(),
+                Pathtype::Full
+            ),
+            pathtype_item(
+                &crate::t!("Make Relative").into_owned(),
+                Pathtype::Relative
+            ),
+            pathtype_item(&crate::t!("Remove Path").into_owned(), Pathtype::None),
+        ]
+        .spacing(MENU_SPACING)
+        .padding(MENU_PADDING),
     )
-    .on_enter(Message::XrefRowChangePathEnter)
-    .on_exit(Message::XrefRowChangePathLeave)
+    .style(|theme: &Theme| container::Style {
+        background: Some(Background::Color(
+            theme.palette().background.base.color,
+        )),
+        border: Border {
+            color: theme.palette().background.neutral.color,
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    })
+    .width(Length::Fixed(180.0))
     .into();
 
     let flyout_column = column![
@@ -2592,5 +2604,130 @@ mod tests {
         panel.refresh(&doc, &dir, &unloaded, &no_prev, "host", "");
         assert_eq!(panel.previews.len(), 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Headless click-delivery tests for the row context menu ──────────
+    //
+    // These drive the REAL iced runtime through the `iced_test` headless
+    // simulator — including the `iced_aw::ContextMenu` overlay — and prove
+    // that clicks on menu rows publish their messages.
+
+    type MenuSimulator = iced_test::simulator::Simulator<'static, Message>;
+
+    /// Builds the shipped row menu inside a real `ContextMenu` overlay and
+    /// opens it with a synthetic right-click on the underlay, mirroring a
+    /// user right-clicking a reference row.
+    fn open_row_menu(change_path_open: bool) -> MenuSimulator {
+        let mut ui = iced_test::simulator(iced_aw::ContextMenu::new(
+            text("anchor"),
+            move || row_menu_for(0, change_path_open),
+        ));
+        let anchor = ui.find("anchor").expect("anchor underlay present");
+        let center = anchor
+            .visible_bounds()
+            .expect("anchor visible")
+            .center();
+        ui.point_at(center);
+        ui.simulate([iced_core::Event::Mouse(iced::mouse::Event::ButtonPressed(
+            iced::mouse::Button::Right,
+        ))]);
+        ui
+    }
+
+    fn published_ops(ui: MenuSimulator) -> Vec<(usize, XrefPaletteOp)> {
+        let mut ops = Vec::new();
+        for message in ui.into_messages() {
+            if let Message::XrefRowOp(index, op) = message {
+                ops.push((index, op));
+            }
+        }
+        ops
+    }
+
+    #[test]
+    fn context_menu_row_click_delivers_op() {
+        let unload = crate::t!("Unload").into_owned();
+        let mut ui = open_row_menu(false);
+        ui.click(unload.as_str())
+            .expect("Unload row is clickable inside the overlay");
+        assert!(
+            published_ops(ui).contains(&(0, XrefPaletteOp::Unload)),
+            "clicking Unload must publish XrefRowOp(0, Unload)"
+        );
+    }
+
+    #[test]
+    fn hover_change_path_row_requests_flyout() {
+        // The "Change Path Type >" row reveals the second menu on hover.
+        let label = crate::t!("Change Path Type").into_owned();
+        let mut ui = open_row_menu(false);
+        let target = ui
+            .find(label.as_str())
+            .expect("Change Path Type row present in overlay");
+        let center = target
+            .visible_bounds()
+            .expect("row visible")
+            .center();
+        ui.point_at(center);
+        ui.simulate([iced_core::Event::Mouse(iced::mouse::Event::CursorMoved {
+            position: center,
+        })]);
+        let mut saw_enter = false;
+        for message in ui.into_messages() {
+            if matches!(message, Message::XrefRowChangePathEnter) {
+                saw_enter = true;
+            }
+        }
+        assert!(
+            saw_enter,
+            "hovering Change Path Type must publish XrefRowChangePathEnter (opens the second menu)"
+        );
+    }
+
+    #[test]
+    fn context_menu_flyout_click_delivers_pathtype_op() {
+        let make_absolute = crate::t!("Make Absolute").into_owned();
+        let mut ui = open_row_menu(true);
+        ui.click(make_absolute.as_str())
+            .expect("flyout row is clickable inside the overlay");
+        assert!(
+            published_ops(ui).contains(&(0, XrefPaletteOp::Pathtype(Pathtype::Full))),
+            "clicking Make Absolute must publish the Full-pathtype op"
+        );
+    }
+
+    #[test]
+    fn context_menu_overlay_subtree_state_is_reset_every_view() {
+        // Root-cause pin. `iced_aw::ContextMenu` keeps its overlay `Element`
+        // in the WIDGET STRUCT (`overlay_instance`), which is rebuilt on every
+        // `view()` — not in persistent widget `Tree` state. So `diff` takes
+        // the `None` arm below on every app update cycle and wipes the whole
+        // overlay subtree state:
+        //
+        //   match self.overlay_instance.as_mut() {
+        //       Some(overlay) => tree.children[1].diff(overlay),
+        //       None => tree.children[1] = Tree::empty(),   // <-- always hit
+        //   }
+        //
+        // Consequence: a `button` inside the menu sets `is_pressed` on press
+        // and only publishes on RELEASE — but any message in between (ticks,
+        // hover, clock) rebuilds the view, wipes `is_pressed`, and the
+        // release publishes nothing ("buttons do nothing"). Menu rows must
+        // therefore publish on PRESS via a single `mouse_area` (see
+        // `menu_row`), which needs no transient state. If this test ever
+        // fails, iced_aw learned to persist overlay state and rows may use
+        // buttons again.
+        use iced_core::Widget;
+
+        let mut menu = iced_aw::ContextMenu::new(text("anchor"), || row_menu_for(0, false));
+        let mut tree = iced_core::widget::Tree::new(
+            &menu as &dyn Widget<Message, iced::Theme, iced::Renderer>,
+        );
+        menu.diff(&mut tree);
+        assert_eq!(tree.children.len(), 2);
+        assert!(
+            tree.children[1].children.is_empty(),
+            "fresh ContextMenu widget must start with an empty overlay subtree"
+        );
     }
 }
