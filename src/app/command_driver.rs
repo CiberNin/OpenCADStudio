@@ -102,6 +102,10 @@ impl OpenCADStudio {
         self.tabs[i].scene.clear_preview_wire();
         self.tabs[i].snap_result = None;
         self.last_point = None;
+        // Points collected in the space being left are meaningless in the new
+        // one (PR1).
+        self.clear_accepted_snaps();
+        self.pending_click_snap = None;
         self.snapper.from_point = None;
         self.snapper.clear_tracking();
         self.otrack_active = None;
@@ -368,6 +372,11 @@ impl OpenCADStudio {
             if !self.command_point_allowed(i, *point) {
                 return Task::none();
             }
+            // Typed / dynamic-input / headless points carry no snap, but the
+            // accepted-snap list must stay index-parallel with the points the
+            // command collects (PR1). Interactive picks record themselves in
+            // the click handler and never reach here.
+            self.record_accepted_snap(None, None, *point);
         }
         if default_start {
             let StepInput::Point(point) = &input else {
@@ -1590,9 +1599,7 @@ impl OpenCADStudio {
                 };
                 if is_associative_dimension && association_enabled {
                     if let Some(handle) = committed {
-                        let sources = self.tabs[i]
-                            .scene
-                            .infer_dimension_sources(handle);
+                        let sources = self.infer_dimension_sources_guarded(i, handle);
                         self.tabs[i]
                             .scene
                             .attach_dimension_association(handle, sources);
@@ -2063,9 +2070,7 @@ impl OpenCADStudio {
                 let committed = self.commit_entity_handle(entity);
                 if is_associative_dimension && association_enabled {
                     if let Some(handle) = committed {
-                        let sources = self.tabs[i]
-                            .scene
-                            .infer_dimension_sources(handle);
+                        let sources = self.infer_dimension_sources_guarded(i, handle);
                         self.tabs[i]
                             .scene
                             .attach_dimension_association(handle, sources);
@@ -2175,9 +2180,7 @@ impl OpenCADStudio {
                                 crate::command::DimensionAssociationInput::Infer(source) => {
                                     let sources: Vec<_> = source.map_or_else(
                                         || {
-                                            self.tabs[i]
-                                                .scene
-                                                .infer_dimension_sources(handle)
+                                            self.infer_dimension_sources_guarded(i, handle)
                                         },
                                         |source| {
                                             if single_source_dimension {
@@ -2302,9 +2305,7 @@ impl OpenCADStudio {
                             crate::command::DimensionAssociationInput::Infer(source) => {
                                 source.map_or_else(
                                     || {
-                                        self.tabs[i]
-                                            .scene
-                                            .infer_dimension_sources(handle)
+                                        self.infer_dimension_sources_guarded(i, handle)
                                             .into_iter()
                                             .map(|source| {
                                                 source.map(
