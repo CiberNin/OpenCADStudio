@@ -109,12 +109,6 @@ pub(super) const TOOLS: &[Tool] = &[
         options: &[],
     },
     Tool {
-        command: "OVERKILL",
-        label: "Delete Duplicate Objects",
-        icon: include_bytes!("../../../assets/icons/modify_overkill.svg"),
-        options: &[],
-    },
-    Tool {
         command: "DRAWORDER_FRONT",
         label: "Draw Order",
         icon: include_bytes!("../../../assets/icons/modify_draworder.svg"),
