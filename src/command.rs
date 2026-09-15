@@ -1237,6 +1237,17 @@ pub enum ExtrudeExtent {
     Path(Handle),
 }
 
+/// One ordered selection used by the Coincident command.  A click can name
+/// either a constraint point on an entity or the entity's whole curve.  Typed
+/// coordinates have no entity handle and are resolved by the host after the
+/// command returns.
+#[derive(Clone, Copy, Debug)]
+pub struct CoincidentPick {
+    pub handle: Option<Handle>,
+    pub point: DVec3,
+    pub whole_curve: bool,
+}
+
 /// Construction options shared by SWEEP creation and its live preview.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SweepOptions {
@@ -1468,13 +1479,20 @@ pub enum CmdResult {
     },
     /// Opens the Auto Constrain settings dialog from the selection prompt.
     OpenAutoConstrainSettings,
-    /// Adds a Coincident constraint between the sub-entity points nearest
-    /// the two picked positions. The host resolves the raw points because
-    /// `CadCommand` has no document access.
+    /// Adds an ordered Coincident relation.  Point/point selections create a
+    /// Coincident constraint; point/curve selections create the corresponding
+    /// point-on-curve relation while retaining Coincident command semantics.
     AddCoincidentConstraint {
-        point_a: DVec3,
-        point_b: DVec3,
+        first: CoincidentPick,
+        second: CoincidentPick,
+        /// Keep the first curve active and accept another point.
+        multiple: bool,
         label: &'static str,
+    },
+    /// Apply only Coincident relations that already exist geometrically in
+    /// the selected set.
+    AddAutoCoincidentConstraints {
+        handles: Vec<Handle>,
     },
     /// Add a persistent `CenterPoint`/`Midpoint`/`PointOnCurve` constraint
     /// (`crate::modules::parametric::point_on_entity`) between one
@@ -2683,6 +2701,8 @@ mod constraint_registry_tests {
         let names = all_registered_command_names();
         for id in [
             "CCONSTRAINT",
+            "GCCOINCIDENT",
+            "GEOMCONSTRAINT",
             "EDCONSTRAINT",
             "CPCONSTRAINT",
             "MPCONSTRAINT",

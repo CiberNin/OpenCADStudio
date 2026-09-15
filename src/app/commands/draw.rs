@@ -1331,9 +1331,16 @@ impl OpenCADStudio {
                 }
             }
 
-            "CCONSTRAINT" => {
+            "CCONSTRAINT" | "GCCOINCIDENT" => {
                 use crate::modules::parametric::CoincidentConstraintCommand;
                 let new_cmd = CoincidentConstraintCommand::new();
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
+            "GEOMCONSTRAINT" => {
+                use crate::modules::parametric::GeomConstraintCommand;
+                let new_cmd = GeomConstraintCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }

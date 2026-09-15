@@ -45,6 +45,7 @@ enum EntityGeom {
     Polyline {
         points: Rc<Vec<GPoint>>,
         straight: Rc<Vec<bool>>,
+        arcs: Rc<Vec<Option<PolylineArc>>>,
         closed: bool,
     },
     Circle(GCircle),
@@ -59,6 +60,12 @@ enum EntityGeom {
         curve: GBSpline,
         control_z: Rc<Vec<f64>>,
     },
+}
+
+#[derive(Clone, Copy)]
+struct PolylineArc {
+    arc: GArc,
+    sweep: f64,
 }
 
 impl EntityGeom {
@@ -91,6 +98,7 @@ impl EntityGeom {
             points,
             straight,
             closed,
+            ..
         } = self
         else {
             return None;
@@ -107,6 +115,13 @@ impl EntityGeom {
             return None;
         };
         Some(GLine { p1, p2 })
+    }
+
+    fn arc_segment(&self, index: usize) -> Option<PolylineArc> {
+        let EntityGeom::Polyline { arcs, .. } = self else {
+            return None;
+        };
+        arcs.get(index).copied().flatten()
     }
 }
 
@@ -131,8 +146,14 @@ fn as_circle_or_line(g: EntityGeom, reference: ParametricRef) -> CircleOrLine {
         EntityGeom::Spline { .. } => CircleOrLine::Other,
         EntityGeom::Polyline { .. } => reference
             .segment_index()
-            .and_then(|index| g.line_segment(index))
-            .map(CircleOrLine::Line)
+            .and_then(|index| {
+                g.line_segment(index)
+                    .map(CircleOrLine::Line)
+                    .or_else(|| {
+                        g.arc_segment(index)
+                            .map(|segment| CircleOrLine::Circle(segment.arc.circle))
+                    })
+            })
             .unwrap_or(CircleOrLine::Other),
     }
 }
@@ -182,42 +203,114 @@ fn register_entity(
             sys.add_param(table.insertion_point.x, false),
             sys.add_param(table.insertion_point.y, false),
         ))),
-        EntityType::LwPolyline(polyline) => Some(EntityGeom::Polyline {
-            points: Rc::new(
-                super::dimension_assoc::source_points(entity)
-                    .into_iter()
-                    .map(|point| {
-                        GPoint::new(sys.add_param(point.x, false), sys.add_param(point.y, false))
+        EntityType::LwPolyline(polyline) => {
+            let source = super::dimension_assoc::source_points(entity);
+            let points: Vec<_> = source
+                .iter()
+                .map(|point| {
+                    GPoint::new(sys.add_param(point.x, false), sys.add_param(point.y, false))
+                })
+                .collect();
+            let arcs = (0..polyline.vertices.len())
+                .map(|index| {
+                    let next = if index + 1 < source.len() {
+                        index + 1
+                    } else if polyline.is_closed {
+                        0
+                    } else {
+                        return None;
+                    };
+                    let bulge = polyline.vertices[index].bulge;
+                    let shape = cadkernel::geom2d::BulgeArc::from_bulge(
+                        [source[index].x, source[index].y],
+                        [source[next].x, source[next].y],
+                        bulge,
+                    )?;
+                    Some(PolylineArc {
+                        arc: GArc {
+                            circle: GCircle {
+                                center: GPoint::new(
+                                    sys.add_param(shape.center[0], false),
+                                    sys.add_param(shape.center[1], false),
+                                ),
+                                rad: sys.add_param(shape.radius, false),
+                            },
+                            start: points[index],
+                            end: points[next],
+                            start_angle: sys.add_param(shape.start_angle, false),
+                            end_angle: sys.add_param(shape.start_angle + shape.sweep, false),
+                        },
+                        sweep: shape.sweep,
                     })
-                    .collect(),
-            ),
-            straight: Rc::new(
-                polyline
-                    .vertices
-                    .iter()
-                    .map(|vertex| vertex.bulge.abs() <= 1e-9)
-                    .collect(),
-            ),
-            closed: polyline.is_closed,
-        }),
-        EntityType::Polyline2D(polyline) => Some(EntityGeom::Polyline {
-            points: Rc::new(
-                super::dimension_assoc::source_points(entity)
-                    .into_iter()
-                    .map(|point| {
-                        GPoint::new(sys.add_param(point.x, false), sys.add_param(point.y, false))
+                })
+                .collect();
+            Some(EntityGeom::Polyline {
+                points: Rc::new(points),
+                straight: Rc::new(
+                    polyline
+                        .vertices
+                        .iter()
+                        .map(|vertex| vertex.bulge.abs() <= 1e-9)
+                        .collect(),
+                ),
+                arcs: Rc::new(arcs),
+                closed: polyline.is_closed,
+            })
+        }
+        EntityType::Polyline2D(polyline) => {
+            let source = super::dimension_assoc::source_points(entity);
+            let points: Vec<_> = source
+                .iter()
+                .map(|point| {
+                    GPoint::new(sys.add_param(point.x, false), sys.add_param(point.y, false))
+                })
+                .collect();
+            let arcs = (0..polyline.vertices.len())
+                .map(|index| {
+                    let next = if index + 1 < source.len() {
+                        index + 1
+                    } else if polyline.is_closed() {
+                        0
+                    } else {
+                        return None;
+                    };
+                    let bulge = polyline.vertices[index].bulge;
+                    let shape = cadkernel::geom2d::BulgeArc::from_bulge(
+                        [source[index].x, source[index].y],
+                        [source[next].x, source[next].y],
+                        bulge,
+                    )?;
+                    Some(PolylineArc {
+                        arc: GArc {
+                            circle: GCircle {
+                                center: GPoint::new(
+                                    sys.add_param(shape.center[0], false),
+                                    sys.add_param(shape.center[1], false),
+                                ),
+                                rad: sys.add_param(shape.radius, false),
+                            },
+                            start: points[index],
+                            end: points[next],
+                            start_angle: sys.add_param(shape.start_angle, false),
+                            end_angle: sys.add_param(shape.start_angle + shape.sweep, false),
+                        },
+                        sweep: shape.sweep,
                     })
-                    .collect(),
-            ),
-            straight: Rc::new(
-                polyline
-                    .vertices
-                    .iter()
-                    .map(|vertex| vertex.bulge.abs() <= 1e-9)
-                    .collect(),
-            ),
-            closed: polyline.is_closed(),
-        }),
+                })
+                .collect();
+            Some(EntityGeom::Polyline {
+                points: Rc::new(points),
+                straight: Rc::new(
+                    polyline
+                        .vertices
+                        .iter()
+                        .map(|vertex| vertex.bulge.abs() <= 1e-9)
+                        .collect(),
+                ),
+                arcs: Rc::new(arcs),
+                closed: polyline.is_closed(),
+            })
+        }
         EntityType::Line(l) => {
             let p1 = GPoint::new(
                 sys.add_param(l.start.x, false),
@@ -437,6 +530,42 @@ fn resolve_constraint_point(
             vec![line.p1.y, line.p2.y],
             vec![0.5, 0.5],
         )));
+        return Some(point);
+    }
+    if let Some(segment) = reference
+        .segment_midpoint_index()
+        .and_then(|index| geometry.arc_segment(index))
+    {
+        let (start, end) = {
+            let store = sys.store();
+            (
+                store.get(segment.arc.start_angle),
+                store.get(segment.arc.end_angle),
+            )
+        };
+        let parameter_value = (start + end) * 0.5;
+        let parameter = sys.add_param(parameter_value, false);
+        sys.add_constraint(Rc::new(CenterOfGravity::new(
+            parameter,
+            vec![segment.arc.start_angle, segment.arc.end_angle],
+            vec![0.5, 0.5],
+        )));
+        let value = cadkernel_constraints::geo::Curve::value(
+            &segment.arc,
+            sys.store(),
+            parameter_value,
+            0.0,
+            None,
+        );
+        let point = GPoint::new(sys.add_param(value.x, false), sys.add_param(value.y, false));
+        let curve = Rc::new(segment.arc);
+        sys.add_constraint(Rc::new(CurveValue::new(
+            point,
+            point.x,
+            curve.clone(),
+            parameter,
+        )));
+        sys.add_constraint(Rc::new(CurveValue::new(point, point.y, curve, parameter)));
         return Some(point);
     }
     if marker != -2 {
@@ -935,8 +1064,22 @@ fn build_constraint(
                 }
                 EntityGeom::Polyline { .. } => b
                     .segment_index()
-                    .and_then(|index| geom.line_segment(index))
-                    .map(|line| vec![Rc::new(PointOnLine::new(p, line)) as Rc<dyn Constraint>])
+                    .and_then(|index| {
+                        geom.line_segment(index)
+                            .map(|line| {
+                                vec![Rc::new(PointOnLine::new(p, line)) as Rc<dyn Constraint>]
+                            })
+                            .or_else(|| {
+                                geom.arc_segment(index).map(|segment| {
+                                    let zero = sys.add_param(0.0, true);
+                                    vec![Rc::new(P2CDistance::new(
+                                        segment.arc.circle,
+                                        p,
+                                        zero,
+                                    )) as Rc<dyn Constraint>]
+                                })
+                            })
+                    })
                     .unwrap_or_default(),
                 EntityGeom::Point(_) => Vec::new(),
             }
@@ -1660,13 +1803,10 @@ fn solve_scope(
                 }
                 EntityGeom::Polyline {
                     points,
-                    straight,
                     closed,
+                    ..
                 } => {
-                    for index in 0..straight.len() {
-                        if !straight[index] {
-                            continue;
-                        }
+                    for index in 0..points.len() {
                         let Some(a) = points.get(index).copied() else {
                             continue;
                         };
@@ -1720,9 +1860,8 @@ fn solve_scope(
     // its endpoint. Not tracked in `owner`: these are solver-internal
     // bookkeeping, never redundant with anything a user-facing constraint
     // could name, so there's no `ConstraintId` for them to report against.
-    for geom in cache.values() {
-        let EntityGeom::Arc(arc) = geom else { continue };
-        let curve = Rc::new(*arc);
+    let add_arc_rules = |sys: &mut System, arc: GArc, sweep: Option<f64>| {
+        let curve = Rc::new(arc);
         sys.add_constraint(Rc::new(CurveValue::new(
             arc.start,
             arc.start.x,
@@ -1747,6 +1886,25 @@ fn solve_scope(
             curve,
             arc.end_angle,
         )));
+        if let Some(sweep) = sweep {
+            let target = sys.add_param(sweep, true);
+            sys.add_constraint(Rc::new(Difference::new(
+                arc.start_angle,
+                arc.end_angle,
+                target,
+            )));
+        }
+    };
+    for geom in cache.values() {
+        match geom {
+            EntityGeom::Arc(arc) => add_arc_rules(&mut sys, *arc, None),
+            EntityGeom::Polyline { arcs, .. } => {
+                for segment in arcs.iter().flatten() {
+                    add_arc_rules(&mut sys, segment.arc, Some(segment.sweep));
+                }
+            }
+            _ => {}
+        }
     }
 
     // A point explicitly edited by a grip, STRETCH, or Properties is the
@@ -1810,6 +1968,66 @@ fn solve_scope(
         sys.add_constraint(Rc::new(Difference::new(el.center.y, el.focus1.y, dy)));
     }
 
+    // The first ordered Coincident selection is the anchor for this solve.
+    // Pin either its addressed point or every defining parameter of its whole
+    // curve temporarily; the relation remains persistent, while these pins do
+    // not enter the drawing's constraint graph.
+    for reference in driven_refs {
+        if !set
+            .constraints
+            .iter()
+            .any(|constraint| constraint.refs.iter().any(|item| item.entity == reference.entity))
+        {
+            continue;
+        }
+        let params_to_pin = if reference.marker.is_some() && reference.segment_index().is_none() {
+            resolve_constraint_point(document, &mut sys, &mut cache, *reference)
+                .map(|point| vec![point.x, point.y])
+                .unwrap_or_default()
+        } else {
+            match resolve_ref(document, &mut sys, &mut cache, *reference) {
+                Some(EntityGeom::Point(point)) => vec![point.x, point.y],
+                Some(EntityGeom::Line(line))
+                | Some(EntityGeom::Ray(line))
+                | Some(EntityGeom::XLine(line)) => {
+                    vec![line.p1.x, line.p1.y, line.p2.x, line.p2.y]
+                }
+                Some(EntityGeom::Polyline { points, .. }) => points
+                    .iter()
+                    .flat_map(|point| [point.x, point.y])
+                    .collect(),
+                Some(EntityGeom::Circle(circle)) => {
+                    vec![circle.center.x, circle.center.y, circle.rad]
+                }
+                Some(EntityGeom::Arc(arc)) => vec![
+                    arc.circle.center.x,
+                    arc.circle.center.y,
+                    arc.circle.rad,
+                    arc.start_angle,
+                    arc.end_angle,
+                ],
+                Some(EntityGeom::Ellipse(ellipse)) => vec![
+                    ellipse.center.x,
+                    ellipse.center.y,
+                    ellipse.focus1.x,
+                    ellipse.focus1.y,
+                    ellipse.radmin,
+                ],
+                Some(EntityGeom::Spline { curve, .. }) => curve
+                    .poles
+                    .iter()
+                    .flat_map(|point| [point.x, point.y])
+                    .collect(),
+                None => Vec::new(),
+            }
+        };
+        for parameter in params_to_pin {
+            let value = sys.store().get(parameter);
+            let target = sys.add_param(value, true);
+            sys.add_constraint(Rc::new(Equal::new(parameter, target, 1.0)));
+        }
+    }
+
     let partitions = sys.partition();
     for sub in &partitions {
         solve_dl(sub, sys.store_mut());
@@ -1826,7 +2044,9 @@ fn solve_scope(
         .map(|g| match g {
             EntityGeom::Point(_) => 2,
             EntityGeom::Line(_) | EntityGeom::Ray(_) | EntityGeom::XLine(_) => 4,
-            EntityGeom::Polyline { points, .. } => points.len() * 2,
+            EntityGeom::Polyline { points, arcs, .. } => {
+                points.len() * 2 + arcs.iter().flatten().count() * 5
+            }
             EntityGeom::Circle(_) => 3,
             // Raw param count (center×2, rad, start×2, end×2, both
             // angles) — same "raw, not netted against its own
@@ -2529,6 +2749,26 @@ mod tests {
                 Some(&DrivingValue::Literal(f64::NAN)),
             )
             .is_err());
+    }
+
+    #[test]
+    fn bulged_polyline_segment_registers_as_a_kernel_arc() {
+        let mut scene = Scene::new();
+        let mut polyline = acadrust::entities::LwPolyline::new();
+        polyline.vertices = vec![
+            acadrust::entities::LwVertex::with_bulge(
+                acadrust::types::Vector2::new(0.0, 0.0),
+                1.0,
+            ),
+            acadrust::entities::LwVertex::from_coords(10.0, 0.0),
+        ];
+        let handle = scene.add_entity(EntityType::LwPolyline(polyline));
+        let mut system = cadkernel_constraints::system::System::new();
+        let geometry = super::register_entity(&scene.document, &mut system, handle).unwrap();
+        let segment = geometry.arc_segment(0).expect("expected an arc segment");
+
+        assert!((system.store().get(segment.arc.circle.rad) - 5.0).abs() < 1.0e-9);
+        assert!((segment.sweep - std::f64::consts::PI).abs() < 1.0e-9);
     }
 
     #[test]

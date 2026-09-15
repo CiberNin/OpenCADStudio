@@ -882,12 +882,21 @@ impl OpenCADStudio {
                     }
 
                     if !compact_solid {
-                        sections.extend(crate::entities::object_data::sections(
+                        let mut object_sections = crate::entities::object_data::sections(
                             &self.tabs[i].scene.document,
                             &self.tabs[i].scene.object_data_cache,
                             handle,
                             entity,
-                        ));
+                        );
+                        let scope = self.tabs[i].current_parametric_scope();
+                        let constrained = self.tabs[i]
+                            .scene
+                            .parametric_constraint_set(scope)
+                            .is_some_and(|set| set.constraints_touching(handle).next().is_some());
+                        if constrained {
+                            object_sections.retain(|section| section.title != "Associative Data");
+                        }
+                        sections.extend(object_sections);
                     }
 
                     {
@@ -2224,75 +2233,6 @@ impl OpenCADStudio {
                     }
                     if compact_solid {
                         retain_compact_solid_sections(&mut sections);
-                    }
-                    // Parametric-constraint list for this entity —
-                    // the Properties-panel analogue of the viewport's
-                    // constraint glyph pills: one row per constraint
-                    // touching `handle`, clickable to select every entity
-                    // it relates (PropConstraintLinkClick). Omitted
-                    // entirely when the entity has none — an unconstrained
-                    // entity (the common case) shouldn't gain empty
-                    // bookkeeping.
-                    {
-                        let scope = self.tabs[i].current_parametric_scope();
-                        let scene = &self.tabs[i].scene;
-                        if let Some(set) = scene.parametric_constraint_set(scope) {
-                            let parameters = if set.local_parameters.is_empty() {
-                                scene.named_parameters()
-                            } else {
-                                &set.local_parameters
-                            };
-                            let props: Vec<crate::scene::model::object::Property> = set
-                                .constraints_touching(handle)
-                                .map(|c| {
-                                    let conflicting =
-                                        set.conflicts.iter().any(|(id, _)| *id == c.id);
-                                    let value_suffix = match &c.driving_param {
-                                        Some(
-                                            crate::scene::named_parameters::DrivingValue::Literal(
-                                                v,
-                                            ),
-                                        ) => {
-                                            format!(" = {v:.2}")
-                                        }
-                                        Some(
-                                            crate::scene::named_parameters::DrivingValue::Named(
-                                                name,
-                                            ),
-                                        ) => match parameters.resolve(name) {
-                                            Ok(v) => format!(" = {name} ({v:.2})"),
-                                            Err(_) => format!(" = {name} (?)"),
-                                        },
-                                        None => String::new(),
-                                    };
-                                    let label = format!(
-                                        "{} {:?}{}",
-                                        c.kind.glyph_symbol(),
-                                        c.kind,
-                                        value_suffix
-                                    );
-                                    let mut handles: Vec<acadrust::Handle> =
-                                        c.refs.iter().map(|r| r.entity).collect();
-                                    handles.sort_by_key(|h| h.value());
-                                    handles.dedup();
-                                    crate::scene::model::object::Property {
-                                        label,
-                                        field: "parametric_constraint",
-                                        value: crate::scene::model::object::PropValue::EntityLink {
-                                            id: c.id,
-                                            handles,
-                                            conflicting,
-                                        },
-                                    }
-                                })
-                                .collect();
-                            if !props.is_empty() {
-                                sections.push(crate::scene::model::object::PropSection {
-                                    title: t!("Constraints").into_owned(),
-                                    props,
-                                });
-                            }
-                        }
                     }
                     let title = match entity {
                         acadrust::EntityType::Insert(ins) => {
