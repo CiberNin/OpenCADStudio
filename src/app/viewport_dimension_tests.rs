@@ -239,11 +239,20 @@ fn viewport_dimension_linear_aligned_and_radial_object_picks() {
 #[test]
 fn viewport_dimension_angular_preserves_angle_without_length_factor() {
     let (mut app, line, frame) = fixture();
+    let i = app.active_tab;
+    app.tabs[i].scene.set_current_layout("Model".into());
+    let vertical = app.tabs[i]
+        .scene
+        .add_entity(EntityType::Line(Line::from_points(
+            Vector3::ZERO,
+            Vector3::new(0.0, 100.0, 0.0),
+        )));
+    app.tabs[i].scene.set_current_layout("Dimensions".into());
     let _ = app.dispatch_command("DIMANGULAR");
     let _ = app.feed_command(StepInput::Enter);
     point(&mut app, frame, line, DVec3::ZERO);
     point(&mut app, frame, line, DVec3::X * 100.0);
-    point(&mut app, frame, line, DVec3::Y * 100.0);
+    point(&mut app, frame, vertical, DVec3::Y * 100.0);
     let _ = app.feed_command(StepInput::Point(DVec3::new(70.0, 70.0, 0.0)));
     let doc = &app.tabs[app.active_tab].scene.document;
     assert!((dimension(doc).measurement() - 90.0).abs() < 1e-5);
@@ -376,4 +385,39 @@ fn viewport_dimension_exploded_commit_uses_compensated_text_and_undo() {
         .document
         .entities()
         .any(|e| matches!(e, EntityType::Text(_) | EntityType::MText(_))));
+}
+
+#[test]
+fn viewport_dimension_angular_object_picks_measure_arc_features() {
+    use acadrust::entities::{Arc, LwPolyline};
+    use acadrust::types::Vector2;
+    for bulged in [false, true] {
+        let (mut app, _, frame) = fixture();
+        let i = app.active_tab;
+        app.tabs[i].scene.set_current_layout("Model".into());
+        let entity = if bulged {
+            let mut poly =
+                LwPolyline::from_points(vec![Vector2::new(100.0, 200.0), Vector2::new(0.0, 300.0)]);
+            poly.vertices[0].bulge = (std::f64::consts::PI / 8.0).tan();
+            EntityType::LwPolyline(poly)
+        } else {
+            let mut arc = Arc::new();
+            arc.center = Vector3::new(0.0, 200.0, 0.0);
+            arc.radius = 100.0;
+            arc.start_angle = 0.0;
+            arc.end_angle = std::f64::consts::FRAC_PI_2;
+            EntityType::Arc(arc)
+        };
+        app.tabs[i].scene.add_entity(entity);
+        app.tabs[i].scene.set_current_layout("Dimensions".into());
+        let _ = app.dispatch_command("DIMANGULAR");
+        let model = DVec3::new(100.0 / 2.0_f64.sqrt(), 200.0 + 100.0 / 2.0_f64.sqrt(), 0.0);
+        let result = app
+            .try_dimension_viewport_entity_pick(i, frame.model_to_paper(model), 0.5)
+            .unwrap();
+        let _ = app.apply_cmd_result(result);
+        assert_eq!(app.accepted_snaps().len(), 3);
+        let _ = app.feed_command(StepInput::Point(DVec3::new(65.0, 85.0, 0.0)));
+        assert!((displayed(&app.tabs[i].scene.document) - 90.0).abs() < 1e-5);
+    }
 }

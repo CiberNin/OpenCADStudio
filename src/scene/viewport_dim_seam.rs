@@ -84,6 +84,9 @@ impl Scene {
                 continue;
             };
 
+            if !planar_pick_distance(&entity, model_point).is_some_and(|d| d <= aperture_model) {
+                continue;
+            }
             let mut paper_entity = entity;
             crate::scene::view::dispatch::apply_transform(
                 &mut paper_entity,
@@ -212,6 +215,9 @@ impl Scene {
         let EntityType::Insert(insert) = &insert_entity else {
             return None;
         };
+        if insert.row_count > 1 || insert.column_count > 1 {
+            return None;
+        }
         let insert_handle = insert.common.handle;
         let local = crate::scene::render_graph::insert_transform(&self.document, insert);
         let combined = local.then(&outer);

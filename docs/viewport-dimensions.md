@@ -11,6 +11,8 @@ Snapping and object picking share viewport draw order, visibility, and clipping
 rules. Object picking uses the resident interaction index and applies block
 instance transforms. Nonuniformly transformed circles and circular arcs are
 declined as radial object picks because their displayed geometry is elliptical.
+Array inserts without an addressable instance index are also declined; resolved
+block geometry must remain within the original pick aperture.
 
 ## Input and measurement rules
 
