@@ -822,6 +822,7 @@ bg={bg_ms:.1}ms n={view_count}"
                         scope,
                         sel_ref.vp_size,
                         self.show_constraint_values,
+                        self.constraint_bar_display,
                     )
                     .into_iter()
                     .map(|(id, point, direction, label, is_conflicting)| {

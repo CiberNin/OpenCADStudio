@@ -933,6 +933,13 @@ impl OpenCADStudio {
             return Task::none();
         }
         let i = self.active_tab;
+        let constraint_hover = self
+            .constraint_glyph_under(i, p)
+            .map(|(_, handles)| handles)
+            .unwrap_or_default();
+        self.tabs[i]
+            .scene
+            .set_constraint_hover_highlights(&constraint_hover);
         // Modifier-driven selection must be known before cursor_plane/axis and
         // drafting constraints are read, not merely before the final callback.
         if let Some(command) = self.tabs[i].active_cmd.as_mut() {
@@ -1737,11 +1744,31 @@ impl OpenCADStudio {
                     );
                 }
             }
+            let driven_refs: Vec<_> = grip
+                .targets
+                .iter()
+                .filter_map(|target| {
+                    let entity = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(target.handle)?;
+                    crate::scene::parametric_constraints::driven_ref_for_grip(
+                        entity,
+                        target.handle,
+                        target.grip_id,
+                    )
+                })
+                .collect();
             // Re-solve constrained neighbors on each drag frame and include
             // their original state in the gesture's undo record.
             let solved_by_constraints = self.tabs[i]
                 .scene
-                .solve_parametric_constraints_preview(&edited_handles);
+                .solve_parametric_constraints_preview(
+                    &edited_handles,
+                    &driven_refs,
+                    self.constraint_solve_mode && !driven_refs.is_empty(),
+                    &self.grip_originals,
+                );
             for (handle, _) in &solved_by_constraints {
                 let handle = *handle;
                 if !self.grip_preview_handles.contains(&handle) {
@@ -2637,6 +2664,7 @@ impl OpenCADStudio {
         // viewport so it doesn't stick while the mouse is over the
         // ribbon / panels.
         self.tabs[i].scene.set_hover_highlight(None);
+        self.tabs[i].scene.set_constraint_hover_highlights(&[]);
         // Don't touch `context_menu` here. ViewportExit also fires
         // when an upper overlay (the right-click menu panel) takes
         // the cursor, so clearing the menu state on every exit
@@ -2949,6 +2977,34 @@ impl OpenCADStudio {
         Task::none()
     }
 
+    fn constraint_glyph_under(
+        &self,
+        i: usize,
+        cursor: iced::Point,
+    ) -> Option<(
+        crate::scene::parametric_constraints::ConstraintKind,
+        Vec<acadrust::Handle>,
+    )> {
+        if self.tabs[i].scene.current_layout != "Model" {
+            return None;
+        }
+        let vp_size = self.tabs[i].scene.selection.borrow().vp_size;
+        let scope = self.tabs[i].current_parametric_scope();
+        let id = self.tabs[i].scene.constraint_glyph_hit(
+            scope,
+            vp_size,
+            self.show_constraint_values,
+            self.constraint_bar_display,
+            cursor,
+        )?;
+        let set = self.tabs[i].scene.parametric_constraint_set(scope)?;
+        let constraint = set.get(id)?;
+        let mut handles: Vec<_> = constraint.refs.iter().map(|r| r.entity).collect();
+        handles.sort_unstable_by_key(|handle| handle.value());
+        handles.dedup();
+        Some((constraint.kind, handles))
+    }
+
     pub(super) fn on_viewport_left_press(&mut self) -> Task<Message> {
         let i = self.active_tab;
         if let Some(command) = self.tabs[i].active_cmd.as_mut() {
@@ -3003,6 +3059,23 @@ impl OpenCADStudio {
             (p, sel.vp_size)
         };
         let (vw, vh) = vp_size;
+
+        if self.tabs[i].active_cmd.is_none() {
+            if let Some((kind, handles)) = self.constraint_glyph_under(i, p) {
+                self.tabs[i].scene.deselect_all();
+                self.tabs[i].scene.select_entities(&handles);
+                self.refresh_selected_grips();
+                self.refresh_properties();
+                self.command_line
+                    .push_info(&format!("{kind:?} constraint selected."));
+                self.tabs[i]
+                    .scene
+                    .selection
+                    .borrow_mut()
+                    .clear_left_selection_gesture();
+                return Task::none();
+            }
+        }
 
         // An engaged grip owns the next left press (click-move-click placement
         // or the release of a press-drag). Do not let the same press arm the
@@ -4432,6 +4505,7 @@ properties={:.1}ms picked={}",
                                 scope,
                                 canvas_sz,
                                 self.show_constraint_values,
+                                self.constraint_bar_display,
                                 p_full,
                             )
                         })
