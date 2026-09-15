@@ -1414,7 +1414,9 @@ mod tests {
         doc.add_entity(acadrust::EntityType::Circle(good)).unwrap();
         let mut corrupt = acadrust::entities::Circle::new();
         corrupt.center = acadrust::types::Vector3::new(1.0, 1.0, 0.0);
-        corrupt.radius = 0.0; // io::is_entity_corrupt rejects a zero-radius circle
+        // Past any drawing's extent: io::is_entity_corrupt treats it as parser
+        // desync. (A zero radius is legal geometry and survives the purge.)
+        corrupt.radius = 1.0e11;
         doc.add_entity(acadrust::EntityType::Circle(corrupt)).unwrap();
         let bytes = crate::io::save_to_bytes(&doc, "dxf", doc.version)
             .expect("save a document containing a corrupt entity");

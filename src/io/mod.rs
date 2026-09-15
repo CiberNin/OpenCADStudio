@@ -2022,6 +2022,12 @@ fn sync_current_styles_on_save(doc: &mut CadDocument) {
 // `purge_corrupt_entities` scans the document and removes any entity that
 // fails a cheap sanity check, returning the number dropped so the caller can
 // surface it to the UI / log.
+//
+// The checks target what a desynchronised parser produces, not what a CAD
+// package might legitimately write. Degenerate-but-legal geometry — a
+// zero-radius circle, a zero-sweep arc, a zero-length line — is kept, since
+// the strict open path treats every drop as a corrupt file and sends the
+// user through recovery for it.
 
 fn finite_unit_normal(n: &acadrust::types::Vector3) -> bool {
     let (x, y, z) = (n.x, n.y, n.z);
@@ -2079,20 +2085,23 @@ pub(crate) fn is_entity_corrupt(e: &EntityType) -> bool {
                 || p.vertices.iter().any(|v| !finite_vec3(&v.location))
         }
         E::Line(l) => !finite_vec3(&l.start) || !finite_vec3(&l.end),
+        // A zero or near-zero radius is legal, if useless, geometry: AutoCAD
+        // and nanoCAD write and open such circles and arcs, and real
+        // drawings carry them (collapsed dimension arcs, point markers).
+        // Every consumer here copes with it — the kernel tessellates by
+        // sweep angle and floors the segment count, the circle shader draws
+        // the distance to the radius, and the tangent snap solver returns
+        // nothing when the cursor sits inside the radius — so only the
+        // desync signatures are rejected: non-finite values and radii past
+        // any drawing's extent.
         E::Circle(c) => {
-            !finite_vec3(&c.center)
-                || !finite_coord(c.radius)
-                // Reject zero- or near-zero circles: they tessellate into a
-                // degenerate curve the tessellator cannot sample.
-                || c.radius.abs() < 1.0e-10
-                || c.radius.abs() > 1.0e10
+            !finite_vec3(&c.center) || !finite_coord(c.radius) || c.radius.abs() > 1.0e10
         }
         E::Arc(a) => {
             !finite_vec3(&a.center)
                 || !finite_coord(a.radius)
                 || !a.start_angle.is_finite()
                 || !a.end_angle.is_finite()
-                || a.radius.abs() < 1.0e-10
                 || a.radius.abs() > 1.0e10
                 || !finite_unit_normal(&a.normal)
         }
@@ -2342,7 +2351,7 @@ mod layer_roundtrip_tests {
 #[cfg(test)]
 mod corrupt_guard_tests {
     use super::*;
-    use acadrust::entities::{Arc, EntityType, Spline};
+    use acadrust::entities::{Arc, Circle, EntityType, Spline};
     use acadrust::types::Vector3;
 
     // Small but finite arcs are valid records. Kernel tessellation is bounded,
@@ -2380,6 +2389,35 @@ mod corrupt_guard_tests {
         a.end_angle = 1.0e-4;
         a.normal = Vector3::new(0.0, 0.0, 1.0);
         assert!(!is_entity_corrupt(&EntityType::Arc(a)));
+    }
+
+    // Zero-radius circles and arcs are legal DXF that AutoCAD and nanoCAD
+    // open without complaint. A strict open that drops them fails the whole
+    // file, so they must pass the guard; only absurd radii are desync.
+    #[test]
+    fn keeps_zero_radius_circle_and_arc() {
+        let mut c = Circle::new();
+        c.center = Vector3::new(206.2, 150.7, 0.0);
+        c.radius = 0.0;
+        assert!(!is_entity_corrupt(&EntityType::Circle(c)));
+
+        let mut a = Arc::new();
+        a.center = Vector3::new(223.5, 174.5, 0.0);
+        a.radius = 0.0;
+        a.start_angle = 0.0;
+        a.end_angle = 0.0;
+        a.normal = Vector3::new(0.0, 0.0, 1.0);
+        assert!(!is_entity_corrupt(&EntityType::Arc(a)));
+    }
+
+    #[test]
+    fn drops_absurd_radius_circle() {
+        let mut c = Circle::new();
+        c.radius = 1.0e11;
+        assert!(is_entity_corrupt(&EntityType::Circle(c)));
+        let mut c = Circle::new();
+        c.radius = f64::NAN;
+        assert!(is_entity_corrupt(&EntityType::Circle(c)));
     }
 
     // Parser desync emits 100_000-control-point splines; building a kernel
