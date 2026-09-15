@@ -33,6 +33,8 @@ pub(crate) mod centermark;
 pub(crate) mod dimension_assoc;
 mod dwg_native_constraints;
 mod entity;
+#[cfg(test)]
+mod hatch_boundary;
 mod group_layer;
 mod layout;
 mod limits;
