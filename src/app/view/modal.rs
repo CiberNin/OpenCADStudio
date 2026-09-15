@@ -167,6 +167,65 @@ impl OpenCADStudio {
                 )
             }
             super::super::ModalKind::Aliases => {
+                // Aliases claimed by two rows — the cells turn red and a
+                // persistent warning names the command already using each
+                // alias; the last row wins in the alias map on Apply.
+                let mut alias_rows: std::collections::BTreeMap<String, Vec<&(String, String)>> =
+                    std::collections::BTreeMap::new();
+                for row in &self.alias_editor_rows {
+                    let alias = row.0.trim().to_uppercase();
+                    if !alias.is_empty() {
+                        alias_rows.entry(alias).or_default().push(row);
+                    }
+                }
+                let duplicate_aliases: Vec<String> = alias_rows
+                    .iter()
+                    .filter(|(_, rows)| rows.len() > 1)
+                    .map(|(alias, _)| alias.clone())
+                    .collect();
+                let duplicate_conflicts: Vec<(String, String)> = alias_rows
+                    .iter()
+                    .filter(|(_, rows)| rows.len() > 1)
+                    .map(|(alias, rows)| {
+                        let command = rows
+                            .iter()
+                            .find(|(_, command)| !command.is_empty())
+                            .map(|(_, command)| command.clone())
+                            .unwrap_or_default();
+                        (alias.clone(), command)
+                    })
+                    .collect();
+                let duplicate_set: rustc_hash::FxHashSet<String> =
+                    duplicate_aliases.into_iter().collect();
+                // Commands the dispatcher can't run: not a registered
+                // command, plugin command, or input action.
+                let valid: rustc_hash::FxHashSet<String> =
+                    crate::command::all_registered_command_names()
+                        .into_iter()
+                        .map(str::to_uppercase)
+                        .chain(
+                            self.command_line
+                                .dynamic_commands
+                                .iter()
+                                .map(|cmd| cmd.to_uppercase()),
+                        )
+                        .chain(
+                            crate::app::shortcuts::INPUT_ACTIONS
+                                .iter()
+                                .map(|action| action.to_string()),
+                        )
+                        .collect();
+                let unknown_commands: Vec<String> = self
+                    .alias_editor_rows
+                    .iter()
+                    .filter_map(|(_, command)| {
+                        let command = command.trim();
+                        (!command.is_empty() && !valid.contains(command))
+                            .then(|| command.to_string())
+                    })
+                    .collect();
+                let unknown_set: rustc_hash::FxHashSet<String> =
+                    unknown_commands.into_iter().collect();
                 sized_flow(
                     ex,
                     480,
@@ -174,6 +233,12 @@ impl OpenCADStudio {
                     |flow| {
                         crate::ui::window::alias_editor::view_window(
                             &self.alias_editor_rows,
+                            self.alias_pending_add,
+                            self.alias_reset_confirm,
+                            &duplicate_set,
+                            &duplicate_conflicts,
+                            &unknown_set,
+                            self.alias_close_confirm,
                             flow,
                         )
                     },

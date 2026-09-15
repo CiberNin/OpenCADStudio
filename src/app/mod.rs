@@ -1099,6 +1099,16 @@ pub(super) struct OpenCADStudio {
     /// Working buffer for the ALIASEDIT modal: `(alias, command)` rows being
     /// edited. Seeded from `command_aliases` on open, committed back on close.
     alias_editor_rows: Vec<(String, String)>,
+    /// True while a freshly added (top) row is an unfinished draft: it exists
+    /// only until its alias and command are filled (accept) or it is cancelled
+    /// (Esc / ✕ / dialog close), so the list never keeps an empty row.
+    /// Mirrors `shortcut_pending_add`.
+    alias_pending_add: bool,
+    /// True while the "Reset to default" confirmation is showing.
+    alias_reset_confirm: bool,
+    /// True while the "unsaved changes will be discarded" confirmation
+    /// overlays the editor: the user tried to close with un-applied rows.
+    alias_close_confirm: bool,
 
     // ── Named Parameters ──────────────────────────────────────────────────
     /// Working buffer for the PARAMETERS modal. Unlike `alias_editor_rows`,
@@ -2986,6 +2996,22 @@ pub enum Message {
     AliasEditorRemove(usize),
     /// Commit the edited rows to the alias table (Apply button); stays open.
     AliasEditorApply,
+    /// Apply the working rows and close the dialog.
+    AliasEditorApplyExit,
+    /// The check button on a draft row: finish the addition without applying.
+    AliasEditorDraftAccept,
+    /// Cancel a pending draft row (Esc / Cancel add).
+    AliasEditorDraftCancel,
+    /// Show the "Reset to default" confirmation.
+    AliasEditorResetAsk,
+    /// Reset aliases to the shipped defaults.
+    AliasEditorResetConfirm,
+    /// Hide the reset confirmation without resetting.
+    AliasEditorResetDeny,
+    /// Discard un-applied rows and close the editor.
+    AliasEditorCloseDiscard,
+    /// Keep editing: hide the discard confirmation.
+    AliasEditorCloseKeep,
     // ── Named Parameters (PARAMETERS) ───────────────────────────────────
     /// Open the named-parameter editor, seeding rows from the active tab's
     /// `Scene::named_parameters`.
@@ -3980,6 +4006,9 @@ impl OpenCADStudio {
             // Command aliases (populated from ocad.pgp just after construction)
             command_aliases: rustc_hash::FxHashMap::default(),
             alias_editor_rows: Vec::new(),
+            alias_pending_add: false,
+            alias_reset_confirm: false,
+            alias_close_confirm: false,
             named_parameter_editor_rows: Vec::new(),
             // Layout Manager
             layout_manager_selected: "Model".to_string(),

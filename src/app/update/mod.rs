@@ -201,7 +201,12 @@ impl OpenCADStudio {
             Some(GeometricTolerance) => self.geometric_tolerance = None,
             // Closing (✕) discards edits made since the last Apply — matching the
             // style editors. Committing happens only through the Apply button.
-            Some(Aliases) => self.alias_editor_rows.clear(),
+            Some(Aliases) => {
+                self.alias_editor_rows.clear();
+                self.alias_pending_add = false;
+                self.alias_reset_confirm = false;
+                self.alias_close_confirm = false;
+            }
             Some(Shortcuts) => {
                 self.shortcut_editor_rows.clear();
                 self.shortcut_capture_row = None;
@@ -283,6 +288,12 @@ impl OpenCADStudio {
             if matches!(msg, Message::CommandEscape)
                 || matches!(&msg, Message::ShortcutPressed(key) if key.rsplit('+').next() == Some("ESCAPE"))
             {
+                // Esc backs out of a pending ALIASEDIT draft first, mirroring
+                // the shortcut editor's capture cancel; the next Esc closes.
+                if self.active_modal == Some(super::ModalKind::Aliases) && self.alias_pending_add
+                {
+                    return self.update(Message::AliasEditorDraftCancel);
+                }
                 return self.update(Message::CloseModal);
             }
             if is_modal_blocked_key_msg(&msg) {
@@ -6577,6 +6588,9 @@ impl OpenCADStudio {
                     .collect();
                 rows.sort_by(|a, b| a.0.cmp(&b.0));
                 self.alias_editor_rows = rows;
+                self.alias_pending_add = false;
+                self.alias_reset_confirm = false;
+                self.alias_close_confirm = false;
                 self.active_modal = Some(super::ModalKind::Aliases);
                 Task::none()
             }
@@ -6591,23 +6605,78 @@ impl OpenCADStudio {
                         AliasField::Command => rowdata.1 = value,
                     }
                 }
+                // Typing never finishes the addition — only the draft row's
+                // check button does, so no half-visible "ghost" row appears.
                 Task::none()
             }
             Message::AliasEditorAdd => {
-                self.alias_editor_rows.push((String::new(), String::new()));
+                if self.alias_pending_add {
+                    // One draft at a time: keep the existing top draft.
+                } else {
+                    // The draft row goes to the top of the list so it is
+                    // visible without scrolling.
+                    self.alias_editor_rows
+                        .insert(0, (String::new(), String::new()));
+                    self.alias_pending_add = true;
+                }
+                Task::none()
+            }
+            Message::AliasEditorDraftAccept => {
+                // The check button: finish the addition (keep the row in the
+                // working table) without applying it. Only complete drafts
+                // can be accepted — the button is disabled otherwise.
+                self.finish_pending_alias_add();
+                Task::none()
+            }
+            Message::AliasEditorDraftCancel => {
+                // Esc backs out and abandons an unfinished draft.
+                if self.alias_pending_add && !self.alias_editor_rows.is_empty() {
+                    self.alias_editor_rows.remove(0);
+                    self.alias_pending_add = false;
+                }
                 Task::none()
             }
             Message::AliasEditorRemove(idx) => {
                 if idx < self.alias_editor_rows.len() {
                     self.alias_editor_rows.remove(idx);
                 }
+                if idx == 0 {
+                    // Removing the draft row is the ✕ cancel path.
+                    self.alias_pending_add = false;
+                }
                 Task::none()
             }
             Message::AliasEditorApply => {
-                self.apply_alias_editor_rows();
+                self.finish_alias_editor();
+                Task::none()
+            }
+            Message::AliasEditorApplyExit => {
+                self.finish_alias_editor();
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::AliasEditorResetAsk => {
+                self.alias_reset_confirm = true;
+                Task::none()
+            }
+            Message::AliasEditorResetDeny => {
+                self.alias_reset_confirm = false;
+                Task::none()
+            }
+            Message::AliasEditorResetConfirm => {
+                self.reset_aliases_to_defaults();
                 self.command_line.push_info(
                     crate::tf!("{} alias(es) applied.", self.command_aliases.len()).as_ref(),
                 );
+                Task::none()
+            }
+            Message::AliasEditorCloseDiscard => {
+                self.alias_close_confirm = false;
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::AliasEditorCloseKeep => {
+                self.alias_close_confirm = false;
                 Task::none()
             }
 
@@ -7260,6 +7329,14 @@ impl OpenCADStudio {
                     return Task::none();
                 }
                 self.shortcut_close_confirm = false;
+                if self.active_modal == Some(super::ModalKind::Aliases)
+                    && !self.alias_close_confirm
+                    && self.alias_editor_dirty()
+                {
+                    self.alias_close_confirm = true;
+                    return Task::none();
+                }
+                self.alias_close_confirm = false;
                 if self.active_modal == Some(super::ModalKind::DraftingSettings)
                     && !self.drafting_settings_close_confirm
                     && self.drafting_settings_dirty()
