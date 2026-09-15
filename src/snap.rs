@@ -93,15 +93,8 @@ pub struct SnapResult {
     /// query, never by the engine itself.
     pub viewport: Option<Handle>,
     /// Owning entity of the geometry the snap landed on, when the engine could
-    /// attribute the feature to a wire.
-    ///
-    /// This is whatever the *wire* carries, which for anything drawn from a
-    /// block is the **top-level INSERT's** handle — nested inserts included,
-    /// because `block_cache` stamps the host insert's name onto every
-    /// expanded and clipped sub-wire. Resolving that to the inner entity plus
-    /// the instance path needs the document and the accepted model point, so
-    /// it happens once at accept time, in
-    /// `OpenCADStudio::resolve_source_block_path`, which fills
+    /// attribute the feature to a wire. Block sub-entities report the top-level
+    /// INSERT handle; the block path is resolved later by
     /// [`crate::scene::viewport_ref::SnapSourceRef::block_path`].
     pub source: Option<DimensionAssociationSource>,
     /// Second real object at an intersection, when both objects are known.
@@ -119,9 +112,6 @@ impl SnapResult {
 
 /// Entity handle carried by a wire (`WireModel::name` is the decimal handle
 /// value). Returns `None` for preview / interim wires with a symbolic name.
-///
-/// For block geometry the value is the top-level INSERT handle, never the
-/// inner entity: see [`SnapResult::source`].
 #[inline]
 pub(crate) fn wire_source(wire: &WireModel) -> Option<DimensionAssociationSource> {
     wire.name

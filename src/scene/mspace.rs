@@ -265,8 +265,6 @@ impl Scene {
                 vp.view_height = eff_h;
             }
         }
-        // A viewport's view changed, so every dimension drawn on the
-        // sheet through it has to be re-placed and re-measured.
         self.notify_viewport_changed(vp_handle);
     }
 
@@ -358,8 +356,6 @@ impl Scene {
             vp.view_target.y += model_delta.y as f64;
             vp.view_target.z += model_delta.z as f64;
         }
-        // A viewport's view changed, so every dimension drawn on the
-        // sheet through it has to be re-placed and re-measured.
         self.notify_viewport_changed(vp_handle);
     }
 
@@ -410,8 +406,6 @@ impl Scene {
                 }
             }
         }
-        // A viewport's view changed, so every dimension drawn on the
-        // sheet through it has to be re-placed and re-measured.
         self.notify_viewport_changed(vp_handle);
     }
 
@@ -490,8 +484,6 @@ impl Scene {
             vp.view_direction.z = dir.z as f64;
             vp.twist_angle = twist;
         }
-        // Twisting a viewport rotates model geometry on the sheet; the
-        // dimensions drawn through it follow.
         self.notify_viewport_changed(vp_handle);
     }
 
@@ -537,8 +529,6 @@ impl Scene {
             changed = true;
         }
         if changed {
-            // The view (and with it the sheet placement of everything drawn
-            // through this viewport) moved.
             self.notify_viewport_changed(vp_handle);
         }
         changed

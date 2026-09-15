@@ -567,8 +567,6 @@ impl Scene {
             viewport.view_target.x = center.x;
             viewport.view_target.y = center.y;
             viewport.view_target.z = center.z;
-            // Panning a viewport moves model geometry across the sheet; the
-            // dimensions drawn through it follow.
             self.notify_viewport_changed(handle);
         } else {
             self.camera.borrow_mut().target = center;
