@@ -3824,7 +3824,29 @@ impl OpenCADStudio {
                 command.set_ctrl(self.ctrl_down);
                 command.set_shift(self.shift_down);
             }
-            let result = if self.tabs[i]
+            // PR2: a dimension "select object" pick that lands inside a paper
+            // content viewport is resolved against the model geometry that
+            // viewport displays. Paper hit testing only sees sheet entities,
+            // so this runs first and falls through when it finds nothing.
+            let dimension_viewport_pick = if self.tabs[i].active_cmd.as_ref().is_some_and(
+                |command| command.needs_entity_pick() && command.measures_through_viewports(),
+            ) {
+                let aperture_paper = {
+                    let camera = self.tabs[i].scene.camera.borrow();
+                    let per_px = if bounds.height > 0.0 {
+                        camera.ortho_size() as f64 * 2.0 / bounds.height as f64
+                    } else {
+                        0.0
+                    };
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box) as f64 * per_px
+                };
+                self.try_dimension_viewport_entity_pick(i, pick_wcs, aperture_paper)
+            } else {
+                None
+            };
+            let result = if let Some(result) = dimension_viewport_pick {
+                Some(result)
+            } else if self.tabs[i]
                 .active_cmd
                 .as_ref()
                 .map(|c| c.needs_structure_point_pick())

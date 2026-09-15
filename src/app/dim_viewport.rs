@@ -98,7 +98,9 @@ impl OpenCADStudio {
     }
 
     /// The accepted snap for the `idx`-th collected point of the active
-    /// command, if one was recorded.
+    /// command, if one was recorded. The contracted accessor PR1 and PR3 read;
+    /// PR2 itself classifies the whole set at commit time.
+    #[allow(dead_code)]
     pub(crate) fn accepted_snap_for_point(&self, idx: usize) -> Option<&AcceptedSnap> {
         self.dim_accepted_snaps.get(idx)
     }
@@ -130,13 +132,21 @@ impl OpenCADStudio {
         if scene.current_layout == "Model" || scene.active_viewport.is_some() {
             return DimensionMeasureSpace::Direct;
         }
-        let snaps = &self.dim_accepted_snaps;
-        if snaps.is_empty() {
+        // The final collected point of every dimension command in scope is the
+        // dimension-line / text placement click, which says nothing about what
+        // is being measured — it routinely lands on bare sheet even for a
+        // viewport measurement, and inside a viewport rectangle even for a
+        // plain paper one. Only the measuring points are classified.
+        let measuring = match self.dim_accepted_snaps.len() {
+            0 | 1 => self.dim_accepted_snaps.as_slice(),
+            n => &self.dim_accepted_snaps[..n - 1],
+        };
+        if measuring.is_empty() {
             return DimensionMeasureSpace::Direct;
         }
         let mut frame: Option<ViewportFrame> = None;
         let mut any_free = false;
-        for snap in snaps {
+        for snap in measuring {
             match snap.frame {
                 Some(f) => match frame {
                     None => frame = Some(f),
@@ -148,37 +158,11 @@ impl OpenCADStudio {
         }
         match (frame, any_free) {
             (None, _) => DimensionMeasureSpace::Direct,
-            // A dimension-line / text placement point on bare sheet is normal
-            // and expected, so only *measuring* points matter. The commands
-            // collect the measuring points first, so a trailing free point is
-            // the placement click; a free point before a viewport point is a
-            // genuine mixed-space measurement.
             (Some(f), false) => DimensionMeasureSpace::Viewport(f),
-            (Some(f), true) => {
-                if self.dimension_leading_points_share_viewport(f) {
-                    DimensionMeasureSpace::Viewport(f)
-                } else {
-                    DimensionMeasureSpace::Mixed
-                }
-            }
+            // One origin through a viewport and the other on the sheet: the
+            // two points are not in a common measurable space.
+            (Some(_), true) => DimensionMeasureSpace::Mixed,
         }
-    }
-
-    /// True when every snap up to the first free one came through `frame`'s
-    /// viewport and no later snap came through a viewport.
-    fn dimension_leading_points_share_viewport(&self, frame: ViewportFrame) -> bool {
-        let mut seen_free = false;
-        for snap in &self.dim_accepted_snaps {
-            match snap.frame {
-                Some(f) => {
-                    if seen_free || f.viewport != frame.viewport {
-                        return false;
-                    }
-                }
-                None => seen_free = true,
-            }
-        }
-        true
     }
 
     /// Apply viewport compensation to a dimension about to be committed.
@@ -204,7 +188,7 @@ impl OpenCADStudio {
             DimensionMeasureSpace::Mixed => {
                 self.command_line.push_warning(
                     crate::t!(
-                        "Mixed-space measurement is not supported: the points come from different viewports, or from a viewport and the sheet. Measuring on the sheet; viewport scale is not compensated."
+                        "Mixed-space measurement is not supported: the extension origins come from different viewports, or from a viewport and the sheet. Measuring in paper space instead (no viewport scale compensation)."
                     )
                     .as_ref(),
                 );
@@ -232,6 +216,35 @@ impl OpenCADStudio {
             );
         }
         true
+    }
+
+    /// Explicit "select object" pick for a dimension command, resolved through
+    /// a paper-space content viewport.
+    ///
+    /// Paper-space hit testing only sees sheet entities, so a click on model
+    /// geometry displayed inside a viewport finds nothing. This maps the
+    /// cursor into model space through the viewport frame, hit-tests the
+    /// viewport's resident model wires (descending into block instances and
+    /// baking the instance transform), then hands the command a copy of the
+    /// picked entity projected onto the sheet. The commands therefore keep
+    /// working entirely in paper coordinates, and the measurement is
+    /// compensated at commit time like any other viewport measurement.
+    ///
+    /// Returns `None` when the click is not inside a content viewport or hits
+    /// nothing, so the caller falls back to the ordinary paper-space pick.
+    pub(crate) fn try_dimension_viewport_entity_pick(
+        &mut self,
+        i: usize,
+        paper: DVec3,
+        aperture_paper: f64,
+    ) -> Option<crate::command::CmdResult> {
+        let pick = self.tabs[i]
+            .scene
+            .dimension_pick_through_viewport(paper, aperture_paper)?;
+        self.record_dimension_viewport_pick(i, pick.frame, pick.paper_point, pick.model_point);
+        let command = self.tabs[i].active_cmd.as_mut()?;
+        command.inject_picked_entity(pick.paper_entity);
+        Some(command.on_entity_pick(pick.entity_handle, pick.paper_point))
     }
 
     /// The DIMLFAC the pending dimension would inherit *without* a viewport
