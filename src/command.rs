@@ -179,7 +179,7 @@ pub struct SelectionEntity {
 }
 
 /// Association source with an optional sub-entity marker.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DimensionAssociationSource {
     pub handle: Handle,
     pub marker: Option<i32>,
