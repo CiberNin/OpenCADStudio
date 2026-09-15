@@ -409,9 +409,7 @@ mod tests {
             DVec3::new(940.5, 2113.25, 0.0),
         ] {
             let expected = f.model_to_paper(model);
-            let actual = t.transform_point(&acadrust::types::Vector3::new(
-                model.x, model.y, model.z,
-            ));
+            let actual = t.apply(acadrust::types::Vector3::new(model.x, model.y, model.z));
             assert!(
                 (actual.x - expected.x).abs() < 1e-9 && (actual.y - expected.y).abs() < 1e-9,
                 "{actual:?} != {expected:?}"

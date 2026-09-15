@@ -2254,6 +2254,7 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::CommitDimensionsAndExit(dimensions) => {
+                self.clear_dimension_accepted_snaps();
                 let association_mode = self.tabs[i]
                     .scene
                     .document
