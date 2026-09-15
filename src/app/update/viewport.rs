@@ -2059,24 +2059,24 @@ impl OpenCADStudio {
                 )
             };
 
-            // Paper-space snapping THROUGH layout viewports (PR1). `edit_cam`
+            // Paper-space snapping through layout viewports. `edit_cam`
             // is None here, so `cursor_world` is the paper point and the sheet
             // fills the canvas (pane-local == canvas pixels). The viewport hit
             // arrives already projected onto the sheet, so everything
             // downstream keeps working in paper coordinates — LINE still draws
             // at the projected paper point.
             self.vp_snap_frame = None;
-            if edit_cam.is_none() && !needs_entity && !is_gathering && !needs_structure
+            if edit_cam.is_none()
+                && !needs_entity
+                && !is_gathering
+                && !needs_structure
                 && !needs_tan
             {
                 if let Some((vp_hit, frame)) =
                     self.paper_viewport_snap(i, p_full, vp_size, cursor_world)
                 {
-                    let merged = crate::snap::merge_snap(
-                        self.tabs[i].snap_result,
-                        Some(vp_hit),
-                        p_full,
-                    );
+                    let merged =
+                        crate::snap::merge_snap(self.tabs[i].snap_result, Some(vp_hit), p_full);
                     if merged.is_some_and(|hit| hit.viewport.is_some()) {
                         self.vp_snap_frame = Some(frame);
                     }
@@ -3701,7 +3701,7 @@ impl OpenCADStudio {
                         }
                     }
                 }
-                // Paper-space snapping through layout viewports (PR1). Mirrors
+                // Paper-space snapping through layout viewports. Mirrors
                 // the cursor-move pass: the click recomputes snapping from
                 // scratch, so the viewport query has to run here too. The hit
                 // comes back already projected onto the sheet.
@@ -3710,8 +3710,7 @@ impl OpenCADStudio {
                     if let Some((vp_hit, frame)) =
                         self.paper_viewport_snap(i, p_full, (vw, vh), raw)
                     {
-                        let merged =
-                            crate::snap::merge_snap(snap_hit, Some(vp_hit), p_full);
+                        let merged = crate::snap::merge_snap(snap_hit, Some(vp_hit), p_full);
                         if merged.is_some_and(|hit| hit.viewport.is_some()) {
                             click_frame = Some(frame);
                         }
@@ -4046,7 +4045,10 @@ impl OpenCADStudio {
                         }
                     }
 
-                    if !self.dimension_acquisition_allowed(i, None) { self.finish_command_click(i); return Task::none(); }
+                    if !self.dimension_acquisition_allowed(i, None) {
+                        self.finish_command_click(i);
+                        return Task::none();
+                    }
                     let shift = self.shift_down;
                     let result = self.tabs[i].active_cmd.as_mut().map(|c| {
                         // Shift-swap state for TRIM/EXTEND (#336).
@@ -4126,11 +4128,21 @@ impl OpenCADStudio {
                     }
                     result
                 } else if let Some(result) = {
-                    let dimension = self.tabs[i].active_cmd.as_ref().is_some_and(|c| c.measures_through_viewports());
+                    let dimension = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .is_some_and(|c| c.measures_through_viewports());
                     if dimension {
-                        let per_px = self.tabs[i].scene.camera.borrow().ortho_size() as f64 * 2.0 / (bounds.height as f64).max(1.0);
-                        self.try_dimension_viewport_entity_pick(i, pick_wcs, crate::ui::overlay::pick_box_aperture_px(self.pick_box) as f64 * per_px)
-                    } else { None }
+                        let per_px = self.tabs[i].scene.camera.borrow().ortho_size() as f64 * 2.0
+                            / (bounds.height as f64).max(1.0);
+                        self.try_dimension_viewport_entity_pick(
+                            i,
+                            pick_wcs,
+                            crate::ui::overlay::pick_box_aperture_px(self.pick_box) as f64 * per_px,
+                        )
+                    } else {
+                        None
+                    }
                 } {
                     Some(result)
                 } else if self.tabs[i]
@@ -4139,7 +4151,12 @@ impl OpenCADStudio {
                     .is_some_and(|command| command.entity_pick_accepts_points())
                 {
                     let pending = self.pending_click_snap.take();
-                    if !self.record_accepted_snap(i, pending.map(|(hit, _)| hit), pending.and_then(|(_, frame)| frame), pick_wcs) {
+                    if !self.record_accepted_snap(
+                        i,
+                        pending.map(|(hit, _)| hit),
+                        pending.and_then(|(_, frame)| frame),
+                        pick_wcs,
+                    ) {
                         self.finish_command_click(i);
                         return Task::none();
                     }
@@ -4212,7 +4229,7 @@ impl OpenCADStudio {
                     }
                 }
                 // Record what this point step accepted, alongside the point
-                // itself (PR1): paper point, model point, viewport, frame and
+                // itself: paper point, model point, viewport, frame and
                 // geometry identity. Commands that don't care keep consuming
                 // `world_pt` exactly as before.
                 let pending = self.pending_click_snap.take();
@@ -4221,7 +4238,10 @@ impl OpenCADStudio {
                     pending.map(|(hit, _)| hit),
                     pending.and_then(|(_, frame)| frame),
                     world_pt,
-                ) { self.finish_command_click(i); return Task::none(); }
+                ) {
+                    self.finish_command_click(i);
+                    return Task::none();
+                }
                 self.last_point = Some(world_pt);
                 // The one-shot snap override is spent by this pick —
                 // restore the running osnap configuration (#337).

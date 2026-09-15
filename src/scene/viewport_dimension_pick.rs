@@ -1,20 +1,5 @@
-//! Object-pick resolution for paper-space dimensions taken through a layout
-//! viewport.
-//!
-//! Paper-space hit testing only sees the sheet's own entities, so a dimension
-//! command's explicit "select object" pick that lands inside a content
-//! viewport finds nothing. [`Scene::dimension_pick_through_viewport`] maps the
-//! click into model space through the viewport's
-//! [`crate::scene::viewport_ref::ViewportFrame`], hit-tests the viewport's
-//! resident model wires (descending into block instances and baking the
-//! instance transform), and hands back a copy of the picked entity already
-//! projected onto the sheet.
-//!
-//! The frame itself is built by [`Scene::viewport_frame`] (see
-//! `crate::scene::mspace`), which derives it from the *live viewport camera*
-//! so it always agrees with the pixels the renderer drew. It returns `None`
-//! for oblique / perspective viewports, and every entry point here then
-//! declines the pick rather than guessing a planar mapping.
+//! Pick dimension geometry through a layout viewport. Resolve block instances
+//! in model space, then project the picked entity onto the paper sheet.
 
 use super::*;
 
@@ -27,7 +12,7 @@ use glam::DVec3;
 
 /// A model entity resolved by clicking inside a paper-space content viewport.
 #[derive(Clone, Debug)]
-pub struct ViewportDimPick {
+pub struct ViewportDimensionPick {
     /// The viewport the click looked through.
     pub frame: ViewportFrame,
     /// Handle of the innermost model entity that owns the picked geometry.
@@ -46,18 +31,6 @@ pub struct ViewportDimPick {
 }
 
 impl Scene {
-    pub fn content_viewport_at_paper_point(&self, paper: DVec3) -> Option<Handle> {
-        self.viewport_frames_at_paper_point(paper)
-            .first()
-            .map(|f| f.viewport)
-    }
-
-    pub fn viewport_frame_at_paper_point(&self, paper: DVec3) -> Option<ViewportFrame> {
-        self.viewport_frames_at_paper_point(paper)
-            .into_iter()
-            .next()
-    }
-
     /// Resolve an explicit dimension object pick made on the sheet but landing
     /// inside a content viewport, against the *model* geometry that viewport
     /// displays.
@@ -67,14 +40,13 @@ impl Scene {
         &self,
         paper: DVec3,
         aperture_paper: f64,
-    ) -> Option<ViewportDimPick> {
+    ) -> Option<ViewportDimensionPick> {
         for frame in self.viewport_frames_at_paper_point(paper) {
             let model_point = frame.paper_to_model(paper);
             let aperture_model =
                 (aperture_paper.max(0.0) * frame.paper_to_model_length_factor()).max(1e-9);
 
-            let Some(top) =
-                self.nearest_model_wire_handle(frame.viewport, model_point, aperture_model)
+            let Some(top) = self.nearest_model_wire_handle(&frame, model_point, aperture_model)
             else {
                 continue;
             };
@@ -93,7 +65,7 @@ impl Scene {
                 &EntityTransform::Affine(viewport_model_to_paper_transform(&frame)),
             );
             let entity_handle = paper_entity.as_entity().handle();
-            return Some(ViewportDimPick {
+            return Some(ViewportDimensionPick {
                 frame,
                 entity_handle: if entity_handle.is_valid() {
                     entity_handle
@@ -114,10 +86,11 @@ impl Scene {
     /// draws, so this matches what the user sees.
     fn nearest_model_wire_handle(
         &self,
-        viewport: Handle,
+        frame: &ViewportFrame,
         model_point: DVec3,
         aperture: f64,
     ) -> Option<Handle> {
+        let viewport = frame.viewport;
         let camera = self.camera_for_viewport(viewport)?;
         let bounds = iced::Rectangle {
             x: 0.0,
@@ -150,9 +123,6 @@ impl Scene {
                 .unwrap_or(DVec3::ZERO);
             let distance = wire_polyline_nearest(wire, offset, model_point);
             if let Some((distance, nearest)) = distance {
-                let Some(frame) = self.viewport_frame(viewport) else {
-                    continue;
-                };
                 if !self.viewport_displays_paper_point(
                     viewport,
                     frame.model_to_paper(nearest).truncate(),
@@ -178,17 +148,8 @@ impl Scene {
     ) -> Option<(EntityType, Vec<Handle>)> {
         let entity = self.document.get_entity(handle)?;
         match entity {
-            EntityType::Insert(_) => {
-                let mut path = Vec::new();
-                let found = self.descend_block_instance(
-                    entity.clone(),
-                    Transform::identity(),
-                    model_point,
-                    &mut path,
-                    0,
-                    viewport,
-                )?;
-                Some((found.0, found.1))
+            EntityType::Insert(insert) => {
+                self.descend_block_instance(insert, Transform::identity(), model_point, 0, viewport)
             }
             other => {
                 planar_pick_distance(other, model_point)?;
@@ -201,20 +162,16 @@ impl Scene {
     /// Returns the entity already transformed into WCS plus the INSERT path.
     fn descend_block_instance(
         &self,
-        insert_entity: EntityType,
+        insert: &acadrust::entities::Insert,
         outer: Transform,
         model_point: DVec3,
-        path: &mut Vec<Handle>,
         depth: usize,
         viewport: Option<Handle>,
     ) -> Option<(EntityType, Vec<Handle>)> {
         const MAX_DEPTH: usize = 8;
-        if depth > MAX_DEPTH {
+        if depth >= MAX_DEPTH {
             return None;
         }
-        let EntityType::Insert(insert) = &insert_entity else {
-            return None;
-        };
         if insert.row_count > 1 || insert.column_count > 1 {
             return None;
         }
@@ -222,10 +179,9 @@ impl Scene {
         let local = crate::scene::render_graph::insert_transform(&self.document, insert);
         let combined = local.then(&outer);
         let block = self.document.block_records.get(&insert.block_name)?;
-        let children: Vec<Handle> = block.entity_handles.clone();
 
         let mut best: Option<(f64, EntityType, Vec<Handle>)> = None;
-        for child in children {
+        for &child in &block.entity_handles {
             let Some(child_entity) = self.document.get_entity(child) else {
                 continue;
             };
@@ -237,13 +193,11 @@ impl Scene {
             if common.invisible || layer.is_some_and(|l| l.flags.off || l.flags.frozen) || frozen {
                 continue;
             }
-            if matches!(child_entity, EntityType::Insert(_)) {
-                let mut nested = Vec::new();
+            if let EntityType::Insert(child_insert) = child_entity {
                 if let Some((entity, mut nested_path)) = self.descend_block_instance(
-                    child_entity.clone(),
+                    child_insert,
                     combined,
                     model_point,
-                    &mut nested,
                     depth + 1,
                     viewport,
                 ) {
@@ -286,8 +240,6 @@ impl Scene {
             }
         }
         let (_, entity, found_path) = best?;
-        path.clear();
-        path.extend(found_path.iter().copied());
         Some((entity, found_path))
     }
 }

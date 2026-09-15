@@ -9,9 +9,9 @@ use iced::time::Instant;
 use iced::{Point, Rectangle};
 
 use cadkernel::geom2d::Curve;
+use acadrust::types::Handle;
 
 use crate::command::{DimensionAssociationSource, TangentObject};
-use acadrust::types::Handle;
 use crate::scene::model::wire_model::{SnapHint, TangentGeom, WireModel};
 use crate::scene::pick::interaction_index::WireSource;
 const DEFAULT_OSNAP_RADIUS_PX: f32 = 15.0;
@@ -90,12 +90,12 @@ pub struct SnapResult {
     /// Layout viewport this snap was seen *through*, when the snap ran against
     /// model geometry displayed by a paper-space viewport. `None` for ordinary
     /// model-space / paper-sheet snaps. Filled by the paper-space viewport snap
-    /// query, never by the engine itself. (PR1)
+    /// query, never by the engine itself.
     pub viewport: Option<Handle>,
     /// Owning entity of the geometry the snap landed on, when the engine could
     /// attribute the feature to a wire. Block sub-entities report the top-level
     /// INSERT handle; the block path is resolved later by
-    /// [`crate::scene::viewport_ref::SnapSourceRef::block_path`]. (PR1)
+    /// [`crate::scene::viewport_ref::SnapSourceRef::block_path`].
     pub source: Option<DimensionAssociationSource>,
     /// Second real object at an intersection, when both objects are known.
     pub secondary_source: Option<DimensionAssociationSource>,
@@ -986,10 +986,10 @@ impl Snapper {
             extension_base2: None,
             extension_origin: None,
             extension_dir: None,
-                        viewport: None,
-                        source: None,
-                        secondary_source: None,
-                        model_point: None,
+            viewport: None,
+            source: None,
+            secondary_source: None,
+            model_point: None,
         })
     }
 
@@ -1224,7 +1224,8 @@ impl Snapper {
 
         let mut try_pt = |world: glam::DVec3,
                           snap_type: SnapType,
-                          src: Option<DimensionAssociationSource>, secondary: Option<DimensionAssociationSource>| {
+                          src: Option<DimensionAssociationSource>,
+                          secondary: Option<DimensionAssociationSource>| {
             let screen = world_to_screen(world, view_rot, eye, bounds);
             if !in_bounds(screen) {
                 return;
@@ -1251,10 +1252,10 @@ impl Snapper {
                     extension_base2: None,
                     extension_origin: None,
                     extension_dir: None,
-                        viewport: None,
-                        source: src,
-                        secondary_source: secondary,
-                        model_point: None,
+                    viewport: None,
+                    source: src,
+                    secondary_source: secondary,
+                    model_point: None,
                 });
             }
         };
@@ -1308,7 +1309,9 @@ impl Snapper {
                     try_pt(
                         DVec3::from_array(point),
                         SnapType::Endpoint,
-                        wire_source(wire), None);
+                        wire_source(wire),
+                        None,
+                    );
                 }
                 // Tessellated open curves have no key-vertex set. Their only
                 // endpoints are first/last, so testing candidate wires remains
@@ -1328,7 +1331,9 @@ impl Snapper {
                         try_pt(
                             wp_f64(wire, wire.points.len() - 1),
                             SnapType::Endpoint,
-                            wire_source(wire), None);
+                            wire_source(wire),
+                            None,
+                        );
                     }
                 }
             } else {
@@ -1351,7 +1356,9 @@ impl Snapper {
                                 try_pt(
                                     wp_f64(wire, wire.points.len() - 1),
                                     SnapType::Endpoint,
-                                    src, None);
+                                    src,
+                                    None,
+                                );
                             }
                         }
                     }
@@ -1402,7 +1409,9 @@ impl Snapper {
                     try_pt(
                         nearest_on_segment(cursor_world, seg.a, seg.b),
                         SnapType::Nearest,
-                        wires.source_wire(seg.wire).and_then(wire_source), None);
+                        wires.source_wire(seg.wire).and_then(wire_source),
+                        None,
+                    );
                 }
             } else {
                 for wire in in_range_wires.iter() {
@@ -1426,7 +1435,9 @@ impl Snapper {
                             try_pt(
                                 foot,
                                 SnapType::Perpendicular,
-                                wires.source_wire(seg.wire).and_then(wire_source), None);
+                                wires.source_wire(seg.wire).and_then(wire_source),
+                                None,
+                            );
                         }
                     }
                 } else {
@@ -1455,7 +1466,9 @@ impl Snapper {
                             try_pt(
                                 point,
                                 SnapType::Intersection,
-                                wires.source_wire(segment.wire).and_then(wire_source), None);
+                                wires.source_wire(segment.wire).and_then(wire_source),
+                                None,
+                            );
                         }
                     }
                 }
@@ -1553,7 +1566,7 @@ impl Snapper {
                     for &wire_j in &local_wires[idx + 1..] {
                         if let Some(points) = exact_curve_intersections(wire_i, wire_j) {
                             // Two wires meet here; attribute the feature to the
-                            // first. PR3 resolves the true pair.
+                            // first. Association resolution requires both source paths.
                             let src = wire_source(wire_i);
                             for point in points {
                                 try_pt(point, SnapType::Intersection, src, wire_source(wire_j));
@@ -1590,7 +1603,9 @@ impl Snapper {
                                 try_pt(
                                     pt,
                                     SnapType::Intersection,
-                                    wires.source_wire(a.wire).and_then(wire_source), wires.source_wire(b.wire).and_then(wire_source));
+                                    wires.source_wire(a.wire).and_then(wire_source),
+                                    wires.source_wire(b.wire).and_then(wire_source),
+                                );
                                 if exact_cursor {
                                     break 'intersection_sweep;
                                 }
@@ -1636,7 +1651,12 @@ impl Snapper {
                                     continue;
                                 }
                                 if let Some(pt) = seg_intersect_3d(a0, a1, b0, b1) {
-                                    try_pt(pt, SnapType::Intersection, wire_source(wire_i), wire_source(wire_j));
+                                    try_pt(
+                                        pt,
+                                        SnapType::Intersection,
+                                        wire_source(wire_i),
+                                        wire_source(wire_j),
+                                    );
                                 }
                             }
                         }
@@ -1762,7 +1782,9 @@ impl Snapper {
                                 try_pt(
                                     segment_a.a + ta as f64 * (segment_a.b - segment_a.a),
                                     SnapType::ApparentIntersection,
-                                    wires.source_wire(segment_a.wire).and_then(wire_source), wires.source_wire(segment_b.wire).and_then(wire_source));
+                                    wires.source_wire(segment_a.wire).and_then(wire_source),
+                                    wires.source_wire(segment_b.wire).and_then(wire_source),
+                                );
                                 if dist2(apparent_screen, cursor_screen) <= f32::EPSILON {
                                     break 'apparent_sweep;
                                 }
@@ -1802,7 +1824,9 @@ impl Snapper {
                                     try_pt(
                                         wa0 + ta as f64 * (wa1 - wa0),
                                         SnapType::ApparentIntersection,
-                                        wire_source(wire_i), wire_source(wire_j));
+                                        wire_source(wire_i),
+                                        wire_source(wire_j),
+                                    );
                                 }
                             }
                         }
@@ -2023,10 +2047,10 @@ impl Snapper {
                             extension_base2: None,
                             extension_origin: None,
                             extension_dir: None,
-                        viewport: None,
-                        source: wire_source(wire),
-                        secondary_source: None,
-                        model_point: None,
+                            viewport: None,
+                            source: wire_source(wire),
+                            secondary_source: None,
+                            model_point: None,
                         });
                     }
                 }
@@ -2196,19 +2220,13 @@ fn snap_tier(t: SnapType) -> u8 {
     }
 }
 
-/// Candidate ordering: tier first, then cursor distance, and only when two
-/// candidates are effectively equidistant (coincident features) the classic
-/// sub-priority — so an Endpoint still beats an Intersection sitting on the
-/// exact same point. Distances are screen-px²; 4.0 ≈ a 2 px coincidence band.
-/// Choose between two independently-computed snap results using the SAME
-/// priority-then-distance rule the engine applies internally
-/// ([`snap_better`]): a higher-priority snap inside the aperture wins even
-/// when a lower-priority one is nearer, and distance only breaks ties.
-///
-/// Used to merge the ordinary paper-sheet snap with the viewport snap taken
-/// through a layout viewport (PR1). Both `screen` fields must be expressed in
-/// the same pixel frame.
-pub fn merge_snap(a: Option<SnapResult>, b: Option<SnapResult>, cursor: Point) -> Option<SnapResult> {
+/// Merge paper and viewport snaps using the engine's ordering.
+/// Both screen positions must use canvas pixels.
+pub fn merge_snap(
+    a: Option<SnapResult>,
+    b: Option<SnapResult>,
+    cursor: Point,
+) -> Option<SnapResult> {
     match (a, b) {
         (Some(a), Some(b)) => {
             let (at, asub) = (snap_tier(a.snap_type), snap_priority(a.snap_type));
@@ -2225,6 +2243,10 @@ pub fn merge_snap(a: Option<SnapResult>, b: Option<SnapResult>, cursor: Point) -
     }
 }
 
+/// Candidate ordering: tier first, then cursor distance, and only when two
+/// candidates are effectively equidistant (coincident features) the classic
+/// sub-priority — so an Endpoint still beats an Intersection sitting on the
+/// exact same point. Distances are screen-px²; 4.0 ≈ a 2 px coincidence band.
 fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
     let (bt, bd2, bsub) = best;
     if tier != bt {

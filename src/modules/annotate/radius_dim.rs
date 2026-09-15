@@ -130,7 +130,7 @@ impl CadCommand for RadiusDimensionCommand {
         CmdResult::Cancel
     }
 
-    /// PR2: points and object picks may come through a paper-space viewport;
+    /// Points and object picks may come through a paper-space viewport;
     /// the committed dimension then reports the model measurement.
     fn measures_through_viewports(&self) -> bool {
         true
@@ -138,7 +138,8 @@ impl CadCommand for RadiusDimensionCommand {
 
     fn dimension_acquired_points(&self) -> Vec<DVec3> {
         match self.step {
-            Step::SelectObject => vec![], Step::DimLine(source) => vec![dvec(source.point_at_angle(source.start_angle))],
+            Step::SelectObject => vec![],
+            Step::DimLine(source) => vec![dvec(source.point_at_angle(source.start_angle))],
         }
     }
 

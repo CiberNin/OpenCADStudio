@@ -2245,23 +2245,23 @@ pub trait CadCommand: Send {
         CmdResult::Cancel
     }
 
-    /// Returns `true` when the command needs entity picking (hit-test) instead of point picking.
-    /// PR2: this command creates a dimension whose measurement must be
-    /// compensated when its points are picked through a paper-space viewport,
-    /// and whose explicit object pick may land on model geometry displayed
-    /// inside one. See `crate::app::dim_viewport`.
+    /// Supports acquiring dimension geometry through a paper-space viewport.
     fn measures_through_viewports(&self) -> bool {
         false
     }
 
     /// Definition points acquired so far, in the command's working space.
     /// Used to retain references only for accepted measuring inputs.
-    fn dimension_acquired_points(&self) -> Vec<DVec3> { Vec::new() }
+    fn dimension_acquired_points(&self) -> Vec<DVec3> {
+        Vec::new()
+    }
 
     /// The next point places annotation rather than acquiring geometry.
-    fn dimension_placement_pending(&self) -> bool { false }
+    fn dimension_placement_pending(&self) -> bool {
+        false
+    }
 
-
+    /// Needs entity hit-testing instead of point input.
     fn needs_entity_pick(&self) -> bool {
         false
     }

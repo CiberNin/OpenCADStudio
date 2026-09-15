@@ -1,5 +1,5 @@
-//! Paper-space dimension acquisition and measurement. Only acquired geometry
-//! carries viewport compensation; free and typed sheet coordinates stay on the sheet.
+//! Paper-space dimension acquisition and measurement. Acquiring model geometry
+//! supplies a viewport scale; sheet-only dimensions retain paper units.
 
 use super::OpenCADStudio;
 use crate::command::DimensionAssociationSource;
@@ -14,7 +14,7 @@ use glam::DVec3;
 pub(crate) enum DimensionMeasureSpace {
     Direct,
     Viewport(ViewportFrame),
-    Mixed,
+    ConflictingViewports,
 }
 
 impl OpenCADStudio {
@@ -26,33 +26,23 @@ impl OpenCADStudio {
         selection.left_dragging = false;
     }
 
-    #[allow(dead_code)] // Consumed by the dependent association change.
-    pub(crate) fn dimension_measuring_snaps(&self, _i: usize) -> Vec<AcceptedSnap> {
-        self.accepted_snaps().to_vec()
-    }
-
     pub(crate) fn dimension_measure_space(&self, i: usize) -> DimensionMeasureSpace {
         let scene = &self.tabs[i].scene;
         if scene.current_layout == "Model" || scene.active_viewport.is_some() {
             return DimensionMeasureSpace::Direct;
         }
         let mut frame: Option<ViewportFrame> = None;
-        let mut direct = false;
-        for snap in self.accepted_snaps() {
-            match snap.frame {
-                Some(f) => match frame {
-                    None => frame = Some(f),
-                    Some(previous) if previous.viewport == f.viewport => {}
-                    Some(_) => return DimensionMeasureSpace::Mixed,
-                },
-                None => direct = true,
+        for f in self.accepted_snaps().iter().filter_map(|snap| snap.frame) {
+            match frame {
+                None => frame = Some(f),
+                Some(previous) if previous.viewport == f.viewport => {}
+                Some(_) => return DimensionMeasureSpace::ConflictingViewports,
             }
         }
-        match (frame, direct) {
-            (None, _) => DimensionMeasureSpace::Direct,
-            (Some(f), false) => DimensionMeasureSpace::Viewport(f),
-            _ => DimensionMeasureSpace::Mixed,
-        }
+        frame.map_or(
+            DimensionMeasureSpace::Direct,
+            DimensionMeasureSpace::Viewport,
+        )
     }
 
     /// Reject an incompatible measuring input before it advances the command.
@@ -68,8 +58,15 @@ impl OpenCADStudio {
         {
             return true;
         }
-        if self.accepted_snaps().iter().any(|s| s.viewport != viewport) {
-            self.command_line.push_error(crate::t!("Pick geometry from the same viewport, or use paper-space points for the whole dimension.").as_ref());
+        // Sheet geometry and free sheet points may accompany one viewport.
+        // A second viewport would make the measurement scale ambiguous.
+        if viewport.is_some_and(|viewport| {
+            self.accepted_snaps()
+                .iter()
+                .filter_map(|s| s.viewport)
+                .any(|previous| previous != viewport)
+        }) {
+            self.command_line.push_error(crate::t!("Model geometry must come from one viewport. Paper-space points can be included.").as_ref());
             return false;
         }
         true
@@ -134,8 +131,8 @@ impl OpenCADStudio {
         );
         let frame = match self.dimension_measure_space(i) {
             DimensionMeasureSpace::Direct => return true,
-            DimensionMeasureSpace::Mixed => {
-                self.command_line.push_error(crate::t!("Pick geometry from the same viewport, or use paper-space points for the whole dimension.").as_ref());
+            DimensionMeasureSpace::ConflictingViewports => {
+                self.command_line.push_error(crate::t!("Model geometry must come from one viewport. Paper-space points can be included.").as_ref());
                 return false;
             }
             DimensionMeasureSpace::Viewport(f) => f,

@@ -149,24 +149,13 @@ fn viewport_dimension_creation_preserves_active_units_and_roundtrips() {
 }
 
 #[test]
-fn viewport_dimension_mixed_and_degenerate_picks_allow_retry() {
+fn viewport_dimension_conflicting_viewports_and_degenerate_picks_allow_retry() {
     let (mut app, line, frame) = fixture();
     let i = app.active_tab;
     let _ = app.dispatch_command("DIMALIGNED");
     point(&mut app, frame, line, DVec3::ZERO);
     point(&mut app, frame, line, DVec3::ZERO);
     assert_eq!(app.accepted_snaps().len(), 1);
-    let _ = app.feed_command(StepInput::Point(DVec3::new(60.0, 50.0, 0.0)));
-    assert_eq!(app.accepted_snaps().len(), 1);
-    assert_eq!(
-        app.tabs[i]
-            .active_cmd
-            .as_ref()
-            .unwrap()
-            .dimension_acquired_points()
-            .len(),
-        1
-    );
     let other = ViewportFrame {
         viewport: Handle::new(0xFFFF),
         ..frame
@@ -318,7 +307,12 @@ fn viewport_dimension_eligibility_is_shared_and_uses_clipping() {
     let top = scene.add_entity(overlay);
     let paper = DVec3::new(55.0, 50.0, 0.0);
     assert_eq!(
-        scene.viewport_frame_at_paper_point(paper).unwrap().viewport,
+        scene
+            .viewport_frames_at_paper_point(paper)
+            .into_iter()
+            .next()
+            .unwrap()
+            .viewport,
         top
     );
     assert_eq!(
@@ -340,7 +334,12 @@ fn viewport_dimension_eligibility_is_shared_and_uses_clipping() {
         vp.clip_boundary_handle = clip;
     }
     assert_eq!(
-        scene.viewport_frame_at_paper_point(paper).unwrap().viewport,
+        scene
+            .viewport_frames_at_paper_point(paper)
+            .into_iter()
+            .next()
+            .unwrap()
+            .viewport,
         first.viewport
     );
     assert_eq!(
@@ -354,7 +353,7 @@ fn viewport_dimension_eligibility_is_shared_and_uses_clipping() {
     if let Some(EntityType::Viewport(vp)) = scene.document.get_entity_mut(first.viewport) {
         vp.status.is_on = false;
     }
-    assert!(scene.viewport_frame_at_paper_point(paper).is_none());
+    assert!(scene.viewport_frames_at_paper_point(paper).is_empty());
     assert!(scene.dimension_pick_through_viewport(paper, 0.2).is_none());
 }
 
@@ -419,5 +418,76 @@ fn viewport_dimension_angular_object_picks_measure_arc_features() {
         assert_eq!(app.accepted_snaps().len(), 3);
         let _ = app.feed_command(StepInput::Point(DVec3::new(65.0, 85.0, 0.0)));
         assert!((displayed(&app.tabs[i].scene.document) - 90.0).abs() < 1e-5);
+    }
+}
+
+fn start_centerline_dimension(
+    command: &str,
+    paper_first: bool,
+    paper_kind: SnapType,
+    factor: f64,
+) -> (OpenCADStudio, Handle, Handle, ViewportFrame) {
+    let (mut app, model, frame) = fixture();
+    let i = app.active_tab;
+    let paper = app.tabs[i]
+        .scene
+        .add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(55.0, 40.0, 0.0),
+            Vector3::new(55.0, 60.0, 0.0),
+        )));
+    let mut style = acadrust::tables::DimStyle::new("CenterlineUnits");
+    style.dimlfac = factor;
+    app.tabs[i].scene.document.dim_styles.add(style).unwrap();
+    app.tabs[i].scene.document.header.current_dimstyle_name = "CenterlineUnits".into();
+    let _ = app.dispatch_command(command);
+    let mut paper_hit = hit(frame, paper, DVec3::new(55.0, 50.0, 0.0));
+    paper_hit.world = DVec3::new(55.0, 50.0, 0.0);
+    paper_hit.model_point = None;
+    paper_hit.viewport = None;
+    paper_hit.snap_type = paper_kind;
+    let mut picks = [
+        (paper_hit, None),
+        (hit(frame, model, DVec3::X * 100.0), Some(frame)),
+    ];
+    if !paper_first {
+        picks.reverse();
+    }
+    for (snap, context) in picks {
+        assert!(app.record_accepted_snap(i, Some(snap), context, snap.world));
+        let result = app.tabs[i]
+            .active_cmd
+            .as_mut()
+            .unwrap()
+            .on_point(snap.world);
+        app.sync_dimension_snaps(i);
+        let _ = app.apply_cmd_result(result);
+    }
+    (app, model, paper, frame)
+}
+
+#[test]
+fn viewport_dimension_paper_centerline_uses_viewport_units_in_either_order() {
+    for command in ["DIMLINEAR", "DIMALIGNED"] {
+        for paper_first in [true, false] {
+            let (mut app, _, paper, _) =
+                start_centerline_dimension(command, paper_first, SnapType::Midpoint, 25.4);
+            let paper_snap = app
+                .accepted_snaps()
+                .iter()
+                .find(|s| s.viewport.is_none())
+                .unwrap();
+            assert_eq!(paper_snap.source.as_ref().unwrap().source.handle, paper);
+            assert_eq!(paper_snap.paper_point, paper_snap.model_point);
+            let _ = app.feed_command(StepInput::Point(DVec3::new(60.0, 80.0, 0.0)));
+            let doc = &app.tabs[app.active_tab].scene.document;
+            assert!(
+                (displayed(doc) - 1270.0).abs() < 1e-3,
+                "{command}: {}",
+                displayed(doc)
+            );
+            app.undo_steps(1);
+            app.redo_steps(1);
+            assert!((displayed(&app.tabs[app.active_tab].scene.document) - 1270.0).abs() < 1e-3);
+        }
     }
 }

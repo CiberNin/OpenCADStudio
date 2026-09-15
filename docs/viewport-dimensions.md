@@ -1,50 +1,50 @@
-# Dimensions through paper-space viewports
+# Dimensions through layout viewports
 
-Paper-space point commands can snap to displayed model geometry through a planar,
-orthographic layout viewport. The acquired result retains the original model
-coordinate, its paper coordinate, the viewport frame, and feature identity.
-Ordinary selection continues to operate on the active drawing space.
+In paper space, snap to model geometry displayed through a planar, orthographic
+viewport. `DIMLINEAR`, `DIMALIGNED`, `DIMANGULAR`, `DIMRADIUS`, and `DIMDIAMETER`
+also support their usual object-pick modes through these viewports.
 
-`DIMLINEAR`, `DIMALIGNED`, `DIMANGULAR`, `DIMRADIUS`, and `DIMDIAMETER` use this
-acquisition context. The supported object-pick modes also query viewport geometry.
-Snapping and object picking share viewport draw order, visibility, and clipping
-rules. Object picking uses the resident interaction index and applies block
-instance transforms. Nonuniformly transformed circles and circular arcs are
-declined as radial object picks because their displayed geometry is elliptical.
-Array inserts without an addressable instance index are also declined; resolved
-block geometry must remain within the original pick aperture.
+## Measurement
 
-## Input and measurement rules
+- Model geometry supplies the viewport scale. A 100-unit model length displayed
+  at 1:10 measures 100, although it occupies 10 paper units.
+- A paper-space centerline or free sheet point can be combined with model
+  geometry through one viewport, in either pick order. The paper-space span is
+  measured using that viewport's scale.
+- Sheet-only dimensions measure paper units, even inside a viewport rectangle.
+- Model picks from a second viewport are rejected without advancing the command.
+  Dimension-line and text placement do not change the measurement scale.
+- The current dimension style's unit conversion is preserved. Angular dimensions
+  do not use length compensation. `DIMASSOC=0` explodes the compensated dimension.
 
-- Free and typed sheet points measure paper units, including points inside a
-  viewport rectangle.
-- Measuring points must all belong to the same space and, when applicable, the
-  same viewport. An incompatible pick leaves the command at its current step.
-- Dimension-line and text placement do not change the measurement's space.
-- Paper geometry takes priority over viewport geometry at an object pick.
-- The final dimension style is applied before computing measurement scaling.
-  Length dimensions keep paper-space definition points and a negative `DIMLFAC`
-  override containing the effective user factor multiplied by `1 / viewport scale`.
-  Angular measurements do not use this length factor.
-- `DIMASSOC=0` uses the same compensated value before exploding the annotation.
+Snapping and object picking respect visibility, clipping, and viewport draw order.
+Paper geometry has priority in object picks. Ordinary selection uses the active
+drawing space. Object picks reuse the resident interaction index and resolve
+nested block transforms.
 
-## Persistent measurement data
+![Measurement schematic: a five-unit sheet span measures 50 through a 1:10 viewport.](viewport-dimension-creation.svg)
 
-`OCS_VIEWPORT_MEASUREMENT` XData stores three values: version `1` (integer16),
-the positive user factor (real), and viewport compensation (real). This keeps the
-user's unit conversion separate from viewport scale. The ordinary `DIMLFAC`
-override remains sufficient for displaying the saved measurement in other CAD
-readers. The data survives DXF/DWG saves and undo/redo.
+## Saved scale
 
-The dependent association change uses this metadata when viewport scale changes.
-This creation change alone creates nonassociative viewport dimensions and leaves
-the drawing's `DIMASSOC` setting unchanged. Direct model/paper associations retain
-their existing behavior.
+Length dimensions store paper-space definition points and a negative `DIMLFAC`
+override: user unit factor multiplied by `1 / viewport scale`.
+`OCS_VIEWPORT_MEASUREMENT` XData stores version `1` (integer16), the positive user
+factor (real), and viewport compensation (real). Keeping the factors separate
+allows compensation to change without losing the user's unit conversion.
+Both the override and XData survive DXF/DWG saves and undo/redo.
 
-## Validation
+Viewport dimensions are nonassociative: later source or viewport edits do not
+update them. The drawing's `DIMASSOC` setting and direct model/paper associations
+keep their existing behavior.
 
-`src/app/viewport_dimension_tests.rs` exercises snap-engine acquisition, command
-commits for all five commands, object picks, input retries, active positive and
-negative style factors, exploded dimensions, undo/redo, DXF/DWG persistence,
-clipping, overlapping viewports, pan, scale, and twist. These are headless tests;
-they do not establish visual acceptance in the desktop UI.
+## Limits
+
+Perspective and oblique views are unsupported. Object picks decline array
+instances without an addressable instance index, nesting beyond eight levels,
+and radial measurements of nonuniformly scaled circles or arcs.
+
+## Tests
+
+Run `cargo test --locked --lib viewport_dimension`. Tests cover the five commands,
+mixed sheet/model input, styles, clipped/overlapping viewports, object picks,
+input retries, exploded dimensions, undo/redo, and DXF/DWG persistence.

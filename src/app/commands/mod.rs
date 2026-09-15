@@ -121,7 +121,7 @@ impl OpenCADStudio {
         // is not constrained by ortho/polar relative to a previous command's endpoint.
         self.last_point = None;
         // A new command collects its own points, so the previous command's
-        // accepted snaps must not leak into it (PR1).
+        // accepted snaps must not leak into it.
         self.clear_accepted_snaps();
         // Starting a command restarts the right-click cycle, so its first
         // right-click acts as Enter rather than opening the context menu.

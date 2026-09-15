@@ -217,7 +217,7 @@ impl CadCommand for LinearDimensionCommand {
         CmdResult::Cancel
     }
 
-    /// PR2: points and object picks may come through a paper-space viewport;
+    /// Points and object picks may come through a paper-space viewport;
     /// the committed dimension then reports the model measurement.
     fn measures_through_viewports(&self) -> bool {
         true
@@ -225,7 +225,8 @@ impl CadCommand for LinearDimensionCommand {
 
     fn dimension_acquired_points(&self) -> Vec<DVec3> {
         match self.step {
-            Step::FirstPoint => vec![], Step::SecondPoint(p) => vec![p],
+            Step::FirstPoint => vec![],
+            Step::SecondPoint(p) => vec![p],
             Step::DimensionLine { first, second } => vec![first, second],
         }
     }

@@ -717,21 +717,12 @@ pub(super) struct OpenCADStudio {
     show_layout_tabs: bool,
     /// Last point committed by a drawing command — used as ortho/polar base.
     last_point: Option<glam::DVec3>,
-    /// Viewport frame the live snap marker is currently looking through (PR1).
-    /// Set by the cursor-move handler when the displayed snap came from a
-    /// layout viewport, cleared otherwise. Display/bookkeeping only — the point
-    /// itself is already projected onto the sheet.
+    /// Viewport used by the current snap; the displayed point is in paper space.
     pub(crate) vp_snap_frame: Option<crate::scene::viewport_ref::ViewportFrame>,
-    /// Snaps accepted by the active command's point steps, parallel to the
-    /// points it collected (PR1). A command that does not care keeps using the
-    /// plain paper point; dimension commands (PR2) read the model point,
-    /// viewport and frame from here, and PR3 reads `source`. Cleared whenever a
-    /// command starts or ends.
+    /// Acquired coordinates and source identities in command-step order.
+    /// Cleared when the command starts or ends.
     accepted_snaps: Vec<crate::scene::viewport_ref::AcceptedSnap>,
-    /// Snap resolved by the click currently being handled, with the viewport
-    /// frame it came through (PR1). Set inside the click handler's point
-    /// resolution so the point-accept path further down can record the
-    /// [`crate::scene::viewport_ref::AcceptedSnap`] without recomputing.
+    /// Click result retained until the command accepts its point.
     pending_click_snap: Option<(
         crate::snap::SnapResult,
         Option<crate::scene::viewport_ref::ViewportFrame>,

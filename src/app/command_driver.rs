@@ -98,7 +98,7 @@ impl OpenCADStudio {
         self.tabs[i].snap_result = None;
         self.last_point = None;
         // Points collected in the space being left are meaningless in the new
-        // one (PR1).
+        // one.
         self.clear_accepted_snaps();
         self.pending_click_snap = None;
         self.snapper.from_point = None;
@@ -386,7 +386,7 @@ impl OpenCADStudio {
             }
             // Typed / dynamic-input / headless points carry no snap, but the
             // accepted-snap list must stay index-parallel with the points the
-            // command collects (PR1). Interactive picks record themselves in
+            // command collects. Interactive picks record themselves in
             // the click handler and never reach here.
             if !self.record_accepted_snap(i, None, None, *point) {
                 return Task::none();
@@ -404,7 +404,9 @@ impl OpenCADStudio {
             self.push_ucs_to_cmd(i);
         }
         if let StepInput::EntityPick(handle, point) = &input {
-            if !self.dimension_acquisition_allowed(i, None) { return Task::none(); }
+            if !self.dimension_acquisition_allowed(i, None) {
+                return Task::none();
+            }
             let solid_pick = matches!(
                 self.tabs[i].scene.document.get_entity(*handle),
                 Some(
@@ -477,7 +479,11 @@ impl OpenCADStudio {
         }
         let ctrl = self.ctrl_down;
         let shift = self.shift_down;
-        let picked_handle = if let StepInput::EntityPick(h, _) = &input { Some(*h) } else { None };
+        let picked_handle = if let StepInput::EntityPick(h, _) = &input {
+            Some(*h)
+        } else {
+            None
+        };
         let result: Option<CmdResult> = {
             let Some(cmd) = self.tabs[i].active_cmd.as_mut() else {
                 return Task::none();
@@ -2366,17 +2372,15 @@ impl OpenCADStudio {
                 // through a viewport carries the compensation as a negative
                 // DIMLFAC override.
                 if !preserve_base_style {
-                    crate::scene::creation_style::apply_current_creation_styles(&self.tabs[i].scene.document, &mut entity);
+                    crate::scene::creation_style::apply_current_creation_styles(
+                        &self.tabs[i].scene.document,
+                        &mut entity,
+                    );
                 }
                 if !self.apply_viewport_dimension_measurement(i, &mut entity) {
                     return Task::none();
                 }
-                // ...and is deliberately *not* associated in paper space: its
-                // definition points are projected paper coordinates, so a
-                // paper-space association would bind it to geometry that is
-                // not there. PR3 records the real dimension -> viewport ->
-                // entity chain instead. One gate, shared with
-                // `infer_dimension_sources_guarded`.
+                // Projected points cannot use direct paper-space source inference.
                 let association_allowed = self.dimension_association_allowed(i);
                 let inherited_dimension = if preserve_base_style {
                     match &entity {
@@ -2438,20 +2442,15 @@ impl OpenCADStudio {
                 } else {
                     let delta_safe = self.delta_add_safe(i, &entity);
                     let pending = self.begin_undo(i, label, 1, delta_safe);
-                    if let Some(handle) = self.commit_entity_handle_with_dimension_policy(
-                        entity,
-                        preserve_base_style,
-                    ) {
+                    if let Some(handle) =
+                        self.commit_entity_handle_with_dimension_policy(entity, preserve_base_style)
+                    {
                         if association_mode == 2 && association_allowed {
-                            let mut changes = vec![
-                                (handle, crate::scene::ChangeKind::Modified),
-                            ];
+                            let mut changes = vec![(handle, crate::scene::ChangeKind::Modified)];
                             match association {
                                 crate::command::DimensionAssociationInput::Infer(source) => {
                                     let sources: Vec<_> = source.map_or_else(
-                                        || {
-                                            self.infer_dimension_sources_guarded(i, handle)
-                                        },
+                                        || self.infer_dimension_sources_guarded(i, handle),
                                         |source| {
                                             if single_source_dimension {
                                                 vec![Some(source)]
