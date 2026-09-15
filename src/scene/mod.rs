@@ -1687,6 +1687,10 @@ pub struct Scene {
     pub hover_highlight: Option<Handle>,
     /// All entities related to the constraint indicator currently under the cursor.
     constraint_hover_highlights: HashSet<Handle>,
+    /// Sub-entity references related to that indicator. Polyline segments are
+    /// drawn separately so hovering one constraint does not light the whole chain.
+    constraint_hover_refs: Vec<crate::scene::parametric_constraints::ParametricRef>,
+    constraint_hover_wires: Vec<WireModel>,
     /// Color used to draw the selection highlight overlay wires (SELECTIONEFFECTCOLOR).
     pub selection_color: [f32; 4],
     /// Whether selection visual effect (glow/highlight) is enabled (SELECTIONEFFECT).
@@ -2217,6 +2221,8 @@ impl Scene {
             refedit_keep: None,
             hover_highlight: None,
             constraint_hover_highlights: HashSet::default(),
+            constraint_hover_refs: Vec::new(),
+            constraint_hover_wires: Vec::new(),
             selection_color: crate::scene::model::wire_model::WireModel::SELECTED,
             selection_effect: true,
             transparency_display: true,
@@ -5128,12 +5134,48 @@ impl Scene {
         handles
     }
 
-    pub fn set_constraint_hover_highlights(&mut self, handles: &[Handle]) {
-        let desired: HashSet<_> = handles.iter().copied().collect();
-        if desired != self.constraint_hover_highlights {
-            self.constraint_hover_highlights = desired;
-            self.bump_selection();
+    pub fn set_constraint_hover_highlights(
+        &mut self,
+        references: &[crate::scene::parametric_constraints::ParametricRef],
+    ) {
+        let mut references = references.to_vec();
+        references.dedup();
+        if references == self.constraint_hover_refs {
+            return;
         }
+
+        let mut handles = HashSet::default();
+        let mut wires = Vec::new();
+        for reference in &references {
+            let Some(segment) = reference.segment_index() else {
+                handles.insert(reference.entity);
+                continue;
+            };
+            let Some(entity) = self.document.get_entity(reference.entity) else {
+                continue;
+            };
+            let Some(mut curve) = crate::entities::curve::entity_curve(entity) else {
+                handles.insert(reference.entity);
+                continue;
+            };
+            let Some(segment_curve) = curve.curve.segments().into_iter().nth(segment) else {
+                continue;
+            };
+            curve.curve = segment_curve;
+            let mut wire = WireModel::solid_f64(
+                format!("constraint-segment:{}:{segment}", reference.entity.value()),
+                curve.tessellate(8.0),
+                WireModel::HOVER,
+                false,
+            );
+            wire.set_fixed_screen_width(2.0);
+            wires.push(wire);
+        }
+
+        self.constraint_hover_refs = references;
+        self.constraint_hover_highlights = handles;
+        self.constraint_hover_wires = wires;
+        self.bump_selection();
     }
 
     /// Keep the current selection visible and temporarily filter every other

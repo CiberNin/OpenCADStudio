@@ -767,6 +767,7 @@ pub fn selection_overlay<'a>(
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
     constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool, Vec<Point>)>,
+    constraint_glyph_tooltip: Option<String>,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -791,6 +792,7 @@ pub fn selection_overlay<'a>(
         crosshair,
         selection_visual,
         constraint_glyphs,
+        constraint_glyph_tooltip,
     })
     .width(Length::Fill)
     .height(Length::Fill)
@@ -853,6 +855,8 @@ struct SelectionCanvas {
     /// state, whether the pill itself is the current click-to-select target,
     /// and the points to mark while the pill is hovered.
     constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool, Vec<Point>)>,
+    /// Localized kind name made visible after the app-level hover dwell.
+    constraint_glyph_tooltip: Option<String>,
 }
 
 fn draw_grip_marker(
@@ -1786,7 +1790,7 @@ impl canvas::Program<Message> for SelectionCanvas {
             let conflict_fg = theme.palette().danger.base.text;
             let selected_ring = theme.palette().primary.strong.color;
             for ((anchor, outward, label, is_conflicting, is_selected, _), tangent_offset) in
-                self.constraint_glyphs.iter().zip(offsets)
+                self.constraint_glyphs.iter().zip(offsets.iter().copied())
             {
                 if !anchor.x.is_finite() || !anchor.y.is_finite() {
                     continue;
@@ -1851,6 +1855,41 @@ impl canvas::Program<Message> for SelectionCanvas {
                     );
                     frame.stroke(&first, stroke.clone());
                     frame.stroke(&second, stroke.clone());
+                }
+                if let Some(label) = &self.constraint_glyph_tooltip {
+                    let (glyph_top_left, glyph_size) = constraint_glyph_box(
+                        self.constraint_glyphs[index].0,
+                        self.constraint_glyphs[index].1,
+                        &self.constraint_glyphs[index].2,
+                        offsets[index],
+                    );
+                    let width = (label.chars().count() as f32 * 7.0 + 14.0).max(54.0);
+                    let height = 24.0;
+                    let left = glyph_top_left.x.clamp(2.0, (bounds.width - width - 2.0).max(2.0));
+                    let top = (glyph_top_left.y + glyph_size.height + 4.0)
+                        .clamp(2.0, (bounds.height - height - 2.0).max(2.0));
+                    let tooltip = canvas::Path::rounded_rectangle(
+                        Point::new(left, top),
+                        Size::new(width, height),
+                        4.0.into(),
+                    );
+                    frame.fill(&tooltip, theme.palette().background.strong.color);
+                    frame.stroke(
+                        &tooltip,
+                        canvas::Stroke::default()
+                            .with_color(theme.palette().background.strong.text)
+                            .with_width(1.0),
+                    );
+                    frame.fill_text(canvas::Text {
+                        content: label.clone(),
+                        position: Point::new(left + width * 0.5, top + height * 0.5),
+                        color: theme.palette().background.strong.text,
+                        size: iced::Pixels(12.0),
+                        align_x: iced::alignment::Horizontal::Center.into(),
+                        align_y: iced::alignment::Vertical::Center,
+                        shaping: iced::advanced::text::Shaping::Advanced,
+                        ..Default::default()
+                    });
                 }
             }
         }

@@ -1942,10 +1942,10 @@ fn solve_scope(
         sys.add_constraint(Rc::new(Difference::new(el.center.y, el.focus1.y, dy)));
     }
 
-    // The first ordered Coincident selection is the anchor for this solve.
-    // Pin either its addressed point or every defining parameter of its whole
-    // curve temporarily; the relation remains persistent, while these pins do
-    // not enter the drawing's constraint graph.
+    // Temporarily make each requested anchor a fixed kernel input. Marking the
+    // geometry parameters as driven keeps them exact and out of the solver's
+    // free-variable list; an approximate equality equation would still allow
+    // visible drift after repeated grip frames.
     for reference in driven_refs {
         if !set
             .constraints
@@ -1996,9 +1996,7 @@ fn solve_scope(
             }
         };
         for parameter in params_to_pin {
-            let value = sys.store().get(parameter);
-            let target = sys.add_param(value, true);
-            sys.add_constraint(Rc::new(Equal::new(parameter, target, 1.0)));
+            sys.store_mut().set_driven(parameter, true);
         }
     }
 
@@ -2638,11 +2636,24 @@ impl Scene {
             if !is_touched {
                 continue;
             }
+            let mut anchors = driven_refs.to_vec();
+            for reference in set
+                .constraints
+                .iter()
+                .filter(|constraint| constraint.enabled)
+                .flat_map(|constraint| &constraint.refs)
+            {
+                if !touched.contains(&reference.entity)
+                    && !anchors.iter().any(|anchor| anchor.entity == reference.entity)
+                {
+                    anchors.push(ParametricRef::whole(reference.entity));
+                }
+            }
             let Some((solved, _dof, _conflicts)) = solve_scope(
                 &self.document,
                 &self.named_parameters,
                 set,
-                driven_refs,
+                &anchors,
                 retain_size,
                 &retained_before,
             )
@@ -2914,11 +2925,11 @@ mod tests {
         );
     }
 
-    /// `solve_parametric_constraints_preview` reports the constrained
-    /// neighbor's solved position without writing anything into the
-    /// document itself — the grip-drag caller owns applying it.
+    /// A grip preview treats geometry outside the edit as a fixed reference,
+    /// so a parallel constraint projects the dragged endpoint without moving
+    /// the other line or changing their separation.
     #[test]
-    fn preview_solve_reports_the_neighbors_new_state_without_mutating_the_document() {
+    fn preview_solve_keeps_untouched_parallel_geometry_fixed() {
         let mut scene = Scene::new();
         let a = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
             Vector3::new(0.0, 0.0, 0.0),
@@ -2943,40 +2954,39 @@ mod tests {
         }
         let b_before = scene.document.get_entity(b).cloned();
 
-        let solved = scene.solve_parametric_constraints_preview(&[a], &[], false, &[]);
+        let solved = scene.solve_parametric_constraints_preview(
+            &[a],
+            &[ParametricRef::point(a, 0)],
+            false,
+            &[],
+        );
 
         assert_eq!(
             scene.document.get_entity(b),
             b_before.as_ref(),
             "preview must not mutate the document"
         );
-        // The whole scope solves together (every registered entity's params
-        // are free, not just `b`'s — see `register_entity`'s doc comment),
-        // so `a` itself may also have shifted slightly to reach the nearest
-        // mutually-parallel configuration; read whichever position `a` ends
-        // up at from `solved` too, rather than assuming it stayed exactly
-        // where the simulated drag put it.
-        let line_dir = |entity: &EntityType| {
-            let EntityType::Line(l) = entity else {
-                panic!("expected a Line")
-            };
-            (l.end.x - l.start.x, l.end.y - l.start.y)
-        };
-        let dir_a = solved
+        let moved_a = solved
             .iter()
             .find(|(h, _)| *h == a)
-            .map(|(_, e)| line_dir(e))
-            .unwrap_or((10.0, 6.0));
-        let (_, moved_entity) = solved
-            .iter()
-            .find(|(h, _)| *h == b)
-            .expect("b should be reported as moved");
-        let dir_b = line_dir(moved_entity);
-        let cross = dir_a.0 * dir_b.1 - dir_a.1 * dir_b.0;
+            .map(|(_, entity)| entity)
+            .expect("the dragged line should be projected");
+        assert!(solved.iter().all(|(handle, _)| *handle != b));
+        let EntityType::Line(moved_a_line) = moved_a else {
+            panic!("expected a Line")
+        };
+        assert_eq!(moved_a_line.start, Vector3::new(0.0, 0.0, 0.0));
+        let EntityType::Line(fixed_b) = b_before.unwrap() else {
+            panic!("expected a Line")
+        };
+        let dir_a = moved_a_line.end - moved_a_line.start;
+        let dir_b = fixed_b.end - fixed_b.start;
+        let cross = dir_a.x * dir_b.y - dir_a.y * dir_b.x;
         assert!(
             cross.abs() < 1e-6,
             "the previewed positions should be mutually parallel: dir_a={dir_a:?} dir_b={dir_b:?}"
         );
+        assert_eq!(fixed_b.start.y - moved_a_line.start.y, 5.0);
     }
 
     #[test]

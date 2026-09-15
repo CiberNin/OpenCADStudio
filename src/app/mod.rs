@@ -642,6 +642,9 @@ pub(super) struct OpenCADStudio {
     /// `HOVER_DWELL_MS`. Skipping the pick mid-stroke avoids the per-frame
     /// O(N) wire+hatch+mesh sweep that froze the cursor on large drawings.
     hover_dwell: Option<HoverDwell>,
+    /// Constraint kind shown after the ordinary rollover dwell while the
+    /// cursor remains over one of its viewport indicators.
+    constraint_glyph_tooltip: Option<crate::scene::parametric_constraints::ConstraintKind>,
     /// Snapshots of edited entities taken at the start of a grip drag. The drag
     /// mutates the document live, so Escape restores this group atomically.
     grip_originals: Vec<(acadrust::Handle, acadrust::EntityType)>,
@@ -3711,6 +3714,7 @@ impl OpenCADStudio {
             grip_add_provisional: None,
             grip_preview_handles: Vec::new(),
             hover_dwell: None,
+            constraint_glyph_tooltip: None,
             grip_originals: Vec::new(),
             grip_history_originals: Vec::new(),
             grip_dirty_before: None,
