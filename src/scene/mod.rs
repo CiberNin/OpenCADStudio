@@ -12591,7 +12591,7 @@ mod layout_cache_tests {
         let mut arc = acadrust::entities::Arc::default();
         arc.radius = 25.0;
         arc.start_angle = 0.0;
-        arc.end_angle = 3.14159;
+        arc.end_angle = std::f64::consts::PI;
         let a_h = s.add_entity(EntityType::Arc(arc));
 
         let line = acadrust::entities::Line::from_points(

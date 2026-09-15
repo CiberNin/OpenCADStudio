@@ -67,10 +67,8 @@ impl Default for AutoConstrainSettings {
     fn default() -> Self {
         Self {
             priority: AutoConstraintKind::ALL.to_vec(),
-            // Equal remains available in the priority list, but the reference
-            // application does not enable it in a fresh profile. Enabling it
-            // by default adds a redundant relation between equal-length line
-            // segments (including adjacent polyline segments).
+            // Keep Equal available without creating redundant relations
+            // between equal-length segments by default.
             enabled: AutoConstraintKind::ALL
                 .into_iter()
                 .filter(|kind| *kind != AutoConstraintKind::Equal)

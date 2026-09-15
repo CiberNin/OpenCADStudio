@@ -1356,9 +1356,18 @@ mod tests {
             std::f64::consts::PI,
         ));
 
-        assert_eq!(driven_ref_for_grip(&arc, handle, 0), Some(ParametricRef::center(handle)));
-        assert_eq!(driven_ref_for_grip(&arc, handle, 1), Some(ParametricRef::point(handle, 0)));
-        assert_eq!(driven_ref_for_grip(&arc, handle, 2), Some(ParametricRef::point(handle, 1)));
+        assert_eq!(
+            driven_ref_for_grip(&arc, handle, 0),
+            Some(ParametricRef::center(handle))
+        );
+        assert_eq!(
+            driven_ref_for_grip(&arc, handle, 1),
+            Some(ParametricRef::point(handle, 0))
+        );
+        assert_eq!(
+            driven_ref_for_grip(&arc, handle, 2),
+            Some(ParametricRef::point(handle, 1))
+        );
         assert_eq!(driven_ref_for_grip(&arc, handle, 3), None);
     }
 
@@ -1528,9 +1537,11 @@ mod tests {
     fn hidden_constraint_stays_hidden_when_related_entity_is_selected() {
         let mut scene = super::super::Scene::new();
         let scope = ParametricScope::ModelSpace;
-        let id = scene
-            .parametric_constraint_set_mut(scope)
-            .add(ConstraintKind::Horizontal, vec![ParametricRef::whole(h(1))], None);
+        let id = scene.parametric_constraint_set_mut(scope).add(
+            ConstraintKind::Horizontal,
+            vec![ParametricRef::whole(h(1))],
+            None,
+        );
         scene.hidden_parametric_constraints.insert((scope, id));
 
         assert!(!scene.should_display_parametric_constraint(scope, id, true, 2));
