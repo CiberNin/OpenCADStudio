@@ -328,6 +328,43 @@ impl MeasurementScale {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// MERGE SEAM — PR1 (feat/viewport-snap) owns `Scene::viewport_frame`.
+//
+// PR3 needs a frame to map a resolved model point onto the sheet, but PR1 is
+// not visible from this branch. This is the minimal stand-in agreed in the
+// shared contract: paper_center = vp.center, model_target = vp.view_target,
+// scale = `vp_effective_scale`, twist = vp.twist_angle. PR1's version is
+// camera-derived (it must agree with what is actually drawn, including the
+// auto-fit rescue in `Scene::camera_for_viewport` for stale saved views).
+//
+// To merge: delete this whole block. Nothing else in PR3 reads viewport
+// fields directly — every call goes through `Scene::viewport_frame`.
+// ─────────────────────────────────────────────────────────────────────────
+impl crate::scene::Scene {
+    /// The planar paper<->model mapping of layout viewport `handle`.
+    ///
+    /// `None` when the handle is not a viewport, or when its scale is
+    /// degenerate (a zero-height view cannot map anything).
+    pub fn viewport_frame(&self, handle: Handle) -> Option<ViewportFrame> {
+        let Some(acadrust::EntityType::Viewport(vp)) = self.document.get_entity(handle) else {
+            return None;
+        };
+        let scale = crate::scene::vp_effective_scale(vp.custom_scale, vp.view_height, vp.height);
+        if !scale.is_finite() || scale.abs() < 1e-12 {
+            return None;
+        }
+        Some(ViewportFrame {
+            viewport: handle,
+            paper_center: DVec2::new(vp.center.x, vp.center.y),
+            model_target: DVec2::new(vp.view_target.x, vp.view_target.y),
+            scale,
+            twist: vp.twist_angle,
+            locked: vp.status.locked,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
