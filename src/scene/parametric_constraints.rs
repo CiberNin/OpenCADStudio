@@ -83,17 +83,17 @@ impl ParametricRef {
     }
 }
 
-/// Point reference driven by a native entity grip. Segment midpoint and
-/// scalar radius grips deliberately return None because they do not identify
-/// one stored point parameter.
-pub(crate) fn driven_ref_for_grip(
+/// Point reference temporarily pinned while solving a native grip edit.
+/// A line endpoint anchors its opposite endpoint so the grabbed endpoint is
+/// projected onto the constraint solution instead of moving the whole line.
+pub(crate) fn grip_solve_anchor_ref(
     entity: &acadrust::EntityType,
     handle: Handle,
     grip_id: usize,
 ) -> Option<ParametricRef> {
     match entity {
         acadrust::EntityType::Line(_) if grip_id <= 1 => {
-            Some(ParametricRef::point(handle, grip_id as i32))
+            Some(ParametricRef::point(handle, 1 - grip_id as i32))
         }
         acadrust::EntityType::LwPolyline(polyline) if grip_id < polyline.vertices.len() => {
             Some(ParametricRef::point(handle, grip_id as i32))
@@ -1888,18 +1888,18 @@ mod tests {
         ));
 
         assert_eq!(
-            driven_ref_for_grip(&arc, handle, 0),
+            grip_solve_anchor_ref(&arc, handle, 0),
             Some(ParametricRef::center(handle))
         );
         assert_eq!(
-            driven_ref_for_grip(&arc, handle, 1),
+            grip_solve_anchor_ref(&arc, handle, 1),
             Some(ParametricRef::point(handle, 0))
         );
         assert_eq!(
-            driven_ref_for_grip(&arc, handle, 2),
+            grip_solve_anchor_ref(&arc, handle, 2),
             Some(ParametricRef::point(handle, 1))
         );
-        assert_eq!(driven_ref_for_grip(&arc, handle, 3), None);
+        assert_eq!(grip_solve_anchor_ref(&arc, handle, 3), None);
     }
 
     #[test]

@@ -1753,7 +1753,7 @@ impl OpenCADStudio {
                         .scene
                         .document
                         .get_entity(target.handle)?;
-                    crate::scene::parametric_constraints::driven_ref_for_grip(
+                    crate::scene::parametric_constraints::grip_solve_anchor_ref(
                         entity,
                         target.handle,
                         target.grip_id,
@@ -6141,11 +6141,9 @@ mod selection_preview_tests {
                 current[1], before[1],
                 "constrained neighbor must follow each grip frame"
             );
-            let start_delta = current[0][0] - before[0][0];
-            let end_delta = current[0][1] - before[0][1];
-            assert!(
-                (start_delta + end_delta).length_squared() > 1.0e-8,
-                "the opposite endpoint must not mirror the dragged endpoint around a fixed midpoint"
+            assert_eq!(
+                current[0][0], before[0][0],
+                "the endpoint opposite the dragged grip must stay fixed"
             );
         }
         let _ = app.on_viewport_left_release();

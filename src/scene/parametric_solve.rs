@@ -1942,10 +1942,10 @@ fn solve_scope(
         sys.add_constraint(Rc::new(Difference::new(el.center.y, el.focus1.y, dy)));
     }
 
-    // The first ordered Coincident selection is the anchor for this solve.
-    // Pin either its addressed point or every defining parameter of its whole
-    // curve temporarily; the relation remains persistent, while these pins do
-    // not enter the drawing's constraint graph.
+    // Temporarily make each requested anchor a fixed kernel input. Marking the
+    // geometry parameters as driven keeps them exact and out of the solver's
+    // free-variable list; an approximate equality equation would still allow
+    // visible drift after repeated grip frames.
     for reference in driven_refs {
         if !set
             .constraints
@@ -1996,9 +1996,7 @@ fn solve_scope(
             }
         };
         for parameter in params_to_pin {
-            let value = sys.store().get(parameter);
-            let target = sys.add_param(value, true);
-            sys.add_constraint(Rc::new(Equal::new(parameter, target, 1.0)));
+            sys.store_mut().set_driven(parameter, true);
         }
     }
 
