@@ -80,11 +80,161 @@ impl Scene {
         &self,
         canvas_px: (f32, f32),
     ) -> Option<(view::camera::Camera, iced::Rectangle)> {
-        let vp_handle = self.active_viewport?;
+        self.viewport_edit_frame_for(self.active_viewport?, canvas_px)
+    }
+
+    /// [`viewport_edit_frame`] for an explicitly-named viewport, rather than
+    /// only the active (MSPACE) one.
+    ///
+    /// Paper-space snapping through viewports (PR1) needs the same camera +
+    /// screen rectangle pair for a viewport the user has NOT entered, so the
+    /// existing snap engine can run against that viewport's model wires on the
+    /// pixels the GPU actually drew them on. `viewport_edit_frame` is now a
+    /// thin wrapper over this.
+    pub fn viewport_edit_frame_for(
+        &self,
+        vp_handle: Handle,
+        canvas_px: (f32, f32),
+    ) -> Option<(view::camera::Camera, iced::Rectangle)> {
         let cam = self.camera_for_viewport(vp_handle)?;
         let full = self.viewport_screen_rect(vp_handle, canvas_px)?;
         Some((cam, full))
     }
+
+    /// Planar paper <-> model mapping for a layout viewport, derived from the
+    /// *same* camera the renderer displays its contents with
+    /// ([`camera_for_viewport`]) so a snap computed through the frame lands on
+    /// the pixels the GPU drew.
+    ///
+    /// Returns `None` for a viewport whose view is not an in-plane orthographic
+    /// top view (oblique / isometric / perspective viewports are unsupported by
+    /// the planar frame — callers fall back to no viewport snapping there).
+    pub fn viewport_frame(&self, vp_handle: Handle) -> Option<crate::scene::viewport_ref::ViewportFrame> {
+        use crate::scene::viewport_ref::ViewportFrame;
+
+        let (paper_center, vp_height, locked) = match self.document.get_entity(vp_handle) {
+            Some(EntityType::Viewport(vp)) => (
+                glam::DVec2::new(vp.center.x, vp.center.y),
+                vp.height,
+                vp.status.locked,
+            ),
+            _ => return None,
+        };
+        if vp_height.abs() < 1e-9 {
+            return None;
+        }
+        let cam = self.camera_for_viewport(vp_handle)?;
+        if cam.projection != view::camera::Projection::Orthographic {
+            return None;
+        }
+        // Screen right/up of the viewport camera, in model space. A planar
+        // frame exists only when both stay in the model XY plane and form a
+        // right-handed pair (a plan view, possibly twisted). Anything else is
+        // an oblique 3-D view: unsupported.
+        let right = (cam.rotation * glam::Vec3::X).as_dvec3();
+        let up = (cam.rotation * glam::Vec3::Y).as_dvec3();
+        if right.z.abs() > 1e-6 || up.z.abs() > 1e-6 {
+            return None;
+        }
+        let normal = right.cross(up);
+        if normal.z < 1.0 - 1e-6 {
+            return None; // mirrored or degenerate
+        }
+        // Model units visible across the viewport's height -> paper per model.
+        let model_height = cam.ortho_size() as f64 * 2.0;
+        if model_height.abs() < 1e-12 {
+            return None;
+        }
+        let scale = vp_height / model_height;
+        // `ViewportFrame` rotates model geometry by `twist` (CCW) before
+        // scaling; the row that produces the paper X component is `right`, so
+        // cos(twist) = right.x and sin(twist) = -right.y.
+        let twist = (-right.y).atan2(right.x);
+        Some(ViewportFrame {
+            viewport: vp_handle,
+            paper_center,
+            model_target: glam::DVec2::new(cam.target.x as f64, cam.target.y as f64),
+            scale,
+            twist,
+            locked,
+        })
+    }
+
+    /// Does `paper` lie inside the viewport's displayed area?
+    ///
+    /// Always bounded by the viewport's paper rectangle; a viewport with a
+    /// `clip_boundary_handle` (non-rectangular / clipped viewport) additionally
+    /// has to contain the point inside that boundary polygon. Used so a
+    /// paper-space snap never reports a model feature the viewport does not
+    /// actually show.
+    pub fn viewport_displays_paper_point(&self, vp_handle: Handle, paper: glam::DVec2) -> bool {
+        let Some(EntityType::Viewport(vp)) = self.document.get_entity(vp_handle) else {
+            return false;
+        };
+        let hw = (vp.width * 0.5).abs();
+        let hh = (vp.height * 0.5).abs();
+        if hw < 1e-9 || hh < 1e-9 {
+            return false;
+        }
+        if (paper.x - vp.center.x).abs() > hw || (paper.y - vp.center.y).abs() > hh {
+            return false;
+        }
+        if vp.clip_boundary_handle.is_null() {
+            return true;
+        }
+        let poly = self.clip_boundary_polygon(vp.clip_boundary_handle, vp.center.z as f32);
+        if poly.len() < 3 {
+            // A clip entity we cannot tessellate: fall back to the rectangle
+            // rather than refusing every snap in the viewport.
+            return true;
+        }
+        point_in_polygon_xy(paper, &poly)
+    }
+}
+
+/// Even-odd point-in-polygon test on the XY plane (`poly` is a closed ring of
+/// `[x, y, z]` paper coordinates; the closing edge is implicit).
+fn point_in_polygon_xy(p: glam::DVec2, poly: &[[f32; 3]]) -> bool {
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi) = (poly[i][0] as f64, poly[i][1] as f64);
+        let (xj, yj) = (poly[j][0] as f64, poly[j][1] as f64);
+        if (yi > p.y) != (yj > p.y) {
+            let t = (p.y - yi) / (yj - yi);
+            if p.x < xi + t * (xj - xi) {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::point_in_polygon_xy;
+
+    #[test]
+    fn concave_clip_boundary_rejects_the_notch() {
+        // An L: the notch at (8, 8) is outside even though it is inside the
+        // bounding rectangle.
+        let poly = [
+            [0.0f32, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 5.0, 0.0],
+            [5.0, 5.0, 0.0],
+            [5.0, 10.0, 0.0],
+            [0.0, 10.0, 0.0],
+        ];
+        assert!(point_in_polygon_xy(glam::DVec2::new(2.0, 2.0), &poly));
+        assert!(point_in_polygon_xy(glam::DVec2::new(8.0, 2.0), &poly));
+        assert!(!point_in_polygon_xy(glam::DVec2::new(8.0, 8.0), &poly));
+        assert!(!point_in_polygon_xy(glam::DVec2::new(-1.0, 5.0), &poly));
+    }
+}
+
+impl Scene {
 
     /// Fold the active viewport's saved view onto the effective camera (the
     /// auto-fit centre for stale UTM views) and persist it into `view_target` /
@@ -522,6 +672,26 @@ impl Scene {
             })
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(h, _)| h)
+    }
+
+    /// Content (floating) viewports of the current paper layout, in draw order
+    /// (the last entry draws on top). Empty in the Model layout.
+    pub fn layout_content_viewports(&self) -> Arc<Vec<Handle>> {
+        if self.current_layout == "Model" {
+            return Arc::new(Vec::new());
+        }
+        let (_, _, handles) = self.paper_viewport_handles();
+        handles
+    }
+
+    /// `true` when this viewport's contents are displayed (VP ON). The border
+    /// layer's visibility deliberately does NOT matter: a viewport whose frame
+    /// layer is off still shows its model content, so it still snaps.
+    pub fn viewport_displays_content(&self, vp_handle: Handle) -> bool {
+        matches!(
+            self.document.get_entity(vp_handle),
+            Some(EntityType::Viewport(vp)) if vp.status.is_on
+        )
     }
 
     /// Return the handle of the first active user viewport in the current layout,
