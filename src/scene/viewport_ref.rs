@@ -148,6 +148,60 @@ impl AcceptedSnap {
     pub fn through_viewport(&self) -> bool {
         self.viewport.is_some()
     }
+
+    /// Build an accepted snap from a [`crate::snap::SnapResult`].
+    ///
+    /// * `frame` `Some`: the snap ran against MODEL geometry through that
+    ///   viewport, so `snap.world` is a model point and the paper point is its
+    ///   projection onto the sheet.
+    /// * `frame` `None`: the snap ran in the current space directly, so paper
+    ///   and model point coincide.
+    ///
+    /// PR1 fills `source` from `SnapResult::source` (the owning entity handle
+    /// the snap engine attributed the feature to); `block_path` stays empty
+    /// until PR3 resolves block instance chains.
+    pub fn from_snap(snap: &crate::snap::SnapResult, frame: Option<ViewportFrame>) -> Self {
+        let (paper_point, model_point) = match &frame {
+            Some(frame) => (frame.model_to_paper(snap.world), snap.world),
+            None => (snap.world, snap.world),
+        };
+        Self {
+            paper_point,
+            model_point,
+            viewport: frame.map(|f| f.viewport),
+            frame,
+            source: snap.source.map(|source| SnapSourceRef {
+                source,
+                block_path: Vec::new(),
+                snap_type: snap.snap_type,
+            }),
+        }
+    }
+
+    /// The paper point with the viewport context of `self`, but no geometry
+    /// identity — used when a command constrains a snapped point (ortho/polar,
+    /// axis lock) so the recorded point matches what was committed.
+    pub fn with_paper_point(mut self, paper_point: DVec3) -> Self {
+        // Compare in the sheet plane only: paper space is flat and callers
+        // clamp `z` to 0, which must not be mistaken for the point having been
+        // moved off the snapped feature (and must not discard the snapped
+        // model point's real elevation).
+        let moved = self
+            .paper_point
+            .truncate()
+            .distance_squared(paper_point.truncate())
+            > 1e-18;
+        if moved {
+            // The committed point is no longer the feature that was snapped.
+            self.source = None;
+            self.model_point = match &self.frame {
+                Some(frame) => frame.paper_to_model(paper_point),
+                None => paper_point,
+            };
+        }
+        self.paper_point = paper_point;
+        self
+    }
 }
 
 /// The two independent factors that turn a raw measured distance into the

@@ -1,0 +1,278 @@
+//! Paper-space snapping THROUGH layout viewports (PR1).
+//!
+//! In a paper layout with no active viewport, `Scene::hit_test_wires` returns
+//! only the paper sheet's own entities — viewport contents are deliberately not
+//! interactive, and that must stay true for *selection*. Snapping, however,
+//! should see the model geometry a viewport displays, so a paper-space LINE /
+//! DIMENSION can pick a real model endpoint and land on the paper pixel where
+//! it is drawn.
+//!
+//! This module adds that as a SEPARATE query. It never changes
+//! `hit_test_wires`. For each displayed content viewport under the cursor
+//! (top-most first) it runs the EXISTING snap engine against that viewport's
+//! resident model wires, using the viewport's own camera and screen rectangle
+//! (`Scene::viewport_edit_frame_for` — the same adapter MSPACE editing uses),
+//! then maps the accepted model point back onto the sheet with
+//! [`ViewportFrame::model_to_paper`].
+//!
+//! Performance: no projected geometry is rebuilt per pointer event. The wire
+//! set comes from `model_wires_for_viewport_arc`, which is the renderer's own
+//! resident, camera-independent `Arc`, and the cursor-local broad phase reuses
+//! the shared interaction index built over it.
+
+use iced::Point;
+
+use acadrust::types::Handle;
+
+use crate::app::OpenCADStudio;
+use crate::scene::viewport_ref::{AcceptedSnap, ViewportFrame};
+use crate::snap::{SnapResult, SnapType};
+
+/// Bound on the retained accepted-snap history. A command's point steps are a
+/// handful at most; the cap only stops a long polyline from growing forever.
+const MAX_ACCEPTED_SNAPS: usize = 64;
+
+impl OpenCADStudio {
+    /// Snaps accepted by the active command's point steps, oldest first, in
+    /// step order. Consumed by the dimension commands in PR2/PR3.
+    #[allow(dead_code)]
+    pub(crate) fn accepted_snaps(&self) -> &[AcceptedSnap] {
+        &self.accepted_snaps
+    }
+
+    /// The most recently accepted snap, if any.
+    #[allow(dead_code)]
+    pub(crate) fn last_accepted_snap(&self) -> Option<&AcceptedSnap> {
+        self.accepted_snaps.last()
+    }
+
+    /// `true` when any point the active command collected came through a
+    /// layout viewport. Dimension association inference (which compares a
+    /// dimension's own definition points against geometry in the *current*
+    /// space) must not run in that case: the definition points are paper
+    /// coordinates that correspond to no paper-sheet geometry, and the model
+    /// geometry they really describe lives at completely different
+    /// coordinates. PR3 replaces this guard with real viewport-aware
+    /// associations built from `AcceptedSnap::source`.
+    pub(crate) fn accepted_snaps_through_viewport(&self) -> bool {
+        self.accepted_snaps.iter().any(AcceptedSnap::through_viewport)
+    }
+
+    /// `Scene::infer_dimension_sources`, suppressed when the dimension's points
+    /// were picked through a layout viewport (PR1).
+    ///
+    /// Inference works by looking for geometry near the dimension's own
+    /// definition points, in whatever space it is handed. A paper-space
+    /// dimension measured through a viewport has PAPER definition points that
+    /// happen to sit over projected model geometry, so unguarded inference
+    /// would either associate it with unrelated paper-sheet geometry at those
+    /// coordinates, or match model geometry using paper coordinates. Neither is
+    /// correct, and a wrong association is worse than none. Returning an empty
+    /// source list makes `attach_dimension_association` a no-op.
+    ///
+    /// Deliberately minimal: PR3 replaces this with a real viewport-aware
+    /// association built from `AcceptedSnap::source`.
+    pub(crate) fn infer_dimension_sources_guarded(
+        &self,
+        tab: usize,
+        dimension: Handle,
+    ) -> Vec<Option<Handle>> {
+        if self.accepted_snaps_through_viewport() {
+            return Vec::new();
+        }
+        self.tabs[tab].scene.infer_dimension_sources(dimension)
+    }
+
+    /// Forget the accepted snaps of a finished / abandoned command.
+    pub(crate) fn clear_accepted_snaps(&mut self) {
+        self.accepted_snaps.clear();
+    }
+
+    /// Record the snap a point step just accepted. `snap` is the displayed snap
+    /// result (already in the current space's coordinates) or `None` for a free
+    /// / typed point; `committed` is the point the command actually received
+    /// after ortho / polar / axis-lock / dynamic-input resolution.
+    pub(crate) fn record_accepted_snap(
+        &mut self,
+        snap: Option<SnapResult>,
+        frame: Option<ViewportFrame>,
+        committed: glam::DVec3,
+    ) {
+        let accepted = match snap {
+            // A viewport snap keeps its frame only when the hit really came
+            // through it, so a paper-sheet snap never claims a model point.
+            Some(hit) => {
+                let frame = hit.viewport.and(frame);
+                AcceptedSnap::from_snap(&hit, frame).with_paper_point(committed)
+            }
+            None => AcceptedSnap::free(committed),
+        };
+        if self.accepted_snaps.len() >= MAX_ACCEPTED_SNAPS {
+            self.accepted_snaps.remove(0);
+        }
+        self.accepted_snaps.push(accepted);
+    }
+    /// Snap the paper-space cursor to model geometry seen through a layout
+    /// viewport.
+    ///
+    /// * `i` — tab index.
+    /// * `cursor_canvas` — cursor in canvas pixels.
+    /// * `canvas` — canvas size in pixels.
+    /// * `cursor_paper` — the paper-space point under the cursor.
+    ///
+    /// Returns the hit expressed in PAPER coordinates (`world` projected onto
+    /// the sheet, `screen` in canvas pixels) together with the frame it came
+    /// through, so the caller can merge it with the ordinary paper-sheet snap
+    /// and later recover the model point.
+    ///
+    /// `None` in the Model layout, while a viewport is active (MSPACE already
+    /// snaps in model space), when snapping is off, or when the cursor is not
+    /// over a displayed viewport.
+    pub(in crate::app) fn paper_viewport_snap(
+        &mut self,
+        i: usize,
+        cursor_canvas: Point,
+        canvas: (f32, f32),
+        cursor_paper: glam::DVec3,
+    ) -> Option<(SnapResult, ViewportFrame)> {
+        if !self.snapper.snap_enabled {
+            return None;
+        }
+        {
+            let scene = &self.tabs[i].scene;
+            if scene.current_layout == "Model" || scene.active_viewport.is_some() {
+                return None;
+            }
+        }
+        if canvas.0 < 1.0 || canvas.1 < 1.0 {
+            return None;
+        }
+
+        let handles = self.tabs[i].scene.layout_content_viewports();
+        // Draw order puts the last-drawn viewport on top; probe top-most first
+        // so overlapping viewports resolve the same way they render.
+        for &handle in handles.iter().rev() {
+            if !self.tabs[i].scene.viewport_displays_content(handle) {
+                continue;
+            }
+            let Some(frame) = self.tabs[i].scene.viewport_frame(handle) else {
+                continue; // oblique / perspective viewport: unsupported
+            };
+            // Clip first (rectangle + non-rectangular clip boundary), in paper
+            // coordinates, so a cursor over the cut-away part of a clipped
+            // viewport sees nothing.
+            if !self
+                .tabs[i]
+                .scene
+                .viewport_displays_paper_point(handle, cursor_paper.truncate())
+            {
+                continue;
+            }
+            let Some((cam, rect)) = self
+                .tabs[i]
+                .scene
+                .viewport_edit_frame_for(handle, canvas)
+            else {
+                continue;
+            };
+            if rect.width < 1.0 || rect.height < 1.0 {
+                continue;
+            }
+            let bounds = iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: rect.width,
+                height: rect.height,
+            };
+            let local = Point::new(cursor_canvas.x - rect.x, cursor_canvas.y - rect.y);
+            let view_rot = cam.view_proj_rte(bounds);
+            let eye = cam.eye();
+            // The cursor in MODEL space, through the frame — exactly the point
+            // the viewport camera projects back onto `local`.
+            let model_cursor = frame.paper_to_model(cursor_paper);
+
+            let wires = self
+                .tabs[i]
+                .scene
+                .model_wires_for_viewport_arc(handle, bounds.height);
+            let candidates = self.tabs[i].scene.interaction_candidates_near(
+                wires,
+                model_cursor,
+                view_rot,
+                eye,
+                bounds,
+                self.snapper.osnap_radius_px,
+            );
+
+            // Object snap only. The grid belongs to the paper sheet, and the
+            // rubber-band origin / tracking points are paper-space points, so
+            // perpendicular and extension feet would be nonsense in model
+            // space. Save and restore, since `Snapper` is shared state.
+            let saved_grid = self.snapper.grid_snap_on;
+            let saved_from = self.snapper.from_point;
+            self.snapper.grid_snap_on = false;
+            self.snapper.from_point = None;
+            let hit = self.snapper.snap(
+                model_cursor,
+                local,
+                &candidates,
+                view_rot,
+                eye,
+                bounds,
+                glam::Vec3::ZERO,
+                (glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z),
+                None,
+            );
+            self.snapper.grid_snap_on = saved_grid;
+            self.snapper.from_point = saved_from;
+
+            let Some(hit) = hit.filter(|h| h.snap_type != SnapType::Grid) else {
+                continue;
+            };
+            // The wire set is the whole model, not a clipped copy, so the only
+            // way a feature outside the visible part could be offered is via
+            // the aperture reaching past the clip. Reject those: a snap must be
+            // a real feature the viewport actually displays.
+            let paper = frame.model_to_paper(hit.world);
+            if !self
+                .tabs[i]
+                .scene
+                .viewport_displays_paper_point(handle, paper.truncate())
+            {
+                continue;
+            }
+            return Some((project_hit_to_paper(hit, &frame, rect, handle), frame));
+        }
+        None
+    }
+}
+
+/// Re-express a snap taken in a viewport's model space as a paper-space result:
+/// the point projects onto the sheet through `frame`, and the pane-local pixel
+/// positions shift by the viewport's screen origin so they share the canvas
+/// frame with the ordinary paper snap.
+fn project_hit_to_paper(
+    hit: SnapResult,
+    frame: &ViewportFrame,
+    rect: iced::Rectangle,
+    viewport: Handle,
+) -> SnapResult {
+    let to_canvas = |p: Point| Point::new(p.x + rect.x, p.y + rect.y);
+    SnapResult {
+        world: frame.model_to_paper(hit.world),
+        screen: to_canvas(hit.screen),
+        snap_type: hit.snap_type,
+        // Tangent geometry is model-space and would be consumed as paper-space
+        // by TTR/TTT; drop it rather than hand over a wrong circle.
+        tangent_obj: None,
+        extension_base: hit.extension_base.map(to_canvas),
+        extension_base2: hit.extension_base2.map(to_canvas),
+        extension_origin: hit.extension_origin.map(|p| frame.model_to_paper(p)),
+        extension_dir: hit.extension_dir.map(|d| {
+            let mapped = frame.model_to_paper_dir(d.truncate());
+            glam::DVec3::new(mapped.x, mapped.y, d.z)
+        }),
+        viewport: Some(viewport),
+        source: hit.source,
+    }
+}
