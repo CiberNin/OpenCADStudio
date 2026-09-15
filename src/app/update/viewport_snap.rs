@@ -106,7 +106,7 @@ impl OpenCADStudio {
         snap: Option<SnapResult>,
         frame: Option<ViewportFrame>,
         committed: glam::DVec3,
-    ) {
+    ) -> bool {
         let mut accepted = match snap {
             // A viewport snap keeps its frame only when the hit really came
             // through it, so a paper-sheet snap never claims a model point.
@@ -116,8 +116,25 @@ impl OpenCADStudio {
             }
             None => AcceptedSnap::free(committed),
         };
+        if self.tabs[tab]
+            .active_cmd
+            .as_ref()
+            .is_some_and(|cmd| cmd.measures_through_viewports())
+        {
+            if self.tabs[tab]
+                .active_cmd
+                .as_ref()
+                .is_some_and(|cmd| cmd.dimension_placement_pending())
+            {
+                return true;
+            }
+            if !self.dimension_acquisition_allowed(tab, accepted.viewport) {
+                return false;
+            }
+        }
         self.resolve_source_block_path(tab, &mut accepted);
         self.push_accepted_snap(accepted);
+        true
     }
 
     /// Replace a snap source that is a block INSTANCE with the entity inside
@@ -199,30 +216,12 @@ impl OpenCADStudio {
             return None;
         }
 
-        let handles = self.tabs[i].scene.layout_content_viewports();
-        // Draw order puts the last-drawn viewport on top; probe top-most first
-        // so overlapping viewports resolve the same way they render.
-        for &handle in handles.iter().rev() {
-            if !self.tabs[i].scene.viewport_displays_content(handle) {
-                continue;
-            }
-            let Some(frame) = self.tabs[i].scene.viewport_frame(handle) else {
-                continue; // oblique / perspective viewport: unsupported
-            };
-            // Clip first (rectangle + non-rectangular clip boundary), in paper
-            // coordinates, so a cursor over the cut-away part of a clipped
-            // viewport sees nothing.
-            if !self
-                .tabs[i]
-                .scene
-                .viewport_displays_paper_point(handle, cursor_paper.truncate())
-            {
-                continue;
-            }
-            let Some((cam, rect)) = self
-                .tabs[i]
-                .scene
-                .viewport_edit_frame_for(handle, canvas)
+        for frame in self.tabs[i]
+            .scene
+            .viewport_frames_at_paper_point(cursor_paper)
+        {
+            let handle = frame.viewport;
+            let Some((cam, rect)) = self.tabs[i].scene.viewport_edit_frame_for(handle, canvas)
             else {
                 continue;
             };
@@ -242,8 +241,7 @@ impl OpenCADStudio {
             // the viewport camera projects back onto `local`.
             let model_cursor = frame.paper_to_model(cursor_paper);
 
-            let wires = self
-                .tabs[i]
+            let wires = self.tabs[i]
                 .scene
                 .model_wires_for_viewport_arc(handle, bounds.height);
             let candidates = self.tabs[i].scene.interaction_candidates_near(
@@ -255,14 +253,14 @@ impl OpenCADStudio {
                 self.snapper.osnap_radius_px,
             );
 
-            // Object snap only. The grid belongs to the paper sheet, and the
-            // rubber-band origin / tracking points are paper-space points, so
-            // perpendicular and extension feet would be nonsense in model
-            // space. Save and restore, since `Snapper` is shared state.
+            // The grid belongs to the sheet. Translate the construction
+            // anchor for perpendicular/tangent snaps into this viewport's
+            // model coordinates, then restore the shared snapper state.
             let saved_grid = self.snapper.grid_snap_on;
             let saved_from = self.snapper.from_point;
             self.snapper.grid_snap_on = false;
-            self.snapper.from_point = None;
+            self.snapper.from_point =
+                saved_from.map(|p| frame.paper_to_model(p.as_dvec3()).as_vec3());
             let hit = self.snapper.snap(
                 model_cursor,
                 local,
@@ -285,8 +283,7 @@ impl OpenCADStudio {
             // the aperture reaching past the clip. Reject those: a snap must be
             // a real feature the viewport actually displays.
             let paper = frame.model_to_paper(hit.world);
-            if !self
-                .tabs[i]
+            if !self.tabs[i]
                 .scene
                 .viewport_displays_paper_point(handle, paper.truncate())
             {
@@ -325,5 +322,7 @@ fn project_hit_to_paper(
         }),
         viewport: Some(viewport),
         source: hit.source,
+        secondary_source: hit.secondary_source,
+        model_point: Some(hit.world),
     }
 }

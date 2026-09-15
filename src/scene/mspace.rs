@@ -160,6 +160,18 @@ impl Scene {
         })
     }
 
+    /// Visible, supported content viewports at a sheet point, topmost first.
+    /// Shared by snapping and explicit dimension object picking.
+    pub fn viewport_frames_at_paper_point(&self, paper: glam::DVec3) -> Vec<crate::scene::viewport_ref::ViewportFrame> {
+        if self.current_layout == "Model" || self.active_viewport.is_some() { return Vec::new(); }
+        self.layout_content_viewports().iter().rev().filter_map(|&handle| {
+            if !self.viewport_displays_content(handle) || !self.viewport_displays_paper_point(handle, paper.truncate()) {
+                return None;
+            }
+            self.viewport_frame(handle)
+        }).collect()
+    }
+
     /// Does `paper` lie inside the viewport's displayed area?
     ///
     /// Always bounded by the viewport's paper rectangle; a viewport with a
@@ -184,9 +196,8 @@ impl Scene {
         }
         let poly = self.clip_boundary_polygon(vp.clip_boundary_handle, vp.center.z as f32);
         if poly.len() < 3 {
-            // A clip entity we cannot tessellate: fall back to the rectangle
-            // rather than refusing every snap in the viewport.
-            return true;
+            // An unsupported boundary cannot establish snap eligibility.
+            return false;
         }
         point_in_polygon_xy(paper, &poly)
     }

@@ -5,6 +5,7 @@ pub mod layer_state_manager;
 pub mod drawing_units;
 pub mod geometric_tolerance;
 pub mod drafting_settings;
+pub mod auto_constrain_settings;
 pub mod layer_translator;
 pub mod plot;
 pub mod print_all;

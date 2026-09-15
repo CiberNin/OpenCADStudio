@@ -23,6 +23,7 @@ use crate::ui::properties::{linetype_display_name, lw_options, LinetypeItem};
 mod widgets;
 mod draw_panel;
 mod modify_panel;
+mod color_dropdown;
 use widgets::{StyleContext, *};
 mod collapse;
 use collapse::{CollapsePanels, Panel};
@@ -739,6 +740,7 @@ impl Ribbon {
         redo_labels: &[String],
         win: (f32, f32),
         is_start: bool,
+        recent_colors: &[AcadColor],
     ) -> Option<Element<'_, Message>> {
         if is_start {
             return None;
@@ -820,7 +822,7 @@ impl Ribbon {
         }
 
         if open_id == PROP_COLOR_ID {
-            return self.prop_color_overlay(win);
+            return self.prop_color_overlay(win, recent_colors);
         }
         if open_id == PROP_LINETYPE_ID {
             return self.prop_linetype_overlay(win);
@@ -1169,27 +1171,17 @@ impl Ribbon {
         )))
     }
 
-    fn prop_color_overlay(&self, win: (f32, f32)) -> Option<Element<'_, Message>> {
-        let picker = crate::ui::color_select::color_list(
-            crate::ui::color_select::ColorExtras {
-                by_layer: true,
-                by_block: true,
-                ..Default::default()
-            },
-            Message::RibbonColorChanged,
-            Message::OpenColorWindow(
-                crate::app::ColorPickTarget::Ribbon,
-                self.active_color,
-            ),
-        );
+    fn prop_color_overlay(
+        &self,
+        win: (f32, f32),
+        recent_colors: &[AcadColor],
+    ) -> Option<Element<'_, Message>> {
+        let panel = color_dropdown::color_dropdown_panel(self.active_color, recent_colors);
 
-        let panel = container(picker)
-            .style(popup_panel_style)
-            .width(Length::Fixed(200.0));
-
-        let (align_right, h_pad, top) = self.dd_anchor(PROP_COLOR_ID, 200.0, win.0);
+        let (align_right, h_pad, top) =
+            self.dd_anchor(PROP_COLOR_ID, color_dropdown::PANEL_W, win.0);
         Some(dropdown_backdrop(position_ribbon_dropdown(
-            panel.into(),
+            panel,
             align_right,
             h_pad,
             top,

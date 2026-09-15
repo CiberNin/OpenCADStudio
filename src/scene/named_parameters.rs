@@ -2,14 +2,13 @@
 //! Formulas are parsed locally so dependency cycles can be rejected before evaluation.
 
 use super::Scene;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
 /// A parsed formula. Ordinary arithmetic plus [`Expr::Ref`] (a reference to
 /// another parameter by name) and [`Expr::Call`] (a function call). Only the
 /// small builtin set in `call_builtin` is accepted.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
     Ref(String),
@@ -57,7 +56,7 @@ impl Expr {
 /// stages, the UI) rather than panicking — matching this codebase's
 /// established pattern of isolating a bad derived value instead of letting
 /// it take down an unrelated computation (e.g. dangling-constraint handling
-/// in `sketch_solve.rs`).
+/// in `parametric_solve.rs`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// A formula's text doesn't parse. The `String` is a short, human-
@@ -131,7 +130,7 @@ pub fn is_valid_name(name: &str) -> bool {
 }
 
 /// A dimensional constraint's literal or named driving value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrivingValue {
     Literal(f64),
     Named(String),
@@ -458,7 +457,7 @@ pub fn parse(source: &str) -> Result<Expr, ParamError> {
 /// One named parameter: a name plus its formula, both the original typed
 /// text (`source`, for redisplay/re-editing) and the parsed [`Expr`]
 /// (`expr`, for evaluation).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: String,
     pub source: String,
@@ -468,11 +467,11 @@ pub struct Parameter {
 /// Every named parameter for one document.
 ///
 /// `parameters` is intentionally not `pub` (unlike the sibling
-/// `SketchConstraintSet::constraints`): this table's entire value is that
+/// `ParametricConstraintSet::constraints`): this table's entire value is that
 /// every stored formula is already known to be parse-valid and cycle-free,
 /// an invariant only `set`/`remove` maintain. A direct external push could
 /// silently violate it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParameterTable {
     parameters: Vec<Parameter>,
 }
@@ -930,20 +929,6 @@ mod tests {
         table.set("a", "2").unwrap();
         assert_eq!(table.len(), 1, "redefining must not create a second entry");
         assert_eq!(table.resolve("a"), Ok(2.0));
-    }
-
-    #[test]
-    fn table_round_trips_through_bincode() {
-        let mut table = ParameterTable::new();
-        table.set("hole_dia", "5").unwrap();
-        table.set("hole_spacing", "2 * hole_dia + 1.5").unwrap();
-
-        let bytes = bincode::serialize(&table).expect("serialize");
-        let restored: ParameterTable = bincode::deserialize(&bytes).expect("deserialize");
-
-        assert_eq!(restored.len(), 2);
-        assert_eq!(restored.resolve("hole_spacing"), Ok(11.5));
-        assert_eq!(restored.get("hole_dia").unwrap().source, "5");
     }
 
     #[test]

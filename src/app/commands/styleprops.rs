@@ -1046,6 +1046,9 @@ impl OpenCADStudio {
                     | "GRIPHOT"
                     | "GRIPHOVER"
                     | "GRIPOBJLIMIT"
+                    | "CONSTRAINTSOLVEMODE"
+                    | "CONSTRAINTINFER"
+                    | "CONSTRAINTBARDISPLAY"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -1068,7 +1071,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
+                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
                     );
                 } else {
                     if name == "CETRANSPARENCY" {
@@ -1253,6 +1256,50 @@ impl OpenCADStudio {
                                 _ => self.command_line.push_error(
                                     crate::t!("SETVAR: DIMCONTINUEMODE requires 0 or 1.").as_ref(),
                                 ),
+                            }
+                        } else {
+                            self.command_line.push_output(crate::tf!(
+                                "Enter new value for {name} <{current}>:"
+                            ).as_ref());
+                            self.pending_setvar = Some(name.clone());
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    if matches!(
+                        name.as_str(),
+                        "CONSTRAINTSOLVEMODE" | "CONSTRAINTINFER" | "CONSTRAINTBARDISPLAY"
+                    ) {
+                        let current = match name.as_str() {
+                            "CONSTRAINTSOLVEMODE" => i16::from(self.constraint_solve_mode),
+                            "CONSTRAINTINFER" => i16::from(self.constraint_infer),
+                            "CONSTRAINTBARDISPLAY" => self.constraint_bar_display,
+                            _ => unreachable!(),
+                        };
+                        let maximum = if name == "CONSTRAINTBARDISPLAY" { 3 } else { 1 };
+                        if let Some(value) = &value {
+                            match value
+                                .parse::<i16>()
+                                .ok()
+                                .filter(|value| (0..=maximum).contains(value))
+                            {
+                                Some(mode) => {
+                                    match name.as_str() {
+                                        "CONSTRAINTSOLVEMODE" => {
+                                            self.constraint_solve_mode = mode != 0
+                                        }
+                                        "CONSTRAINTINFER" => self.constraint_infer = mode != 0,
+                                        "CONSTRAINTBARDISPLAY" => {
+                                            self.constraint_bar_display = mode
+                                        }
+                                        _ => unreachable!(),
+                                    }
+                                    self.persist_settings_if_changed();
+                                    self.command_line
+                                        .push_output(&crate::tf!("{name} = {mode}"));
+                                }
+                                None => self.command_line.push_error(&crate::tf!(
+                                    "{name}: expected an integer from 0 to {maximum}."
+                                )),
                             }
                         } else {
                             self.command_line.push_output(crate::tf!(

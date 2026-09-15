@@ -1,13 +1,11 @@
 //! Bottom status bar — Model/Layout tabs + OSNAP toggle + status info
 
+pub mod status_menu;
 pub mod statusbar_config;
 pub mod statusbar_menu;
-pub mod status_menu;
 
 use iced::widget::tooltip::Position as TipPos;
-use iced::widget::{
-    button, column, container, mouse_area, row, text, text_input, tooltip,
-};
+use iced::widget::{button, column, container, mouse_area, row, text, text_input, tooltip};
 use iced::{Background, Border, Color, Element, Length, Theme};
 use iced_aw::ContextMenu;
 use std::sync::Arc;
@@ -23,10 +21,10 @@ pub const LAYOUT_RENAME_INPUT_ID: &str = "layout_rename_input";
 
 use crate::app::Message;
 use crate::snap::Snapper;
-use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
-use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
-use crate::ui::wrap_bar::WrapBar;
 use crate::t;
+use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
+use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
+use crate::ui::wrap_bar::WrapBar;
 
 /// Height of one status-bar row. Matches the drawing-tab strip above it so the
 /// three horizontal strips — tabs, status bar, command line — line up, and it
@@ -125,16 +123,16 @@ impl StatusBar {
         // Which pills the user has chosen to show on the bar.
         config: &'a StatusBarConfig,
         menu_data: StatusMenuData<'a>,
-        // Remaining degrees of freedom for the current sketch scope.
+        // Remaining degrees of freedom for the current parametric scope.
         // `None` when the scope
-        // has no `SketchConstraintSet` yet (nothing constrained), so the
+        // has no `ParametricConstraintSet` yet (nothing constrained), so the
         // badge stays invisible until it's actually relevant.
-        sketch_dof: Option<usize>,
+        parametric_dof: Option<usize>,
         // Number of redundant/conflicting constraints in the current scope.
         // Zero hides
         // the pill entirely, so an ordinarily/fully-constrained drawing sees
         // no new clutter.
-        sketch_conflicts: usize,
+        parametric_conflicts: usize,
         // What is drawing the scene. Only a degraded verdict shows anything.
         gpu_status: &'a crate::scene::pipeline::GpuStatus,
     ) -> Element<'a, Message> {
@@ -157,9 +155,7 @@ impl StatusBar {
         } else {
             crate::ui::icons::themed_secondary(crate::ui::icons::MENU, 16.0)
         };
-        let menu_button = button(menu_icon)
-            .style(button::subtle)
-            .padding([4, 8]);
+        let menu_button = button(menu_icon).style(button::subtle).padding([4, 8]);
         let menu_btn = if is_start {
             tip(
                 menu_button.into(),
@@ -270,9 +266,9 @@ impl StatusBar {
             );
         }
         // Not a `StatusPill` (so not user-hideable yet): invisible until the
-        // current scope actually has a SketchConstraintSet, so a drawing
+        // current scope actually has a ParametricConstraintSet, so a drawing
         // that never uses parametric constraints sees no new clutter.
-        if let Some(dof) = sketch_dof {
+        if let Some(dof) = parametric_dof {
             let pill = if dof == 0 {
                 success_pill(crate::tf!("DOF: {dof}").into_owned())
             } else {
@@ -284,21 +280,21 @@ impl StatusBar {
                     if dof == 0 {
                         t!("Fully constrained — no remaining degrees of freedom")
                     } else {
-                        t!("Remaining degrees of freedom in the current sketch's persistent constraints")
+                        t!("Remaining degrees of freedom in the current parametric constraint scope")
                     },
                 )
                 .into(),
             );
         }
         // Each click removes one flagged constraint.
-        if sketch_conflicts > 0 {
+        if parametric_conflicts > 0 {
             pills.push(
                 tip(
                     action_pill(
-                        crate::tf!("⚠ {sketch_conflicts} conflicting").into_owned(),
-                        Message::ResolveOneSketchConflict,
+                        crate::tf!("⚠ {parametric_conflicts} conflicting").into_owned(),
+                        Message::ResolveOneParametricConflict,
                     ),
-                    t!("One or more constraints in this sketch conflict or are redundant\nClick to remove one and re-solve"),
+                    t!("One or more parametric constraints conflict or are redundant\nClick to remove one and re-solve"),
                 )
                 .into(),
             );
@@ -315,7 +311,11 @@ impl StatusBar {
         if vis(StatusPill::Lwt) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_LWT, lineweight_display, Message::ToggleLineweightDisplay),
+                    toggle_pill(
+                        crate::ui::icons::ST_LWT,
+                        lineweight_display,
+                        Message::ToggleLineweightDisplay,
+                    ),
                     t!("Show Lineweight\nLWDISPLAY"),
                 )
                 .into(),
@@ -462,10 +462,7 @@ impl StatusBar {
                         t!("Isolate Objects\nClick for Isolate / Hide / End"),
                         tooltip_hidden,
                     ),
-                    crate::ui::popup::isolate_popup::menu_entries(
-                        has_selection,
-                        isolation_active,
-                    ),
+                    crate::ui::popup::isolate_popup::menu_entries(has_selection, isolation_active),
                     160.0,
                 )
                 .into(),
@@ -474,7 +471,11 @@ impl StatusBar {
         if vis(StatusPill::QuickProps) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_QUICKPROPS, quick_properties, Message::ToggleQuickProperties),
+                    toggle_pill(
+                        crate::ui::icons::ST_QUICKPROPS,
+                        quick_properties,
+                        Message::ToggleQuickProperties,
+                    ),
                     t!("Quick Properties\nFloating panel on selection"),
                 )
                 .into(),
@@ -504,7 +505,11 @@ impl StatusBar {
         if vis(StatusPill::SelCycle) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_SELCYCLE, selection_cycling, Message::ToggleSelectionCycling),
+                    toggle_pill(
+                        crate::ui::icons::ST_SELCYCLE,
+                        selection_cycling,
+                        Message::ToggleSelectionCycling,
+                    ),
                     t!("Selection Cycling\nRepeat-click to step through overlapping objects"),
                 )
                 .into(),
@@ -522,7 +527,11 @@ impl StatusBar {
         if vis(StatusPill::CleanScreen) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_CLEANSCREEN, clean_screen, Message::ToggleCleanScreen),
+                    toggle_pill(
+                        crate::ui::icons::ST_CLEANSCREEN,
+                        clean_screen,
+                        Message::ToggleCleanScreen,
+                    ),
                     t!("Clean Screen\nHide ribbon and panels"),
                 )
                 .into(),
@@ -607,13 +616,13 @@ impl StatusBar {
             .style(|theme: &Theme| {
                 let palette = theme.palette();
                 container::Style {
-                background: Some(Background::Color(palette.background.base.color)),
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
+                    background: Some(Background::Color(palette.background.base.color)),
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
                 }
             })
             .width(Length::Fill)
@@ -634,7 +643,12 @@ impl StatusBar {
 /// drawing set to architectural units read its coordinates in decimals, and one
 /// asking for two places got four. `format_length` is the same helper the
 /// properties panel formats through, so both now say a length the same way.
-fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, picking: bool) -> String {
+fn format_coords(
+    cursor: glam::DVec3,
+    last: Option<glam::DVec3>,
+    mode: i16,
+    picking: bool,
+) -> String {
     use crate::entities::common::format_length as len;
     let abs = |p: glam::DVec3| format!("{}, {}, {}", len(p.x), len(p.y), len(p.z));
     match mode {
@@ -666,11 +680,14 @@ fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, pick
 // ── Customization handle ──────────────────────────────────────────────────
 
 fn customize_btn() -> Element<'static, Message> {
-    button(crate::ui::icons::themed_secondary(crate::ui::icons::MENU, 16.0))
-        .on_press(Message::StatusMenuTooltipHidden(true))
-        .style(button::subtle)
-        .padding([4, 8])
-        .into()
+    button(crate::ui::icons::themed_secondary(
+        crate::ui::icons::MENU,
+        16.0,
+    ))
+    .on_press(Message::StatusMenuTooltipHidden(true))
+    .style(button::subtle)
+    .padding([4, 8])
+    .into()
 }
 
 // ── Tooltip helper ────────────────────────────────────────────────────────
@@ -689,11 +706,7 @@ fn menu_tip<'a>(
     label: std::borrow::Cow<'static, str>,
     hidden: bool,
 ) -> Element<'a, Message> {
-    let content = if hidden {
-        content
-    } else {
-        tip(content, label)
-    };
+    let content = if hidden { content } else { tip(content, label) };
 
     mouse_area(content)
         .on_exit(Message::StatusMenuTooltipHidden(false))
@@ -763,21 +776,21 @@ fn split_pill<'a>(
         .style(move |theme: &Theme| {
             let palette = theme.palette();
             container::Style {
-            background: Some(Background::Color(if active {
-                palette.primary.weak.color
-            } else {
-                palette.background.weakest.color
-            })),
-            border: Border {
-                color: if active {
-                    palette.primary.base.color
+                background: Some(Background::Color(if active {
+                    palette.primary.weak.color
                 } else {
-                    palette.background.neutral.color
+                    palette.background.weakest.color
+                })),
+                border: Border {
+                    color: if active {
+                        palette.primary.base.color
+                    } else {
+                        palette.background.neutral.color
+                    },
+                    width: 1.0,
+                    radius: 2.0.into(),
                 },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..Default::default()
+                ..Default::default()
             }
         })
         .padding([4, 6])
@@ -880,8 +893,8 @@ fn osnap_btn<'a>(
     };
     let main = tip(
         mouse_area(snap_icon)
-        .on_press(Message::ToggleSnapEnabled)
-        .into(),
+            .on_press(Message::ToggleSnapEnabled)
+            .into(),
         t!("Object Snap: toggle on/off\nF3"),
     );
 
@@ -926,14 +939,10 @@ fn layout_tab_context_menu(name: String) -> Element<'static, Message> {
     .on_press(Message::LayoutDelete(name))
     .interaction(iced::mouse::Interaction::Pointer);
 
-    container(
-        column![rename, delete]
-            .spacing(0)
-            .width(160),
-    )
-    .style(container::bordered_box)
-    .padding([4, 0])
-    .into()
+    container(column![rename, delete].spacing(0).width(160))
+        .style(container::bordered_box)
+        .padding([4, 0])
+        .into()
 }
 
 /// A layout tab button.
@@ -1020,12 +1029,7 @@ fn space_tab<'a>(
         let report_key = format!("{report_key_prefix}:{label}");
         let tab = mouse_area(display).on_press(switch_msg);
         let tab: Element<'a, Message> = if has_context_menu {
-            crate::ui::wrap_bar::ReorderTab::layout(
-                label.clone(),
-                reorderable_layouts,
-                tab,
-            )
-            .into()
+            crate::ui::wrap_bar::ReorderTab::layout(label.clone(), reorderable_layouts, tab).into()
         } else {
             tab.into()
         };
@@ -1035,11 +1039,7 @@ fn space_tab<'a>(
         } else {
             tab
         };
-        crate::ui::wrap_bar::PosReport::owned(
-            report_key,
-            tab,
-        )
-        .into()
+        crate::ui::wrap_bar::PosReport::owned(report_key, tab).into()
     }
 }
 
@@ -1051,7 +1051,7 @@ fn space_tab<'a>(
 fn space_mode_btn(current_layout: &str, in_mspace: bool) -> Element<'static, Message> {
     let is_model_tab = current_layout == "Model";
 
-    // Labels and styling follow AutoCAD convention:
+    // Labels and styling follow the conventional drafting layout:
     //   PAPER = currently in paper-space editing
     //   MODEL = currently in model-space editing (either the Model tab or MSPACE)
     let (label, active, on_press) = if is_model_tab {
@@ -1089,9 +1089,9 @@ fn space_mode_btn(current_layout: &str, in_mspace: bool) -> Element<'static, Mes
 
 fn status_pill(label: impl Into<String>) -> Element<'static, Message> {
     container(text(label.into()).size(12))
-    .style(container::bordered_box)
-    .padding([4, 8])
-    .into()
+        .style(container::bordered_box)
+        .padding([4, 8])
+        .into()
 }
 
 /// A success-colored status pill used when no degrees of freedom remain.
@@ -1123,7 +1123,11 @@ fn success_pill(label: impl Into<String>) -> Element<'static, Message> {
             container::Style {
                 background: Some(Background::Color(palette.success.weak.color)),
                 text_color: Some(palette.success.weak.text),
-                border: Border { color: palette.success.base.color, width: 1.0, radius: 4.0.into() },
+                border: Border {
+                    color: palette.success.base.color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
                 ..Default::default()
             }
         })
@@ -1141,10 +1145,10 @@ fn popup_pill(label: impl Into<String>) -> Element<'static, Message> {
 fn action_pill(label: impl Into<String>, msg: Message) -> Element<'static, Message> {
     let label = label.into();
     button(text(label).size(12))
-    .on_press(msg)
-    .style(button::subtle)
-    .padding([4, 7])
-    .into()
+        .on_press(msg)
+        .style(button::subtle)
+        .padding([4, 7])
+        .into()
 }
 
 // ── Scale display ─────────────────────────────────────────────────────────
@@ -1196,13 +1200,10 @@ fn active_scale_label(
         .iter()
         .find(|(_, anno_scale, vp_scale)| {
             if is_model {
-                (annotation_scale - *anno_scale).abs()
-                    < 0.001 * annotation_scale.max(0.001)
+                (annotation_scale - *anno_scale).abs() < 0.001 * annotation_scale.max(0.001)
             } else {
                 viewport_scale
-                    .map(|current| {
-                        (current - *vp_scale).abs() < 0.001 * vp_scale.max(0.001)
-                    })
+                    .map(|current| (current - *vp_scale).abs() < 0.001 * vp_scale.max(0.001))
                     .unwrap_or(false)
             }
         })

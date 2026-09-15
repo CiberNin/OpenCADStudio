@@ -29,12 +29,7 @@ impl OpenCADStudio {
                         _ => None,
                     })
                     .collect();
-                let cmd_obj = MlineCommand::with_styles(
-                    styles,
-                    style_name,
-                    scale,
-                    justification,
-                );
+                let cmd_obj = MlineCommand::with_styles(styles, style_name, scale, justification);
                 self.command_line.push_info(&cmd_obj.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
             }
@@ -133,25 +128,29 @@ impl OpenCADStudio {
                             if rest.is_empty() {
                                 // List attributes.
                                 if ins.attributes.is_empty() {
-                                    self.command_line.push_output(crate::tf!(
-                                        "  Insert {:x}: no attributes.",
-                                        sh.value()
-                                    ).as_ref());
+                                    self.command_line.push_output(
+                                        crate::tf!("  Insert {:x}: no attributes.", sh.value())
+                                            .as_ref(),
+                                    );
                                 } else {
                                     for attr in &ins.attributes {
-                                        self.command_line.push_output(crate::tf!(
-                                            "  [{tag}] = {val}",
-                                            tag = attr.tag,
-                                            val = attr.get_value()
-                                        ).as_ref());
+                                        self.command_line.push_output(
+                                            crate::tf!(
+                                                "  [{tag}] = {val}",
+                                                tag = attr.tag,
+                                                val = attr.get_value()
+                                            )
+                                            .as_ref(),
+                                        );
                                     }
                                 }
                             }
                         }
                     }
                     if !found_any {
-                        self.command_line
-                            .push_error(crate::t!("ATTEDIT: no Insert entities in selection.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("ATTEDIT: no Insert entities in selection.").as_ref(),
+                        );
                     }
                     // If tag + value supplied, mutate attributes.
                     if parts.len() == 2 && !parts[0].is_empty() {
@@ -179,13 +178,17 @@ impl OpenCADStudio {
                         }
                         if changed > 0 {
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::tf!(
+                            self.command_line.push_output(
+                                crate::tf!(
                                 "ATTEDIT: updated {changed} attribute(s) [{tag_up}] = {new_val}."
-                            ).as_ref());
+                            )
+                                .as_ref(),
+                            );
                         } else {
-                            self.command_line.push_error(crate::tf!(
-                                "ATTEDIT: tag '{tag_up}' not found in selection."
-                            ).as_ref());
+                            self.command_line.push_error(
+                                crate::tf!("ATTEDIT: tag '{tag_up}' not found in selection.")
+                                    .as_ref(),
+                            );
                         }
                     }
                 }
@@ -243,9 +246,10 @@ impl OpenCADStudio {
                             }
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
-                            "ATTDISP {sub}: {count} attribute definition(s) updated."
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("ATTDISP {sub}: {count} attribute definition(s) updated.")
+                                .as_ref(),
+                        );
                     }
                     _ => {
                         self.command_line
@@ -388,8 +392,10 @@ impl OpenCADStudio {
                         self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                     }
                     None => {
-                        self.command_line
-                            .push_info(crate::t!("ARC Continue  No previous line or arc to continue.").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("ARC Continue  No previous line or arc to continue.")
+                                .as_ref(),
+                        );
                     }
                 }
             }
@@ -528,16 +534,26 @@ impl OpenCADStudio {
                 if count > 0 {
                     self.tabs[i].dirty = true;
                 }
-                self.command_line
-                    .push_output(&crate::tf!("CENTERRESET: {count} center object(s) updated."));
+                self.command_line.push_output(&crate::tf!(
+                    "CENTERRESET: {count} center object(s) updated."
+                ));
             }
 
             "CENTERREASSOCIATE" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
-                let mark_targets: Vec<_> = handles.iter().copied().filter(|handle| {
-                    let Some(acadrust::EntityType::Line(line)) = self.tabs[i].scene.document.get_entity(*handle) else { return false; };
-                    acadrust::entities::CenterMarkAssociation::read(&line.common.extended_data).is_some()
-                }).collect();
+                let mark_targets: Vec<_> = handles
+                    .iter()
+                    .copied()
+                    .filter(|handle| {
+                        let Some(acadrust::EntityType::Line(line)) =
+                            self.tabs[i].scene.document.get_entity(*handle)
+                        else {
+                            return false;
+                        };
+                        acadrust::entities::CenterMarkAssociation::read(&line.common.extended_data)
+                            .is_some()
+                    })
+                    .collect();
                 if mark_targets.len() == 1 && handles.len() == 1 {
                     use crate::modules::draw::draw::dimcenter::CenterMarkReassociateCommand;
                     let new_cmd = CenterMarkReassociateCommand::new(mark_targets[0]);
@@ -546,25 +562,35 @@ impl OpenCADStudio {
                     return Some(self.finish_dispatch(cmd));
                 }
                 self.push_undo_snapshot(i, "CENTERREASSOCIATE");
-                let count = self.tabs[i].scene.set_centerline_association(&handles, true)
-                    + self.tabs[i].scene.set_center_mark_association(&handles, true);
+                let count = self.tabs[i]
+                    .scene
+                    .set_centerline_association(&handles, true)
+                    + self.tabs[i]
+                        .scene
+                        .set_center_mark_association(&handles, true);
                 if count > 0 {
                     self.tabs[i].dirty = true;
                 }
-                self.command_line
-                    .push_output(&crate::tf!("CENTERREASSOCIATE: {count} center object(s) associated."));
+                self.command_line.push_output(&crate::tf!(
+                    "CENTERREASSOCIATE: {count} center object(s) associated."
+                ));
             }
 
             "CENTERDISASSOCIATE" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 self.push_undo_snapshot(i, "CENTERDISASSOCIATE");
-                let count = self.tabs[i].scene.set_centerline_association(&handles, false)
-                    + self.tabs[i].scene.set_center_mark_association(&handles, false);
+                let count = self.tabs[i]
+                    .scene
+                    .set_centerline_association(&handles, false)
+                    + self.tabs[i]
+                        .scene
+                        .set_center_mark_association(&handles, false);
                 if count > 0 {
                     self.tabs[i].dirty = true;
                 }
-                self.command_line
-                    .push_output(&crate::tf!("CENTERDISASSOCIATE: {count} center object(s) detached."));
+                self.command_line.push_output(&crate::tf!(
+                    "CENTERDISASSOCIATE: {count} center object(s) detached."
+                ));
             }
 
             "DIMCENTER" => {
@@ -602,15 +628,20 @@ impl OpenCADStudio {
                     self.command_line.push_info(&selection.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(selection));
                 } else {
-                    let replacements = self.tabs[i].scene.selected_entities().into_iter()
+                    let replacements = self.tabs[i]
+                        .scene
+                        .selected_entities()
+                        .into_iter()
                         .filter(|(handle, _)| !self.tabs[i].scene.is_layer_locked(*handle))
-                        .filter_map(|(handle, entity)| ReverseCommand::reversed(entity)
-                            .map(|reversed| (handle, vec![reversed])))
+                        .filter_map(|(handle, entity)| {
+                            ReverseCommand::reversed(entity)
+                                .map(|reversed| (handle, vec![reversed]))
+                        })
                         .collect::<Vec<_>>();
                     if !replacements.is_empty() {
-                        return Some(self.apply_cmd_result(crate::command::CmdResult::ReplaceMany(
-                            replacements, Vec::new(),
-                        )));
+                        return Some(self.apply_cmd_result(
+                            crate::command::CmdResult::ReplaceMany(replacements, Vec::new()),
+                        ));
                     }
                 }
             }
@@ -766,9 +797,7 @@ impl OpenCADStudio {
                     glam::DVec3::from_array(storage.x_axis),
                     glam::DVec3::from_array(storage.y_axis),
                 );
-                let boundary_sources = self.tabs[i]
-                    .scene
-                    .boundary_sources_on_plane(plane, 1.0e-6);
+                let boundary_sources = self.tabs[i].scene.boundary_sources_on_plane(plane, 1.0e-6);
                 let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
                 let selected = self.tabs[i]
                     .scene
@@ -776,20 +805,14 @@ impl OpenCADStudio {
                     .into_iter()
                     .map(|(handle, _)| handle)
                     .collect::<Vec<_>>();
-                let inherited = selected
-                    .iter()
-                    .find_map(|handle| {
-                        let model = self.tabs[i].scene.hatches.get(handle)?.clone();
-                        let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
-                        Some((model, common.color.clone(), common.transparency))
-                    });
-                let new_cmd = HatchCommand::new(
-                    outlines,
-                    boundary_sources,
-                    selected,
-                    inherited,
-                    plane,
-                ).with_origin(self.tabs[i].scene.document.hatch_origin());
+                let inherited = selected.iter().find_map(|handle| {
+                    let model = self.tabs[i].scene.hatches.get(handle)?.clone();
+                    let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
+                    Some((model, common.color.clone(), common.transparency))
+                });
+                let new_cmd =
+                    HatchCommand::new(outlines, boundary_sources, selected, inherited, plane)
+                        .with_origin(self.tabs[i].scene.document.hatch_origin());
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 self.refresh_area_preview(i);
@@ -804,11 +827,11 @@ impl OpenCADStudio {
                     if let Some(model) = self.tabs[i].scene.hatches.get(&h).cloned() {
                         let entity = self.tabs[i].scene.document.get_entity(h);
                         let annotative = entity.is_some_and(|entity| {
-                                crate::scene::annotative::is_annotative(
-                                    &self.tabs[i].scene.document,
-                                    entity,
-                                )
-                            });
+                            crate::scene::annotative::is_annotative(
+                                &self.tabs[i].scene.document,
+                                entity,
+                            )
+                        });
                         let (scale, angle) = match entity {
                             Some(acadrust::EntityType::Hatch(hatch)) => (
                                 hatch.pattern_scale as f32,
@@ -822,15 +845,28 @@ impl OpenCADStudio {
                             scale,
                             angle,
                             annotative,
-                        ).with_appearance(entity,self.tabs[i].scene.document.header.current_entity_color,self.tabs[i].scene.document.current_entity_transparency()).with_origin(self.tabs[i].scene.document.hatch_origin());
+                        )
+                        .with_appearance(
+                            entity,
+                            self.tabs[i].scene.document.header.current_entity_color,
+                            self.tabs[i].scene.document.current_entity_transparency(),
+                        )
+                        .with_origin(self.tabs[i].scene.document.hatch_origin());
                         self.command_line.push_info(&cmd.prompt());
                         self.tabs[i].active_cmd = Some(Box::new(cmd));
                     } else {
-                        self.command_line
-                            .push_error(crate::t!("HATCHEDIT: selected entity is not a hatch.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("HATCHEDIT: selected entity is not a hatch.").as_ref(),
+                        );
                     }
                 } else {
-                    let cmd = HatcheditCommand::new().with_appearance(None,self.tabs[i].scene.document.header.current_entity_color,self.tabs[i].scene.document.current_entity_transparency()).with_origin(self.tabs[i].scene.document.hatch_origin());
+                    let cmd = HatcheditCommand::new()
+                        .with_appearance(
+                            None,
+                            self.tabs[i].scene.document.header.current_entity_color,
+                            self.tabs[i].scene.document.current_entity_transparency(),
+                        )
+                        .with_origin(self.tabs[i].scene.document.hatch_origin());
                     self.command_line.push_info(&cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 }
@@ -854,9 +890,7 @@ impl OpenCADStudio {
                 } else {
                     crate::command::WorkingPlane::default()
                 };
-                let sources = self.tabs[i]
-                    .scene
-                    .boundary_sources_on_plane(plane, 1.0e-6);
+                let sources = self.tabs[i].scene.boundary_sources_on_plane(plane, 1.0e-6);
                 let selected = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -895,7 +929,8 @@ impl OpenCADStudio {
                     SplineCommand::control_vertices()
                 } else {
                     SplineCommand::new()
-                }.with_document(&self.tabs[i].scene.document);
+                }
+                .with_document(&self.tabs[i].scene.document);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -935,8 +970,7 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 } else {
                     use crate::modules::draw::modify::mirror::MirrorCommand;
-                    let (wires, text_ghosts) =
-                        self.tabs[i].scene.mirror_preview_parts(&handles);
+                    let (wires, text_ghosts) = self.tabs[i].scene.mirror_preview_parts(&handles);
                     let mirror_text = self.tabs[i].scene.document.header.mirror_text;
                     let new_cmd = MirrorCommand::new(handles, wires, text_ghosts, mirror_text);
                     self.command_line.push_info(&new_cmd.prompt());
@@ -986,10 +1020,10 @@ impl OpenCADStudio {
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
-                    let scope = self.tabs[i].current_sketch_scope();
+                    let scope = self.tabs[i].current_parametric_scope();
                     let dimensional = cmd.starts_with("DC");
                     let visible = !matches!(cmd, "GCHIDE" | "DCHIDE");
-                    let count = self.tabs[i].scene.set_sketch_constraint_visibility(
+                    let count = self.tabs[i].scene.set_parametric_constraint_visibility(
                         scope,
                         Some(&handles),
                         dimensional,
@@ -1002,19 +1036,19 @@ impl OpenCADStudio {
             }
 
             "GCRESET" => {
-                let scope = self.tabs[i].current_sketch_scope();
+                let scope = self.tabs[i].current_parametric_scope();
                 let count = self.tabs[i]
                     .scene
-                    .set_sketch_constraint_visibility(scope, None, false, true);
+                    .set_parametric_constraint_visibility(scope, None, false, true);
                 self.command_line
                     .push_output(format!("{} constraint indicator(s) reset.", count).as_str());
             }
 
             "GCSHOWALL" | "GCHIDEALL" | "DCSHOWALL" | "DCHIDEALL" => {
-                let scope = self.tabs[i].current_sketch_scope();
+                let scope = self.tabs[i].current_parametric_scope();
                 let dimensional = cmd.starts_with("DC");
                 let visible = matches!(cmd, "GCSHOWALL" | "DCSHOWALL");
-                let count = self.tabs[i].scene.set_sketch_constraint_visibility(
+                let count = self.tabs[i].scene.set_parametric_constraint_visibility(
                     scope,
                     None,
                     dimensional,
@@ -1032,11 +1066,8 @@ impl OpenCADStudio {
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
-                    let scope = self.tabs[i].current_sketch_scope();
-                    let Some(before) = self.tabs[i]
-                        .scene
-                        .sketch_constraint_set(scope)
-                        .cloned()
+                    let scope = self.tabs[i].current_parametric_scope();
+                    let Some(before) = self.tabs[i].scene.parametric_constraint_set(scope).cloned()
                     else {
                         self.command_line.push_output("No constraints found.");
                         return None;
@@ -1061,8 +1092,8 @@ impl OpenCADStudio {
                     let pending = self.begin_undo(i, "Delete constraints", handles.len(), true);
                     self.tabs[i]
                         .scene
-                        .record_undo_sketch_constraints_before(scope, before);
-                    let set = self.tabs[i].scene.sketch_constraint_set_mut(scope);
+                        .record_undo_parametric_constraints_before(scope, before);
+                    let set = self.tabs[i].scene.parametric_constraint_set_mut(scope);
                     for id in &ids {
                         set.remove(*id);
                     }
@@ -1082,53 +1113,86 @@ impl OpenCADStudio {
                 }
             }
 
+            "CONSTRAINTSETTINGS" => {
+                self.auto_constrain_saved = Some(self.auto_constrain_settings.clone());
+                self.auto_constrain_selected_row = 0;
+                self.auto_constrain_distance_input =
+                    format!("{}", self.auto_constrain_settings.distance_tolerance);
+                self.auto_constrain_angle_input =
+                    format!("{}", self.auto_constrain_settings.angle_tolerance_deg);
+                self.active_modal = Some(crate::app::ModalKind::AutoConstrainSettings);
+            }
+
             "AUTOCONSTRAIN" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
-                    let sel = SelectObjectsCommand::new(cmd);
+                    let sel = SelectObjectsCommand::auto_constrain(cmd);
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
-                    let scope = self.tabs[i].current_sketch_scope();
+                    let scope = self.tabs[i].current_parametric_scope();
                     let inferred = self.tabs[i]
                         .scene
-                        .inferred_sketch_constraints(scope, &handles);
+                        .inferred_parametric_constraints(
+                            scope,
+                            &handles,
+                            &self.auto_constrain_settings,
+                        );
                     if inferred.is_empty() {
-                        self.command_line
-                            .push_output("No supported geometric relations were found.");
-                        return None;
-                    }
-                    let before = self.tabs[i]
-                        .scene
-                        .sketch_constraint_set(scope)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            crate::scene::sketch_constraints::SketchConstraintSet::new(scope)
-                        });
-                    let pending = self.begin_undo(i, "Auto constrain", handles.len(), true);
-                    self.tabs[i]
-                        .scene
-                        .record_undo_sketch_constraints_before(scope, before);
-                    let count = inferred.len();
-                    for (kind, refs) in inferred {
+                        self.command_line.push_output(
+                            format!(
+                                "0 constraint(s) applied to {} object(s).",
+                                handles.len()
+                            )
+                            .as_str(),
+                        );
+                        self.tabs[i].scene.deselect_all();
+                        self.refresh_selected_grips();
+                    } else {
+                        let before = self.tabs[i]
+                            .scene
+                            .parametric_constraint_set(scope)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                crate::scene::parametric_constraints::ParametricConstraintSet::new(
+                                    scope,
+                                )
+                            });
+                        let pending = self.begin_undo(i, "Auto constrain", handles.len(), true);
                         self.tabs[i]
                             .scene
-                            .sketch_constraint_set_mut(scope)
-                            .add(kind, refs, None);
-                    }
-                    let changes: Vec<_> = handles
-                        .iter()
-                        .copied()
-                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
-                        .collect();
-                    self.tabs[i].scene.bump_entities(&changes);
-                    self.tabs[i].dirty = true;
-                    self.refresh_properties();
-                    self.command_line
-                        .push_output(format!("{} constraint(s) applied.", count).as_str());
-                    if let Some(pd) = pending {
-                        self.commit_undo_delta(i, pd);
+                            .record_undo_parametric_constraints_before(scope, before);
+                        let count = inferred.len();
+                        for (kind, refs) in inferred {
+                            self.tabs[i]
+                                .scene
+                                .parametric_constraint_set_mut(scope)
+                                .add(kind, refs, None);
+                        }
+                        let changes: Vec<_> = handles
+                            .iter()
+                            .copied()
+                            .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                            .collect();
+                        self.tabs[i].scene.bump_entities_with_parametric_policy(
+                            &changes,
+                            &[],
+                            self.constraint_solve_mode,
+                        );
+                        self.tabs[i].dirty = true;
+                        self.refresh_properties();
+                        self.command_line.push_output(
+                            format!(
+                                "{} constraint(s) applied to {} object(s).",
+                                count,
+                                handles.len()
+                            )
+                            .as_str(),
+                        );
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
                     }
                 }
             }
@@ -1142,14 +1206,13 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
                     let Some(refs) = self.tabs[i].scene.smooth_constraint_refs(&handles) else {
-                        self.command_line.push_output(
-                            "Select one open spline and one open target curve.",
-                        );
+                        self.command_line
+                            .push_output("Select one open spline and one open target curve.");
                         return None;
                     };
                     use crate::command::CmdResult;
-                    use crate::scene::sketch_constraints::ConstraintKind;
-                    return Some(self.apply_cmd_result(CmdResult::AddSketchConstraint {
+                    use crate::scene::parametric_constraints::ConstraintKind;
+                    return Some(self.apply_cmd_result(CmdResult::AddParametricConstraint {
                         kind: ConstraintKind::Smooth,
                         refs,
                         driving_param: None,
@@ -1166,7 +1229,7 @@ impl OpenCADStudio {
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
-                    let scope = self.tabs[i].current_sketch_scope();
+                    let scope = self.tabs[i].current_parametric_scope();
                     let conversions: Vec<_> = handles
                         .iter()
                         .copied()
@@ -1179,23 +1242,24 @@ impl OpenCADStudio {
                                 )?;
                             self.tabs[i]
                                 .scene
-                                .validate_sketch_constraint(kind, &refs, Some(&value))
+                                .validate_parametric_constraint(kind, &refs, Some(&value))
                                 .ok()?;
                             Some((handle, kind, refs, value))
                         })
                         .collect();
                     if conversions.is_empty() {
-                        self.command_line.push_output(
-                            "No supported associative dimensions were selected.",
-                        );
+                        self.command_line
+                            .push_output("No supported associative dimensions were selected.");
                         return None;
                     }
                     let before = self.tabs[i]
                         .scene
-                        .sketch_constraint_set(scope)
+                        .parametric_constraint_set(scope)
                         .cloned()
                         .unwrap_or_else(|| {
-                            crate::scene::sketch_constraints::SketchConstraintSet::new(scope)
+                            crate::scene::parametric_constraints::ParametricConstraintSet::new(
+                                scope,
+                            )
                         });
                     let mut touched: Vec<_> = conversions
                         .iter()
@@ -1215,12 +1279,13 @@ impl OpenCADStudio {
                     );
                     self.tabs[i]
                         .scene
-                        .record_undo_sketch_constraints_before(scope, before);
+                        .record_undo_parametric_constraints_before(scope, before);
                     for (_, kind, refs, value) in conversions {
-                        self.tabs[i]
-                            .scene
-                            .sketch_constraint_set_mut(scope)
-                            .add(kind, refs, Some(value));
+                        self.tabs[i].scene.parametric_constraint_set_mut(scope).add(
+                            kind,
+                            refs,
+                            Some(value),
+                        );
                     }
                     self.tabs[i].scene.erase_entities(&dimensions);
                     let changes: Vec<_> = touched
@@ -1251,24 +1316,31 @@ impl OpenCADStudio {
                         .push_output("Select exactly one entity, then run this constraint again.");
                 } else {
                     use crate::command::CmdResult;
-                    use crate::scene::sketch_constraints::{ConstraintKind, SketchRef};
+                    use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
                     let (kind, label) = match cmd {
                         "HCONSTRAINT" => (ConstraintKind::Horizontal, "Horizontal constraint"),
                         "VCONSTRAINT" => (ConstraintKind::Vertical, "Vertical constraint"),
                         _ => (ConstraintKind::Fixed, "Fixed constraint"),
                     };
-                    return Some(self.apply_cmd_result(CmdResult::AddSketchConstraint {
+                    return Some(self.apply_cmd_result(CmdResult::AddParametricConstraint {
                         kind,
-                        refs: vec![SketchRef::whole(handles[0])],
+                        refs: vec![ParametricRef::whole(handles[0])],
                         driving_param: None,
                         label,
                     }));
                 }
             }
 
-            "CCONSTRAINT" => {
+            "CCONSTRAINT" | "GCCOINCIDENT" => {
                 use crate::modules::parametric::CoincidentConstraintCommand;
                 let new_cmd = CoincidentConstraintCommand::new();
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
+            "GEOMCONSTRAINT" => {
+                use crate::modules::parametric::GeomConstraintCommand;
+                let new_cmd = GeomConstraintCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -1280,7 +1352,8 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "PCONSTRAINT" | "QCONSTRAINT" | "ECONSTRAINT" | "TCONSTRAINT" | "LCONSTRAINT" | "NRCONSTRAINT" => {
+            "PCONSTRAINT" | "QCONSTRAINT" | "ECONSTRAINT" | "TCONSTRAINT" | "LCONSTRAINT"
+            | "NRCONSTRAINT" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -1293,18 +1366,23 @@ impl OpenCADStudio {
                     );
                 } else {
                     use crate::command::CmdResult;
-                    use crate::scene::sketch_constraints::{ConstraintKind, SketchRef};
+                    use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
                     let (kind, label) = match cmd {
                         "PCONSTRAINT" => (ConstraintKind::Parallel, "Parallel constraint"),
-                        "QCONSTRAINT" => (ConstraintKind::Perpendicular, "Perpendicular constraint"),
+                        "QCONSTRAINT" => {
+                            (ConstraintKind::Perpendicular, "Perpendicular constraint")
+                        }
                         "TCONSTRAINT" => (ConstraintKind::Tangent, "Tangent constraint"),
                         "LCONSTRAINT" => (ConstraintKind::Colinear, "Colinear constraint"),
                         "NRCONSTRAINT" => (ConstraintKind::Normal, "Normal constraint"),
                         _ => (ConstraintKind::Equal, "Equal constraint"),
                     };
-                    return Some(self.apply_cmd_result(CmdResult::AddSketchConstraint {
+                    return Some(self.apply_cmd_result(CmdResult::AddParametricConstraint {
                         kind,
-                        refs: vec![SketchRef::whole(handles[0]), SketchRef::whole(handles[1])],
+                        refs: vec![
+                            ParametricRef::whole(handles[0]),
+                            ParametricRef::whole(handles[1]),
+                        ],
                         driving_param: None,
                         label,
                     }));
@@ -1319,13 +1397,18 @@ impl OpenCADStudio {
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else if handles.len() != 2 {
-                    self.command_line.push_output("Select exactly two circles/arcs, then run this constraint again.");
+                    self.command_line.push_output(
+                        "Select exactly two circles/arcs, then run this constraint again.",
+                    );
                 } else {
                     use crate::command::CmdResult;
-                    use crate::scene::sketch_constraints::{ConstraintKind, SketchRef};
-                    return Some(self.apply_cmd_result(CmdResult::AddSketchConstraint {
+                    use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
+                    return Some(self.apply_cmd_result(CmdResult::AddParametricConstraint {
                         kind: ConstraintKind::Concentric,
-                        refs: vec![SketchRef::center(handles[0]), SketchRef::center(handles[1])],
+                        refs: vec![
+                            ParametricRef::center(handles[0]),
+                            ParametricRef::center(handles[1]),
+                        ],
                         driving_param: None,
                         label: "Concentric constraint",
                     }));
@@ -1345,10 +1428,14 @@ impl OpenCADStudio {
                     );
                 } else {
                     use crate::command::CmdResult;
-                    use crate::scene::sketch_constraints::{ConstraintKind, SketchRef};
-                    return Some(self.apply_cmd_result(CmdResult::AddSketchConstraint {
+                    use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
+                    return Some(self.apply_cmd_result(CmdResult::AddParametricConstraint {
                         kind: ConstraintKind::Symmetric,
-                        refs: vec![SketchRef::center(handles[0]), SketchRef::center(handles[1]), SketchRef::whole(handles[2])],
+                        refs: vec![
+                            ParametricRef::center(handles[0]),
+                            ParametricRef::center(handles[1]),
+                            ParametricRef::whole(handles[2]),
+                        ],
                         driving_param: None,
                         label: "Symmetric constraint",
                     }));
@@ -1368,13 +1455,26 @@ impl OpenCADStudio {
                     );
                 } else {
                     use crate::modules::parametric::PointOnEntityConstraintCommand;
-                    use crate::scene::sketch_constraints::ConstraintKind;
+                    use crate::scene::parametric_constraints::ConstraintKind;
                     let (name, kind, label) = match cmd {
-                        "CPCONSTRAINT" => ("CPCONSTRAINT", ConstraintKind::CenterPoint, "Center point constraint"),
-                        "MPCONSTRAINT" => ("MPCONSTRAINT", ConstraintKind::Midpoint, "Midpoint constraint"),
-                        _ => ("OCCONSTRAINT", ConstraintKind::PointOnCurve, "Point on curve constraint"),
+                        "CPCONSTRAINT" => (
+                            "CPCONSTRAINT",
+                            ConstraintKind::CenterPoint,
+                            "Center point constraint",
+                        ),
+                        "MPCONSTRAINT" => (
+                            "MPCONSTRAINT",
+                            ConstraintKind::Midpoint,
+                            "Midpoint constraint",
+                        ),
+                        _ => (
+                            "OCCONSTRAINT",
+                            ConstraintKind::PointOnCurve,
+                            "Point on curve constraint",
+                        ),
                     };
-                    let new_cmd = PointOnEntityConstraintCommand::new(name, kind, handles[0], label);
+                    let new_cmd =
+                        PointOnEntityConstraintCommand::new(name, kind, handles[0], label);
                     self.command_line.push_info(&new_cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 }
@@ -1389,8 +1489,9 @@ impl OpenCADStudio {
                     self.command_line.push_info(&sel.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else if handles.len() != 1 {
-                    self.command_line
-                        .push_output("Select exactly one line or circle, then run this constraint again.");
+                    self.command_line.push_output(
+                        "Select exactly one line or circle, then run this constraint again.",
+                    );
                 } else {
                     use crate::modules::parametric::{DistanceConstraintCommand, DistanceMode};
                     let (command_name, mode) = match cmd {
@@ -1412,7 +1513,9 @@ impl OpenCADStudio {
                             self.command_line.push_info(&new_cmd.prompt());
                             self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                         }
-                        None => self.command_line.push_output("Select a line or a circle for a distance constraint."),
+                        None => self
+                            .command_line
+                            .push_output("Select a line or a circle for a distance constraint."),
                     }
                 }
             }
@@ -1445,7 +1548,9 @@ impl OpenCADStudio {
                             self.command_line.push_info(&new_cmd.prompt());
                             self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                         }
-                        None => self.command_line.push_output("Select two lines for an angle constraint."),
+                        None => self
+                            .command_line
+                            .push_output("Select two lines for an angle constraint."),
                     }
                 }
             }
@@ -1457,8 +1562,7 @@ impl OpenCADStudio {
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
-            "BOX" | "WEDGE" | "CONE" | "SPHERE" | "PYRAMID" | "PYR"
-            | "TORUS" => {
+            "BOX" | "WEDGE" | "CONE" | "SPHERE" | "PYRAMID" | "PYR" | "TORUS" => {
                 use crate::modules::model::primitive_cmd::PrimitiveCommand;
                 let new_cmd = PrimitiveCommand::new(cmd);
                 self.command_line.push_info(&new_cmd.prompt());
@@ -1625,54 +1729,69 @@ impl OpenCADStudio {
                             continue;
                         };
                         let mut region = Region::new();
-                        region.point_of_reference = Vector3::new(
-                            plane.origin[0],
-                            plane.origin[1],
-                            plane.origin[2],
-                        );
+                        region.point_of_reference =
+                            Vector3::new(plane.origin[0], plane.origin[1], plane.origin[2]);
                         region.common.layer = self.tabs[i].active_layer.clone();
                         regions.push((region, body));
                         sources.push(*handle);
                     }
                 }
                 // Open inputs must share one geometric plane, independently of the UCS.
-                let open_curves: Vec<_> = self.tabs[i].scene.selected_entities().iter()
+                let open_curves: Vec<_> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .iter()
                     .filter(|(handle, _)| !sources.contains(handle))
                     .filter_map(|(_, entity)| crate::entities::curve::entity_curve(entity))
                     .collect();
                 let open_plane = cadkernel::space::common_curve_plane(&open_curves, 1.0e-6);
                 let open_plane_rejected = !open_curves.is_empty() && open_plane.is_none();
                 if let Some(plane) = open_plane {
-                let working_plane = crate::command::WorkingPlane::new(
-                    glam::DVec3::from_array(plane.origin),
-                    glam::DVec3::from_array(plane.x_axis),
-                    glam::DVec3::from_array(plane.y_axis),
-                );
-                let selected_handles: rustc_hash::FxHashSet<_> = self.tabs[i].scene
-                    .selected_entities().iter().map(|(handle, _)| *handle).collect();
-                let mut boundary_sources = self.tabs[i].scene
-                    .boundary_sources_on_plane(working_plane, 1.0e-6);
-                boundary_sources.retain(|handle, _| {
-                    selected_handles.contains(handle) && !sources.contains(handle)
-                });
-                for ring in crate::scene::boundary_faces(&boundary_sources, 1.0e-6) {
-                    let paths = crate::scene::exact_hatch_paths(
-                        std::slice::from_ref(&ring), &[true], &boundary_sources, 1.0e-6,
+                    let working_plane = crate::command::WorkingPlane::new(
+                        glam::DVec3::from_array(plane.origin),
+                        glam::DVec3::from_array(plane.x_axis),
+                        glam::DVec3::from_array(plane.y_axis),
                     );
-                    let Some(path) = paths.first() else { continue; };
-                    let Some(curves) = path.edges.iter()
-                        .map(crate::entities::hatch::edge_curve).collect::<Option<Vec<_>>>()
-                    else { continue; };
-                    let Some(body) = cadkernel::brep::planar_region(plane, &[curves])
-                    else { continue; };
-                    let mut region = Region::new();
-                    region.point_of_reference = Vector3::new(
-                        plane.origin[0], plane.origin[1], plane.origin[2],
-                    );
-                    region.common.layer = self.tabs[i].active_layer.clone();
-                    regions.push((region, body));
-                    sources.extend(crate::scene::ring_source_handles(&ring, &boundary_sources));
-                }
+                    let selected_handles: rustc_hash::FxHashSet<_> = self.tabs[i]
+                        .scene
+                        .selected_entities()
+                        .iter()
+                        .map(|(handle, _)| *handle)
+                        .collect();
+                    let mut boundary_sources = self.tabs[i]
+                        .scene
+                        .boundary_sources_on_plane(working_plane, 1.0e-6);
+                    boundary_sources.retain(|handle, _| {
+                        selected_handles.contains(handle) && !sources.contains(handle)
+                    });
+                    for ring in crate::scene::boundary_faces(&boundary_sources, 1.0e-6) {
+                        let paths = crate::scene::exact_hatch_paths(
+                            std::slice::from_ref(&ring),
+                            &[true],
+                            &boundary_sources,
+                            1.0e-6,
+                        );
+                        let Some(path) = paths.first() else {
+                            continue;
+                        };
+                        let Some(curves) = path
+                            .edges
+                            .iter()
+                            .map(crate::entities::hatch::edge_curve)
+                            .collect::<Option<Vec<_>>>()
+                        else {
+                            continue;
+                        };
+                        let Some(body) = cadkernel::brep::planar_region(plane, &[curves]) else {
+                            continue;
+                        };
+                        let mut region = Region::new();
+                        region.point_of_reference =
+                            Vector3::new(plane.origin[0], plane.origin[1], plane.origin[2]);
+                        region.common.layer = self.tabs[i].active_layer.clone();
+                        regions.push((region, body));
+                        sources.extend(crate::scene::ring_source_handles(&ring, &boundary_sources));
+                    }
                 } else if open_plane_rejected {
                     self.command_line.push_error(
                         "REGION: open objects must form coplanar, noncollinear boundaries.",
@@ -1720,8 +1839,10 @@ impl OpenCADStudio {
                     let sides = nums.get(2).map(|s| *s as usize).unwrap_or(4);
                     return Some(self.solid_pyramid(nums[0], nums[1], sides));
                 }
-                self.command_line
-                    .push_info(crate::t!("Usage: PYRAMID <radius> <height> [sides]   (default 4 sides)").as_ref());
+                self.command_line.push_info(
+                    crate::t!("Usage: PYRAMID <radius> <height> [sides]   (default 4 sides)")
+                        .as_ref(),
+                );
             }
 
             // SECTION [X|Y|Z] <value> — draw the cross-section outline of the solid.
@@ -1756,7 +1877,10 @@ impl OpenCADStudio {
                 match parts.get(val_idx).and_then(|s| s.parse::<f64>().ok()) {
                     Some(v) => return Some(self.solid_section(axis, v)),
                     None => self.command_line.push_info(
-                        crate::t!("Usage: SECTION [X|Y|Z] <value>   (cross-sections the selected solid)").as_ref(),
+                        crate::t!(
+                            "Usage: SECTION [X|Y|Z] <value>   (cross-sections the selected solid)"
+                        )
+                        .as_ref(),
                     ),
                 }
             }
@@ -1909,7 +2033,8 @@ impl OpenCADStudio {
                 match angle {
                     Some(a) => return Some(self.solid_rotate3d(axis, a)),
                     None => self.command_line.push_info(
-                        crate::t!("Usage: 3DROTATE [X|Y|Z] <angle>   (rotates the selected solid)").as_ref(),
+                        crate::t!("Usage: 3DROTATE [X|Y|Z] <angle>   (rotates the selected solid)")
+                            .as_ref(),
                     ),
                 }
             }
@@ -1951,11 +2076,12 @@ impl OpenCADStudio {
                                 }
                             })
                         });
-                    let (centre, radius) = bounds.map_or((glam::DVec3::ZERO, 10.0), |(min, max)| {
-                        let min = glam::DVec3::from_array(min);
-                        let max = glam::DVec3::from_array(max);
-                        ((min + max) * 0.5, (max - min).length().max(2.0) * 0.65)
-                    });
+                    let (centre, radius) =
+                        bounds.map_or((glam::DVec3::ZERO, 10.0), |(min, max)| {
+                            let min = glam::DVec3::from_array(min);
+                            let max = glam::DVec3::from_array(max);
+                            ((min + max) * 0.5, (max - min).length().max(2.0) * 0.65)
+                        });
                     (targets, centre, radius, scene.active_gaze_dir().as_dvec3())
                 };
                 let c = SliceCommand::new(targets, view_normal, centre, radius);
@@ -1990,7 +2116,10 @@ impl OpenCADStudio {
                         return Some(self.slice_selected(plane, Some(side)));
                     }
                     None => self.command_line.push_info(
-                        crate::t!("Usage: SLICE [X|Y|Z] <value> [TOP|BOTTOM]   (cuts the selected solid)").as_ref(),
+                        crate::t!(
+                            "Usage: SLICE [X|Y|Z] <value> [TOP|BOTTOM]   (cuts the selected solid)"
+                        )
+                        .as_ref(),
                     ),
                 }
             }
@@ -2006,8 +2135,7 @@ impl OpenCADStudio {
                     let styles = scene.document.text_styles.iter().cloned().collect();
                     (defaults, styles, annotation_multiplier)
                 };
-                let new_cmd =
-                    TextCommand::with_defaults(defaults, styles, annotation_multiplier);
+                let new_cmd = TextCommand::with_defaults(defaults, styles, annotation_multiplier);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -2092,9 +2220,15 @@ mod region_tests {
             app.automation_op(r#"{"op":"run","cmd":"CIRCLE 5,5 3"}"#);
             app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,10"}"#);
             let i = app.active_tab;
-            let sources: Vec<_> = app.tabs[i].scene.document.entities()
+            let sources: Vec<_> = app.tabs[i]
+                .scene
+                .document
+                .entities()
                 .map(|entity| {
-                    (entity.common().handle, matches!(entity, acadrust::EntityType::Circle(_)))
+                    (
+                        entity.common().handle,
+                        matches!(entity, acadrust::EntityType::Circle(_)),
+                    )
                 })
                 .collect();
             assert_eq!(sources.len(), 2);
@@ -2110,7 +2244,10 @@ mod region_tests {
                     !delete_sources || !is_circle,
                 );
             }
-            let region_count = app.tabs[i].scene.document.entities()
+            let region_count = app.tabs[i]
+                .scene
+                .document
+                .entities()
                 .filter(|entity| matches!(entity, acadrust::EntityType::Region(_)))
                 .count();
             assert_eq!(region_count, 1);

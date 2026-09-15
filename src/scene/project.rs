@@ -386,12 +386,12 @@ impl Scene {
     /// needs the equivalent paper-space geometry explicitly.
     pub fn viewport_plot_fills(
         &self,
-    ) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>) {
+    ) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>, Vec<crate::io::pdf_export::PlotImage>) {
         use acadrust::entities::Viewport;
         use model::hatch_model::HatchPattern;
 
         if self.current_layout == "Model" {
-            return (Vec::new(), Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         }
         let paper_block = self.current_layout_block_handle();
         let model_block = self.model_space_block_handle();
@@ -411,6 +411,7 @@ impl Scene {
         let mut pattern_wires = Vec::new();
         let mut projected_hatches = Vec::new();
         let mut projected_wipeouts = Vec::new();
+        let mut projected_images = Vec::new();
 
         for viewport in viewports {
             let Some(camera) = self.camera_for_viewport(viewport.common.handle) else {
@@ -463,6 +464,58 @@ impl Scene {
 
             let frozen: rustc_hash::FxHashSet<Handle> =
                 viewport.frozen_layers.iter().copied().collect();
+            let mut viewport_clips = vec![vec![
+                [xmin as f64, ymin as f64], [xmax as f64, ymin as f64],
+                [xmax as f64, ymax as f64], [xmin as f64, ymax as f64],
+            ]];
+            if !self.images.is_empty() && !viewport.clip_boundary_handle.is_null() {
+                let boundary = self.clip_boundary_polygon(
+                    viewport.clip_boundary_handle, viewport.center.z as f32);
+                if boundary.len() >= 3 {
+                    viewport_clips.push(boundary.iter().map(|p| [p[0] as f64, p[1] as f64]).collect());
+                }
+            }
+            for mut plot in self.placed_images(model_block, Some(&frozen),
+                self.viewport_scale_handle(viewport.common.handle),
+                self.annotation_all_visible(), Some(viewport.common.handle), true)
+            {
+                let mut valid = true;
+                let mut project_point = |high: &mut [f32; 3], low: &mut [f32; 3]| {
+                    let point = std::array::from_fn(|i| high[i] as f64 + low[i] as f64);
+                    if let Some([x, y]) = project_3d(point) {
+                        *high = [x, y, 0.0];
+                        *low = [0.0; 3];
+                    } else {
+                        valid = false;
+                    }
+                };
+                for (high, low) in plot.image.corners.iter_mut().zip(&mut plot.image.corners_low) {
+                    project_point(high, low);
+                }
+                for vertex in &mut plot.image.verts {
+                    project_point(&mut vertex.pos, &mut vertex.pos_low);
+                }
+                for clip in &mut plot.clips {
+                    for point in clip {
+                        if let Some([x, y]) = project(point[0], point[1]) {
+                            *point = [x as f64, y as f64];
+                        } else {
+                            valid = false;
+                        }
+                    }
+                }
+                if !valid {
+                    continue;
+                }
+                if [(0, xmin, xmax), (1, ymin, ymax)].iter().any(|&(axis, min, max)| {
+                    plot.image.verts.iter().all(|v| v.pos[axis] < min)
+                        || plot.image.verts.iter().all(|v| v.pos[axis] > max)
+                }) {
+                    continue;
+                }
+                plot.clips.extend(viewport_clips.iter().cloned());
+                projected_images.push(plot);
+            }
             let hatches = self.plot_hatches_for_block(
                 model_block,
                 Some(&frozen),
@@ -536,7 +589,7 @@ impl Scene {
             }
         }
 
-        (pattern_wires, projected_hatches, projected_wipeouts)
+        (pattern_wires, projected_hatches, projected_wipeouts, projected_images)
     }
 
     /// A content viewport's clip boundary, projected into that viewport's

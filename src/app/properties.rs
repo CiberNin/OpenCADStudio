@@ -1,10 +1,10 @@
 use super::helpers::{entity_type_key, entity_type_label, title_case_word};
 use super::{OpenCADStudio, VARIES_LABEL};
 use crate::io::linetypes;
-use crate::scene::view::dispatch;
 use crate::scene::model::object::PropValue;
-use crate::ui;
+use crate::scene::view::dispatch;
 use crate::t;
+use crate::ui;
 use acadrust::types::{Transform, Vector3};
 use acadrust::{Entity, EntityType, Handle};
 
@@ -37,9 +37,7 @@ impl OpenCADStudio {
         // building the panel, and syncing the ribbon.
         let t_all = crate::perf::enabled().then(iced::time::Instant::now);
         let i = self.active_tab;
-        if !crate::entities::object_data::cache_is_prepared(
-            &self.tabs[i].scene.object_data_cache,
-        ) {
+        if !crate::entities::object_data::cache_is_prepared(&self.tabs[i].scene.object_data_cache) {
             self.tabs[i].scene.object_data_cache =
                 crate::entities::object_data::build_cache(&self.tabs[i].scene.document);
         }
@@ -153,7 +151,9 @@ impl OpenCADStudio {
                     }
                     _ => None,
                 });
-            vertex_count.map_or(prop_vertex, |count| prop_vertex.min(count.saturating_sub(1)))
+            vertex_count.map_or(prop_vertex, |count| {
+                prop_vertex.min(count.saturating_sub(1))
+            })
         } else {
             prop_vertex
         };
@@ -202,9 +202,7 @@ impl OpenCADStudio {
                     } else if !header.current_linetype_handle.is_null() {
                         doc.line_types
                             .iter()
-                            .find(|line_type| {
-                                line_type.handle == header.current_linetype_handle
-                            })
+                            .find(|line_type| line_type.handle == header.current_linetype_handle)
                             .map(|line_type| line_type.name.clone())
                             .unwrap_or_else(|| "ByLayer".to_string())
                     } else {
@@ -308,7 +306,10 @@ impl OpenCADStudio {
                         PropSection {
                             title: t!("General").into_owned(),
                             props: vec![
-                                read_only(t!("AC Version").as_ref(), doc.version.as_str().to_string()),
+                                read_only(
+                                    t!("AC Version").as_ref(),
+                                    doc.version.as_str().to_string(),
+                                ),
                                 Property {
                                     label: t!("Color").into_owned(),
                                     field: "color",
@@ -341,11 +342,20 @@ impl OpenCADStudio {
                                     label: t!("Transparency").into_owned(),
                                     field: "transparency",
                                     value: PropValue::EditChoice {
-                                        value: crate::scene::creation_style::current_transparency_label(self.tabs[i].scene.document.current_entity_transparency()),
+                                        value:
+                                            crate::scene::creation_style::current_transparency_label(
+                                                self.tabs[i]
+                                                    .scene
+                                                    .document
+                                                    .current_entity_transparency(),
+                                            ),
                                         options: vec!["ByLayer".to_string(), "ByBlock".to_string()],
                                     },
                                 },
-                                read_only(t!("Thickness").as_ref(), format_length(header.thickness)),
+                                read_only(
+                                    t!("Thickness").as_ref(),
+                                    format_length(header.thickness),
+                                ),
                             ],
                         },
                         PropSection {
@@ -440,7 +450,8 @@ impl OpenCADStudio {
                                     label: t!("UCS icon On").into_owned(),
                                     field: "view_ucs_icon_on",
                                     value: PropValue::Choice {
-                                        selected: if ucs_icon_on { "Yes" } else { "No" }.to_string(),
+                                        selected: if ucs_icon_on { "Yes" } else { "No" }
+                                            .to_string(),
                                         options: vec!["Yes".to_string(), "No".to_string()],
                                     },
                                 },
@@ -448,7 +459,8 @@ impl OpenCADStudio {
                                     label: t!("UCS icon at origin").into_owned(),
                                     field: "view_ucs_icon_at_origin",
                                     value: PropValue::Choice {
-                                        selected: if ucs_icon_at_origin { "Yes" } else { "No" }.to_string(),
+                                        selected: if ucs_icon_at_origin { "Yes" } else { "No" }
+                                            .to_string(),
                                         options: vec!["Yes".to_string(), "No".to_string()],
                                     },
                                 },
@@ -456,7 +468,8 @@ impl OpenCADStudio {
                                     label: t!("UCS per viewport").into_owned(),
                                     field: "view_ucs_per_viewport",
                                     value: PropValue::Choice {
-                                        selected: if ucs_per_viewport { "Yes" } else { "No" }.to_string(),
+                                        selected: if ucs_per_viewport { "Yes" } else { "No" }
+                                            .to_string(),
                                         options: vec!["Yes".to_string(), "No".to_string()],
                                     },
                                 },
@@ -471,6 +484,41 @@ impl OpenCADStudio {
                                 },
                             ],
                         },
+                        PropSection {
+                            title: t!("Parameters").into_owned(),
+                            props: {
+                                let mut props = vec![Property {
+                                    label: String::new(),
+                                    field: "show_constraint_values",
+                                    value: PropValue::ParamsVisibilityToggle(
+                                        self.show_constraint_values,
+                                    ),
+                                }];
+                                props.extend(scene
+                                    .named_parameters()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, parameter)| Property {
+                                        label: String::new(),
+                                        field: "named_parameter",
+                                        value: PropValue::ParamRow {
+                                            index,
+                                            name: parameter.name.clone(),
+                                            formula: parameter.source.clone(),
+                                            resolved: scene
+                                                .named_parameters()
+                                                .resolve(&parameter.name)
+                                                .map_err(|error| error.to_string()),
+                                        },
+                                    }));
+                                props.push(Property {
+                                    label: String::new(),
+                                    field: "named_parameter_add",
+                                    value: PropValue::ParamAddRow,
+                                });
+                                props
+                            },
+                        },
                     ];
                     ui::PropertiesPanel {
                         title: t!("No selection").into_owned(),
@@ -478,7 +526,9 @@ impl OpenCADStudio {
                             .iter()
                             .flat_map(|section| section.props.iter())
                             .filter_map(|prop| match &prop.value {
-                                crate::scene::model::object::PropValue::Choice { options, .. } => Some((
+                                crate::scene::model::object::PropValue::Choice {
+                                    options, ..
+                                } => Some((
                                     prop.field.to_string(),
                                     iced::widget::combo_box::State::new(
                                         options
@@ -493,9 +543,7 @@ impl OpenCADStudio {
                             .collect(),
                         sections,
                         layer_combo: iced::widget::combo_box::State::new(layer_names.clone()),
-                        linetype_combo: iced::widget::combo_box::State::new(
-                            linetype_items.clone(),
-                        ),
+                        linetype_combo: iced::widget::combo_box::State::new(linetype_items.clone()),
                         lineweight_combo: iced::widget::combo_box::State::new(
                             ui::properties::lw_options(),
                         ),
@@ -515,7 +563,8 @@ impl OpenCADStudio {
                     } else {
                         crate::command::WorkingPlane::default()
                     };
-                    let display_entity = dispatch::entity_in_working_plane(contextual.as_ref(), plane);
+                    let display_entity =
+                        dispatch::entity_in_working_plane(contextual.as_ref(), plane);
                     let entity = &display_entity;
                     let group_names = self.tabs[i].scene.group_names_for_entity(handle);
                     let compact_solid =
@@ -528,12 +577,10 @@ impl OpenCADStudio {
                     if compact_solid {
                         retain_compact_solid_sections(&mut sections);
                     }
-                    sections.extend(
-                        crate::scene::model::solid_history::primitive_properties(
-                            &self.tabs[i].scene.document,
-                            handle,
-                        ),
-                    );
+                    sections.extend(crate::scene::model::solid_history::primitive_properties(
+                        &self.tabs[i].scene.document,
+                        handle,
+                    ));
 
                     // Turn the Material row into an editable picker: the source
                     // options (ByLayer / ByBlock) plus every named material the
@@ -606,10 +653,11 @@ impl OpenCADStudio {
                                 if let Some(row) =
                                     section.props.iter_mut().find(|row| row.field == "color")
                                 {
-                                    row.value = crate::scene::model::object::PropValue::NamedColorChoice {
-                                        color,
-                                        name: color_name.clone(),
-                                    };
+                                    row.value =
+                                        crate::scene::model::object::PropValue::NamedColorChoice {
+                                            color,
+                                            name: color_name.clone(),
+                                        };
                                 }
                             }
                             use crate::entities::common::ro_prop;
@@ -788,7 +836,12 @@ impl OpenCADStudio {
                                         metrics
                                             .principal_directions
                                             .chunks_exact(3)
-                                            .map(|axis| format!("({:.6}, {:.6}, {:.6})", axis[0], axis[1], axis[2]))
+                                            .map(|axis| {
+                                                format!(
+                                                    "({:.6}, {:.6}, {:.6})",
+                                                    axis[0], axis[1], axis[2]
+                                                )
+                                            })
                                             .collect::<Vec<_>>()
                                             .join(", "),
                                     ),
@@ -829,12 +882,21 @@ impl OpenCADStudio {
                     }
 
                     if !compact_solid {
-                        sections.extend(crate::entities::object_data::sections(
+                        let mut object_sections = crate::entities::object_data::sections(
                             &self.tabs[i].scene.document,
                             &self.tabs[i].scene.object_data_cache,
                             handle,
                             entity,
-                        ));
+                        );
+                        let scope = self.tabs[i].current_parametric_scope();
+                        let constrained = self.tabs[i]
+                            .scene
+                            .parametric_constraint_set(scope)
+                            .is_some_and(|set| set.constraints_touching(handle).next().is_some());
+                        if constrained {
+                            object_sections.retain(|section| section.title != "Associative Data");
+                        }
+                        sections.extend(object_sections);
                     }
 
                     {
@@ -870,11 +932,9 @@ impl OpenCADStudio {
                     if let acadrust::EntityType::Insert(ins) = entity {
                         let eq = (ins.x_scale() - ins.y_scale()).abs() < 1e-12
                             && (ins.x_scale() - ins.z_scale()).abs() < 1e-12;
-                        let uniform =
-                            eq && !self.props_asym_scale.contains(&handle.value());
+                        let uniform = eq && !self.props_asym_scale.contains(&handle.value());
                         for section in sections.iter_mut() {
-                            let Some(xi) =
-                                section.props.iter().position(|p| p.field == "x_scale")
+                            let Some(xi) = section.props.iter().position(|p| p.field == "x_scale")
                             else {
                                 continue;
                             };
@@ -930,12 +990,14 @@ impl OpenCADStudio {
                             _ => common
                                 .plotstyle_handle
                                 .and_then(|ph| {
-                                    crate::scene::annotative::as_dict(doc, dict_h).and_then(|dict| {
-                                        dict.entries
-                                            .iter()
-                                            .find(|(_, h)| *h == ph)
-                                            .map(|(n, _)| n.clone())
-                                    })
+                                    crate::scene::annotative::as_dict(doc, dict_h).and_then(
+                                        |dict| {
+                                            dict.entries
+                                                .iter()
+                                                .find(|(_, h)| *h == ph)
+                                                .map(|(n, _)| n.clone())
+                                        },
+                                    )
                                 })
                                 .unwrap_or_else(|| "ByLayer".to_string()),
                         };
@@ -1025,19 +1087,28 @@ impl OpenCADStudio {
                         let cur_tstyle = ml
                             .text_style_handle
                             .and_then(|h| {
-                                doc.text_styles.iter().find(|s| s.handle == h).map(|s| s.name.clone())
+                                doc.text_styles
+                                    .iter()
+                                    .find(|s| s.handle == h)
+                                    .map(|s| s.name.clone())
                             })
                             .unwrap_or_else(|| "Standard".to_string());
                         let cur_arrow = ml
                             .arrowhead_handle
                             .and_then(|h| {
-                                doc.block_records.iter().find(|b| b.handle == h).map(|b| b.name.clone())
+                                doc.block_records
+                                    .iter()
+                                    .find(|b| b.handle == h)
+                                    .map(|b| b.name.clone())
                             })
                             .unwrap_or_else(|| "Closed filled".to_string());
                         let cur_ltype = ml
                             .line_type_handle
                             .and_then(|h| {
-                                doc.line_types.iter().find(|l| l.handle == h).map(|l| l.name.clone())
+                                doc.line_types
+                                    .iter()
+                                    .find(|l| l.handle == h)
+                                    .map(|l| l.name.clone())
                             })
                             .unwrap_or_else(|| "ByBlock".to_string());
                         let cur_block = ml
@@ -1231,7 +1302,9 @@ impl OpenCADStudio {
                                 .find(|property| property.field == "style_name")
                             {
                                 let current = match &prop.value {
-                                    crate::scene::model::object::PropValue::PlainText(s) => s.clone(),
+                                    crate::scene::model::object::PropValue::PlainText(s) => {
+                                        s.clone()
+                                    }
                                     _ => String::new(),
                                 };
                                 prop.value = crate::scene::model::object::PropValue::Choice {
@@ -1262,7 +1335,9 @@ impl OpenCADStudio {
                             use crate::entities::dim_override as dov;
                             use crate::scene::model::object::PropValue;
                             let dim_c = dov::color(&d.base().common.extended_data, dov::DIMCLRD)
-                                .unwrap_or_else(|| acadrust::types::Color::from_index(style.dimclrd));
+                                .unwrap_or_else(|| {
+                                    acadrust::types::Color::from_index(style.dimclrd)
+                                });
                             set_row_value(
                                 &mut sections,
                                 "dim_line_color",
@@ -1276,11 +1351,7 @@ impl OpenCADStudio {
                                     .unwrap_or_else(|| {
                                         acadrust::types::Color::from_index(inherited)
                                     });
-                                set_row_value(
-                                    &mut sections,
-                                    field,
-                                    PropValue::ColorChoice(color),
-                                );
+                                set_row_value(&mut sections, field, PropValue::ColorChoice(color));
                             }
                         }
                     }
@@ -1311,9 +1382,7 @@ impl OpenCADStudio {
                             // insert of it follows). Anonymous (*) and
                             // xref(-dependent) blocks keep the read-only row.
                             let regular = |br: &acadrust::tables::BlockRecord| {
-                                !br.is_anonymous()
-                                    && !br.flags.is_xref
-                                    && !br.name.contains('|')
+                                !br.is_anonymous() && !br.flags.is_xref && !br.name.contains('|')
                             };
                             let editable = doc
                                 .block_records
@@ -1327,9 +1396,7 @@ impl OpenCADStudio {
                                     .filter(|br| regular(br))
                                     .map(|br| br.name.clone())
                                     .collect();
-                                options.sort_by(|a, b| {
-                                    a.to_lowercase().cmp(&b.to_lowercase())
-                                });
+                                options.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
                                 set_row_value(
                                     &mut sections,
                                     "block",
@@ -1379,9 +1446,9 @@ impl OpenCADStudio {
                                         .find(|p| p.field == "dimension_style")
                                     {
                                         let cur = match &p.value {
-                                            crate::scene::model::object::PropValue::PlainText(s) => {
-                                                s.clone()
-                                            }
+                                            crate::scene::model::object::PropValue::PlainText(
+                                                s,
+                                            ) => s.clone(),
                                             _ => ld.dimension_style.clone(),
                                         };
                                         p.value = crate::scene::model::object::PropValue::Choice {
@@ -1456,8 +1523,9 @@ impl OpenCADStudio {
                                 );
 
                                 // A per-object color override wins over the style.
-                                let dim_c = dov::color(xd, dov::DIMCLRD)
-                                    .unwrap_or_else(|| acadrust::types::Color::from_index(ds.dimclrd));
+                                let dim_c = dov::color(xd, dov::DIMCLRD).unwrap_or_else(|| {
+                                    acadrust::types::Color::from_index(ds.dimclrd)
+                                });
                                 set_row_value(
                                     &mut sections,
                                     "dim_line_color",
@@ -1494,9 +1562,8 @@ impl OpenCADStudio {
                         acadrust::EntityType::Tolerance(tol) => {
                             use crate::entities::dim_override as dov;
                             let style = crate::entities::tolerance::resolve_dim_style(tol, doc);
-                            let style_name = style
-                                .map(|entry| entry.name.clone())
-                                .unwrap_or_else(|| {
+                            let style_name =
+                                style.map(|entry| entry.name.clone()).unwrap_or_else(|| {
                                     if tol.dimension_style_name.trim().is_empty() {
                                         "Standard".to_string()
                                     } else {
@@ -1524,24 +1591,18 @@ impl OpenCADStudio {
                                 },
                             );
 
-                            let text_style_name = dov::handle(
-                                &tol.common.extended_data,
-                                dov::DIMTXSTY,
-                            )
-                            .and_then(|handle| {
-                                doc.text_styles
-                                    .iter()
-                                    .find(|entry| entry.handle == handle)
-                            })
-                            .map(|entry| entry.name.clone())
-                            .or_else(|| style.map(|entry| entry.dimtxsty.clone()))
-                            .unwrap_or_else(|| "Standard".to_string());
+                            let text_style_name =
+                                dov::handle(&tol.common.extended_data, dov::DIMTXSTY)
+                                    .and_then(|handle| {
+                                        doc.text_styles.iter().find(|entry| entry.handle == handle)
+                                    })
+                                    .map(|entry| entry.name.clone())
+                                    .or_else(|| style.map(|entry| entry.dimtxsty.clone()))
+                                    .unwrap_or_else(|| "Standard".to_string());
                             let text_height_editable = doc
                                 .text_styles
                                 .iter()
-                                .find(|entry| {
-                                    entry.name.eq_ignore_ascii_case(&text_style_name)
-                                })
+                                .find(|entry| entry.name.eq_ignore_ascii_case(&text_style_name))
                                 .is_none_or(|entry| !entry.has_fixed_height());
                             let mut names = text_style_names.clone();
                             if !names
@@ -1559,12 +1620,9 @@ impl OpenCADStudio {
                                 },
                             );
 
-                            let height = dov::real(
-                                &tol.common.extended_data,
-                                dov::DIMTXT,
-                            )
-                            .or_else(|| style.map(|entry| entry.dimtxt))
-                            .unwrap_or(tol.text_height);
+                            let height = dov::real(&tol.common.extended_data, dov::DIMTXT)
+                                .or_else(|| style.map(|entry| entry.dimtxt))
+                                .unwrap_or(tol.text_height);
                             set_row_value(
                                 &mut sections,
                                 "tol_text_height",
@@ -1588,9 +1646,9 @@ impl OpenCADStudio {
                                 set_row_value(
                                     &mut sections,
                                     "text_height",
-                                    PropValue::ReadOnly(
-                                        crate::entities::common::format_length(ml.text_height),
-                                    ),
+                                    PropValue::ReadOnly(crate::entities::common::format_length(
+                                        ml.text_height,
+                                    )),
                                 );
                             }
                             if let Some(sh) = ml.style_handle {
@@ -1645,15 +1703,16 @@ impl OpenCADStudio {
                                 .table_style_handle
                                 .and_then(|handle| doc.objects.get(&handle))
                                 .and_then(|object| match object {
-                                    acadrust::objects::ObjectType::TableStyle(style) => {
-                                        Some(style)
-                                    }
+                                    acadrust::objects::ObjectType::TableStyle(style) => Some(style),
                                     _ => None,
                                 });
                             let selected = selected_style
                                 .map(|style| style.name.clone())
                                 .unwrap_or_else(|| "Standard".to_string());
-                            if !names.iter().any(|name| name.eq_ignore_ascii_case(&selected)) {
+                            if !names
+                                .iter()
+                                .any(|name| name.eq_ignore_ascii_case(&selected))
+                            {
                                 names.insert(0, selected.clone());
                             }
                             set_row_value(
@@ -1675,10 +1734,8 @@ impl OpenCADStudio {
                                     table,
                                     selected_style,
                                 );
-                            let flow_up = crate::entities::table::resolved_flow_up(
-                                table,
-                                selected_style,
-                            );
+                            let flow_up =
+                                crate::entities::table::resolved_flow_up(table, selected_style);
                             let (horizontal_margin, vertical_margin) =
                                 crate::entities::table::resolved_table_margins(
                                     table,
@@ -1713,9 +1770,7 @@ impl OpenCADStudio {
                             let columns = table.column_count();
                             if columns > 0 {
                                 let cell_index = prop_vertex.min(
-                                    table.row_count()
-                                        .saturating_mul(columns)
-                                        .saturating_sub(1),
+                                    table.row_count().saturating_mul(columns).saturating_sub(1),
                                 );
                                 let row_index = cell_index / columns;
                                 let column_index = cell_index % columns;
@@ -1796,14 +1851,13 @@ impl OpenCADStudio {
                                         "tbl_cell_text_height",
                                         crate::entities::common::format_length(text_height),
                                     );
-                                    let content_color = local(
-                                        CellStylePropertyFlags::CONTENT_COLOR,
-                                    )
-                                    .map(|style| style.content_color)
-                                    .or_else(|| {
-                                        document_row_style.map(|style| style.text_color)
-                                    })
-                                    .unwrap_or(acadrust::types::Color::ByBlock);
+                                    let content_color =
+                                        local(CellStylePropertyFlags::CONTENT_COLOR)
+                                            .map(|style| style.content_color)
+                                            .or_else(|| {
+                                                document_row_style.map(|style| style.text_color)
+                                            })
+                                            .unwrap_or(acadrust::types::Color::ByBlock);
                                     update_row_color(
                                         &mut sections,
                                         "tbl_cell_content_color",
@@ -1828,8 +1882,7 @@ impl OpenCADStudio {
                                         background_style
                                             .map(|style| style.fill_enabled)
                                             .or_else(|| {
-                                                document_row_style
-                                                    .map(|style| style.fill_enabled)
+                                                document_row_style.map(|style| style.fill_enabled)
                                             })
                                             .unwrap_or(false),
                                     );
@@ -1840,23 +1893,18 @@ impl OpenCADStudio {
                                                 .map(|style| style.format_string.clone())
                                         })
                                         .unwrap_or_default();
-                                    update_row_text(
-                                        &mut sections,
-                                        "tbl_cell_format",
-                                        format,
-                                    );
+                                    update_row_text(&mut sections, "tbl_cell_format", format);
                                     let data_type = cell
                                         .contents
                                         .first()
                                         .map(|content| content.value.value_type)
                                         .filter(|kind| *kind != CellValueType::Unknown)
                                         .or_else(|| {
-                                            local(CellStylePropertyFlags::DATA_TYPE)
-                                                .map(|style| {
-                                                    CellValueType::from(
-                                                        style.value_data_type.max(0) as u32,
-                                                    )
-                                                })
+                                            local(CellStylePropertyFlags::DATA_TYPE).map(|style| {
+                                                CellValueType::from(
+                                                    style.value_data_type.max(0) as u32
+                                                )
+                                            })
                                         })
                                         .or_else(|| {
                                             document_row_style.map(|style| {
@@ -1927,9 +1975,7 @@ impl OpenCADStudio {
                                         ]
                                         .into_iter()
                                         .flatten()
-                                        .find(|style| {
-                                            style.applied_border_edges.contains(edge)
-                                        });
+                                        .find(|style| style.applied_border_edges.contains(edge));
                                         if let Some(style) = local_style {
                                             return if edge == CellEdgeFlags::TOP {
                                                 !style.top_border.invisible
@@ -2006,12 +2052,10 @@ impl OpenCADStudio {
                                 || match entity {
                                     acadrust::EntityType::Dimension(
                                         acadrust::entities::Dimension::Arc(dimension),
-                                    ) => {
-                                        crate::scene::annotative::dim_style_is_annotative(
-                                            doc,
-                                            &dimension.base.style_name,
-                                        )
-                                    }
+                                    ) => crate::scene::annotative::dim_style_is_annotative(
+                                        doc,
+                                        &dimension.base.style_name,
+                                    ),
                                     acadrust::EntityType::Tolerance(_) => {
                                         crate::scene::annotative::annotation_style_is_annotative(
                                             doc, entity,
@@ -2087,10 +2131,11 @@ impl OpenCADStudio {
                                 }
                             }
                             if is_anno {
-                                let memberships = crate::scene::annotative::object_scale_memberships(
-                                    doc,
-                                    entity.common().handle,
-                                );
+                                let memberships =
+                                    crate::scene::annotative::object_scale_memberships(
+                                        doc,
+                                        entity.common().handle,
+                                    );
                                 let assigned_scales = if memberships.is_empty() {
                                     doc.header.current_annotation_scale.clone()
                                 } else {
@@ -2189,53 +2234,6 @@ impl OpenCADStudio {
                     if compact_solid {
                         retain_compact_solid_sections(&mut sections);
                     }
-                    // Persistent sketch-constraint list for this entity —
-                    // the Properties-panel analogue of the viewport's
-                    // constraint glyph pills: one row per constraint
-                    // touching `handle`, clickable to select every entity
-                    // it relates (PropConstraintLinkClick). Omitted
-                    // entirely when the entity has none — an unconstrained
-                    // entity (the common case) shouldn't gain empty
-                    // bookkeeping.
-                    {
-                        let scope = self.tabs[i].current_sketch_scope();
-                        let scene = &self.tabs[i].scene;
-                        if let Some(set) = scene.sketch_constraint_set(scope) {
-                            let props: Vec<crate::scene::model::object::Property> = set
-                                .constraints_touching(handle)
-                                .map(|c| {
-                                    let conflicting = set.conflicts.iter().any(|(id, _)| *id == c.id);
-                                    let value_suffix = match &c.driving_param {
-                                        Some(crate::scene::named_parameters::DrivingValue::Literal(v)) => {
-                                            format!(" = {v:.2}")
-                                        }
-                                        Some(crate::scene::named_parameters::DrivingValue::Named(name)) => {
-                                            match scene.named_parameters().resolve(name) {
-                                                Ok(v) => format!(" = {name} ({v:.2})"),
-                                                Err(_) => format!(" = {name} (?)"),
-                                            }
-                                        }
-                                        None => String::new(),
-                                    };
-                                    let label = format!("{} {:?}{}", c.kind.glyph_symbol(), c.kind, value_suffix);
-                                    let mut handles: Vec<acadrust::Handle> = c.refs.iter().map(|r| r.entity).collect();
-                                    handles.sort_by_key(|h| h.value());
-                                    handles.dedup();
-                                    crate::scene::model::object::Property {
-                                        label,
-                                        field: "sketch_constraint",
-                                        value: crate::scene::model::object::PropValue::EntityLink { handles, conflicting },
-                                    }
-                                })
-                                .collect();
-                            if !props.is_empty() {
-                                sections.push(crate::scene::model::object::PropSection {
-                                    title: t!("Constraints").into_owned(),
-                                    props,
-                                });
-                            }
-                        }
-                    }
                     let title = match entity {
                         acadrust::EntityType::Insert(ins) => {
                             let is_xref = self.tabs[i]
@@ -2270,7 +2268,9 @@ impl OpenCADStudio {
                             .iter()
                             .flat_map(|section| section.props.iter())
                             .filter_map(|prop| match &prop.value {
-                                crate::scene::model::object::PropValue::Choice { options, .. } => Some((
+                                crate::scene::model::object::PropValue::Choice {
+                                    options, ..
+                                } => Some((
                                     prop.field.to_string(),
                                     iced::widget::combo_box::State::new(
                                         options
@@ -2335,20 +2335,19 @@ impl OpenCADStudio {
                     } else {
                         crate::command::WorkingPlane::default()
                     };
-                    let local_entities: Vec<(Handle, std::borrow::Cow<'_, EntityType>)> =
-                        filtered
-                            .iter()
-                            .map(|(handle, entity)| {
-                                let local = if plane.is_identity() {
-                                    std::borrow::Cow::Borrowed(*entity)
-                                } else {
-                                    std::borrow::Cow::Owned(
-                                        dispatch::entity_in_working_plane(entity, plane),
-                                    )
-                                };
-                                (*handle, local)
-                            })
-                            .collect();
+                    let local_entities: Vec<(Handle, std::borrow::Cow<'_, EntityType>)> = filtered
+                        .iter()
+                        .map(|(handle, entity)| {
+                            let local = if plane.is_identity() {
+                                std::borrow::Cow::Borrowed(*entity)
+                            } else {
+                                std::borrow::Cow::Owned(dispatch::entity_in_working_plane(
+                                    entity, plane,
+                                ))
+                            };
+                            (*handle, local)
+                        })
+                        .collect();
                     let local_refs: Vec<(Handle, &EntityType)> = local_entities
                         .iter()
                         .map(|(handle, entity)| (*handle, entity.as_ref()))
@@ -2381,7 +2380,10 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                     }
                     sections.extend(aggregate_solid_history_sections(
                         &self.tabs[i].scene.document,
-                        &local_refs.iter().map(|(handle, _)| *handle).collect::<Vec<_>>(),
+                        &local_refs
+                            .iter()
+                            .map(|(handle, _)| *handle)
+                            .collect::<Vec<_>>(),
                     ));
                     if compact_solids {
                         retain_compact_solid_sections(&mut sections);
@@ -2391,7 +2393,9 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                             .iter()
                             .flat_map(|section| section.props.iter())
                             .filter_map(|prop| match &prop.value {
-                                crate::scene::model::object::PropValue::Choice { options, .. } => Some((
+                                crate::scene::model::object::PropValue::Choice {
+                                    options, ..
+                                } => Some((
                                     prop.field.to_string(),
                                     iced::widget::combo_box::State::new(
                                         options
@@ -2458,8 +2462,7 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                 make_sections_read_only(&mut panel.sections);
                 // Rows demoted to read-only no longer back an editable field;
                 // drop them from the id→key map so focus can't map onto them.
-                panel.field_key_by_id =
-                    crate::ui::properties::build_field_key_map(&panel.sections);
+                panel.field_key_by_id = crate::ui::properties::build_field_key_map(&panel.sections);
                 panel.edit_buf.clear();
                 panel.active_field = None;
                 panel.color_picker_open = false;
@@ -2624,17 +2627,13 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
         let is_paper = self.tabs[i].scene.current_layout != "Model";
         // Paper-space entity coordinates are NOT offset by world_offset (same rule
         // as wire tessellation in wires_for_block). Only subtract in model space.
-        let wo = if is_paper {
-            [0.0f64; 3]
-        } else {
-            [0.0_f64; 3]
-        };
+        let wo = if is_paper { [0.0f64; 3] } else { [0.0_f64; 3] };
         let (new_handle, new_grips, new_grip_handles) = {
             let annotation_scale_handle = self.tabs[i].scene.displayed_annotation_scale_handle();
             let selected = self.tabs[i].scene.selected_entities();
             let single_handle = (selected.len() == 1
                 && !self.tabs[i].scene.is_layer_locked(selected[0].0))
-                .then(|| selected[0].0);
+            .then(|| selected[0].0);
             let mut grips = Vec::new();
             let mut handles = Vec::new();
             // Avoid rebuilding every entity's grip markers above the configured
@@ -2729,9 +2728,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             .copied()
             .zip(self.tabs[i].selected_grips.iter().map(|grip| grip.id))
             .collect();
-        self.tabs[i]
-            .hot_grips
-            .retain(|key| available.contains(key));
+        self.tabs[i].hot_grips.retain(|key| available.contains(key));
         // Append the dynamic-block visibility (lookup) grip, if the lone
         // selection is a visibility-parametric block reference.
         self.refresh_visibility_grip(wo);
@@ -2756,6 +2753,25 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
     }
 
     pub(super) fn invalidate_property_targets(&mut self, i: usize, handles: &[Handle]) {
+        self.invalidate_property_targets_with_driven(i, handles, &[]);
+    }
+
+    pub(super) fn invalidate_property_targets_with_driven(
+        &mut self,
+        i: usize,
+        handles: &[Handle],
+        driven_refs: &[crate::scene::parametric_constraints::ParametricRef],
+    ) {
+        self.invalidate_property_targets_with_originals(i, handles, driven_refs, &[]);
+    }
+
+    pub(super) fn invalidate_property_targets_with_originals(
+        &mut self,
+        i: usize,
+        handles: &[Handle],
+        driven_refs: &[crate::scene::parametric_constraints::ParametricRef],
+        retained_originals: &[(Handle, acadrust::EntityType)],
+    ) {
         let mut context_object_changed = false;
         for &handle in handles {
             // A dimension is drawn from the block holding its picture, and that
@@ -2768,9 +2784,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             ) {
                 self.tabs[i].scene.invalidate_dim_block_recorded(handle);
             }
-            context_object_changed |= self.tabs[i]
-                .scene
-                .sync_displayed_annotation_context(handle);
+            context_object_changed |= self.tabs[i].scene.sync_displayed_annotation_context(handle);
             // Hatch / SOLID fills render from prebuilt cached models; rebuild
             // them or pattern edits (scale, background, …) stay invisible
             // (#415).
@@ -2787,7 +2801,14 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             .iter()
             .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
             .collect();
-        self.tabs[i].scene.bump_entities(&changes);
+        self.tabs[i]
+            .scene
+            .bump_entities_with_parametric_originals(
+                &changes,
+                driven_refs,
+                self.constraint_solve_mode && !driven_refs.is_empty(),
+                retained_originals,
+            );
     }
 
     /// Apply a single-property edit to every handle in `handles`, recording the
@@ -2826,10 +2847,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
     /// Like [`commit_entity`] but returns the handle the new entity was given
     /// (or `None` if it could not be added). Lets callers follow up — e.g.
     /// open the in-place text editor on a freshly created MultiLeader.
-    pub(super) fn commit_entity_handle(
-        &mut self,
-        entity: acadrust::EntityType,
-    ) -> Option<Handle> {
+    pub(super) fn commit_entity_handle(&mut self, entity: acadrust::EntityType) -> Option<Handle> {
         self.commit_entity_handle_with_policies(entity, false, false, false)
     }
 
@@ -2893,9 +2911,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             const PREFIX: &str = "__OPENCAD_LINK_PENDING__";
             if let Some(path) = table.name.strip_prefix(PREFIX).map(str::to_string) {
                 use acadrust::entities::table::CellStateFlags;
-                use acadrust::objects::{
-                    ClassObject, ClassObjectData, DataLink, ObjectType,
-                };
+                use acadrust::objects::{ClassObject, ClassObjectData, DataLink, ObjectType};
                 let document = &mut self.tabs[i].scene.document;
                 let link_handle = document.allocate_handle();
                 let mut object = ClassObject::new(ClassObjectData::DataLink(DataLink {
@@ -2997,7 +3013,11 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             // CELTSCALE (header.current_entity_linetype_scale): new entities
             // pick up the document's saved per-entity linetype scale. The user
             // can override per entity later via the properties panel.
-            let celtscale = self.tabs[i].scene.document.header.current_entity_linetype_scale;
+            let celtscale = self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_entity_linetype_scale;
             if (celtscale - 1.0).abs() > 1e-9 && celtscale.abs() > 1e-9 {
                 entity.common_mut().linetype_scale = celtscale;
             }
@@ -3019,12 +3039,12 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
         // Smart centre objects carry their own drawing-level creation style.
         // Apply it after the generic ribbon style so ordinary LINE entities
         // keep the existing path while centre lines honour their settings.
-        let center_line = acadrust::entities::CenterLineAssociation::read(
-            &entity.common().extended_data,
-        ).is_some();
-        let center_mark = acadrust::entities::CenterMarkAssociation::read(
-            &entity.common().extended_data,
-        ).is_some();
+        let center_line =
+            acadrust::entities::CenterLineAssociation::read(&entity.common().extended_data)
+                .is_some();
+        let center_mark =
+            acadrust::entities::CenterMarkAssociation::read(&entity.common().extended_data)
+                .is_some();
         if center_line || center_mark {
             let settings = self.tabs[i].scene.centerline_settings();
             if !settings.layer.eq_ignore_ascii_case("Current") {
@@ -3039,12 +3059,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             } else {
                 acadrust::entities::CENTERLINE_XDATA_APPLICATION
             };
-            if !self.tabs[i]
-                .scene
-                .document
-                .app_ids
-                .contains(application)
-            {
+            if !self.tabs[i].scene.document.app_ids.contains(application) {
                 let mut app = acadrust::tables::AppId::new(application);
                 app.handle = self.tabs[i].scene.document.allocate_handle();
                 let _ = self.tabs[i].scene.document.app_ids.add(app);
@@ -3052,12 +3067,10 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
         }
 
         let text_style_annotative = match &entity {
-            acadrust::EntityType::Text(text) => {
-                crate::scene::annotative::text_style_is_annotative(
-                    &self.tabs[i].scene.document,
-                    &text.style,
-                )
-            }
+            acadrust::EntityType::Text(text) => crate::scene::annotative::text_style_is_annotative(
+                &self.tabs[i].scene.document,
+                &text.style,
+            ),
             acadrust::EntityType::MText(text) => {
                 crate::scene::annotative::text_style_is_annotative(
                     &self.tabs[i].scene.document,
@@ -3090,13 +3103,12 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
                 _ => {}
             }
         }
-        let needs_annotation_context = crate::scene::annotative::is_annotative(
-            &self.tabs[i].scene.document,
-            &entity,
-        ) || crate::scene::annotative::annotation_style_is_annotative(
-            &self.tabs[i].scene.document,
-            &entity,
-        );
+        let needs_annotation_context =
+            crate::scene::annotative::is_annotative(&self.tabs[i].scene.document, &entity)
+                || crate::scene::annotative::annotation_style_is_annotative(
+                    &self.tabs[i].scene.document,
+                    &entity,
+                );
 
         let new_handle = if matches!(&entity, acadrust::EntityType::Viewport(_))
             && self.tabs[i].scene.current_layout != "Model"
@@ -3181,9 +3193,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
     }
 }
 
-fn make_sections_read_only(
-    sections: &mut [crate::scene::model::object::PropSection],
-) {
+fn make_sections_read_only(sections: &mut [crate::scene::model::object::PropSection]) {
     use crate::scene::model::object::PropValue;
 
     for property in sections
@@ -3208,15 +3218,13 @@ fn make_sections_read_only(
                 acadrust::types::Color::Rgb { r, g, b } => format!("{r},{g},{b}"),
             },
             PropValue::NamedColorChoice { name, .. } => name.clone(),
-            PropValue::ColorVaries
-            | PropValue::LwVaries
-            | PropValue::FieldLwVaries { .. } => VARIES_LABEL.to_string(),
+            PropValue::ColorVaries | PropValue::LwVaries | PropValue::FieldLwVaries { .. } => {
+                VARIES_LABEL.to_string()
+            }
             PropValue::LwChoice(lineweight)
             | PropValue::FieldLwChoice {
                 value: lineweight, ..
-            } => {
-                ui::properties::LwItem(*lineweight).to_string()
-            }
+            } => ui::properties::LwItem(*lineweight).to_string(),
             PropValue::BoolToggle { value, .. } => {
                 if *value { t!("Yes") } else { t!("No") }.into_owned()
             }
@@ -3231,6 +3239,9 @@ fn make_sections_read_only(
             PropValue::EntityLink { handles, .. } => format!("{} entity link(s)", handles.len()),
             PropValue::ParamRow { name, formula, .. } => format!("{name} = {formula}"),
             PropValue::ParamAddRow => String::new(),
+            PropValue::ParamsVisibilityToggle(value) => {
+                if *value { t!("On") } else { t!("Off") }.into_owned()
+            }
         };
         property.field = "locked_read_only";
         property.value = PropValue::ReadOnly(text);
@@ -3312,9 +3323,9 @@ fn aggregate_solid_history_sections(
     document: &acadrust::CadDocument,
     handles: &[Handle],
 ) -> Vec<crate::scene::model::object::PropSection> {
-    let mut sections = handles.iter().map(|handle| {
-        crate::scene::model::solid_history::primitive_properties(document, *handle)
-    });
+    let mut sections = handles
+        .iter()
+        .map(|handle| crate::scene::model::solid_history::primitive_properties(document, *handle));
     let Some(mut merged) = sections.next() else {
         return Vec::new();
     };
@@ -3330,9 +3341,7 @@ fn aggregate_solid_history_sections(
     merged
 }
 
-fn retain_compact_solid_sections(
-    sections: &mut Vec<crate::scene::model::object::PropSection>,
-) {
+fn retain_compact_solid_sections(sections: &mut Vec<crate::scene::model::object::PropSection>) {
     sections.iter_mut().for_each(|section| {
         let internal_surface_section = section
             .props
@@ -3419,12 +3428,10 @@ fn merge_prop_value(
         (
             PropValue::FieldLwChoice { field, .. },
             PropValue::FieldLwChoice {
-                field: other_field,
-                ..
+                field: other_field, ..
             },
         ) if field == other_field => PropValue::FieldLwVaries { field },
-        (PropValue::FieldLwVaries { field }, _)
-        | (_, PropValue::FieldLwVaries { field }) => {
+        (PropValue::FieldLwVaries { field }, _) | (_, PropValue::FieldLwVaries { field }) => {
             PropValue::FieldLwVaries { field }
         }
         (PropValue::LinetypeChoice(_), PropValue::LinetypeChoice(_)) => {
@@ -3504,11 +3511,7 @@ fn merge_prop_value(
 /// Set the first property row matching `field` (across all sections) to a
 /// read-only `value`. No-op when the field is absent. Used to fill the
 /// doc-dependent placeholder rows the entity builders leave empty.
-fn set_row(
-    sections: &mut [crate::scene::model::object::PropSection],
-    field: &str,
-    value: String,
-) {
+fn set_row(sections: &mut [crate::scene::model::object::PropSection], field: &str, value: String) {
     for section in sections.iter_mut() {
         if let Some(row) = section.props.iter_mut().find(|p| p.field == field) {
             row.value = crate::scene::model::object::PropValue::ReadOnly(value);
@@ -3539,7 +3542,11 @@ fn update_row_text(
 ) {
     use crate::scene::model::object::PropValue;
     for section in sections.iter_mut() {
-        let Some(row) = section.props.iter_mut().find(|property| property.field == field) else {
+        let Some(row) = section
+            .props
+            .iter_mut()
+            .find(|property| property.field == field)
+        else {
             continue;
         };
         match &mut row.value {
@@ -3561,7 +3568,11 @@ fn update_row_toggle(
 ) {
     use crate::scene::model::object::PropValue;
     for section in sections.iter_mut() {
-        let Some(row) = section.props.iter_mut().find(|property| property.field == field) else {
+        let Some(row) = section
+            .props
+            .iter_mut()
+            .find(|property| property.field == field)
+        else {
             continue;
         };
         match &mut row.value {
@@ -3592,14 +3603,16 @@ fn update_row_color(
         acadrust::types::Color::Rgb { r, g, b } => format!("{r},{g},{b}"),
     };
     for section in sections.iter_mut() {
-        let Some(row) = section.props.iter_mut().find(|property| property.field == field) else {
+        let Some(row) = section
+            .props
+            .iter_mut()
+            .find(|property| property.field == field)
+        else {
             continue;
         };
         match &mut row.value {
             PropValue::ColorChoice(current) => *current = color,
-            PropValue::NamedColorChoice { .. } => {
-                row.value = PropValue::ColorChoice(color)
-            }
+            PropValue::NamedColorChoice { .. } => row.value = PropValue::ColorChoice(color),
             PropValue::ReadOnly(current) => *current = label,
             PropValue::ReadOnlyWithTooltip { value: current, .. } => *current = label,
             _ => {}
@@ -3795,30 +3808,30 @@ fn format_unit_factor(factor: f64) -> String {
 /// Convert INSUNITS (DXF group 70) to millimetres.
 fn insunits_to_mm(code: i16) -> Option<f64> {
     Some(match code {
-        1 => 25.4,                       // Inches
-        2 => 304.8,                      // Feet
-        3 => 1_609_344.0,                // Miles
-        4 => 1.0,                        // Millimeters
-        5 => 10.0,                       // Centimeters
-        6 => 1_000.0,                    // Meters
-        7 => 1_000_000.0,                // Kilometers
-        8 => 0.000_025_4,                // Microinches
-        9 => 0.025_4,                    // Mils
-        10 => 914.4,                     // Yards
-        11 => 1.0e-7,                    // Angstroms
-        12 => 1.0e-6,                    // Nanometers
-        13 => 0.001,                     // Microns
-        14 => 100.0,                     // Decimeters
-        15 => 10_000.0,                  // Decameters
-        16 => 100_000.0,                 // Hectometers
-        17 => 1.0e12,                    // Gigameters
-        18 => 1.495_978_707e14,          // Astronomical Units
-        19 => 9.460_730_472_580_8e18,    // Light Years
+        1 => 25.4,                        // Inches
+        2 => 304.8,                       // Feet
+        3 => 1_609_344.0,                 // Miles
+        4 => 1.0,                         // Millimeters
+        5 => 10.0,                        // Centimeters
+        6 => 1_000.0,                     // Meters
+        7 => 1_000_000.0,                 // Kilometers
+        8 => 0.000_025_4,                 // Microinches
+        9 => 0.025_4,                     // Mils
+        10 => 914.4,                      // Yards
+        11 => 1.0e-7,                     // Angstroms
+        12 => 1.0e-6,                     // Nanometers
+        13 => 0.001,                      // Microns
+        14 => 100.0,                      // Decimeters
+        15 => 10_000.0,                   // Decameters
+        16 => 100_000.0,                  // Hectometers
+        17 => 1.0e12,                     // Gigameters
+        18 => 1.495_978_707e14,           // Astronomical Units
+        19 => 9.460_730_472_580_8e18,     // Light Years
         20 => 3.085_677_581_491_367_3e19, // Parsecs
-        21 => 1_200_000.0 / 3_937.0,     // US Survey Feet
-        22 => 100_000.0 / 3_937.0,       // US Survey Inches
-        23 => 3_600_000.0 / 3_937.0,     // US Survey Yards
-        24 => 6_336_000_000.0 / 3_937.0, // US Survey Miles
+        21 => 1_200_000.0 / 3_937.0,      // US Survey Feet
+        22 => 100_000.0 / 3_937.0,        // US Survey Inches
+        23 => 3_600_000.0 / 3_937.0,      // US Survey Yards
+        24 => 6_336_000_000.0 / 3_937.0,  // US Survey Miles
         _ => return None,
     })
 }
@@ -3842,9 +3855,7 @@ fn apply_insert_unit_scale(ins: &mut acadrust::entities::Insert, ratio: f64) -> 
 
 #[cfg(test)]
 mod insert_unit_scale_tests {
-    use super::{
-        apply_insert_unit_scale, format_unit_factor, insert_unit_scale, insunits_to_mm,
-    };
+    use super::{apply_insert_unit_scale, format_unit_factor, insert_unit_scale, insunits_to_mm};
     use acadrust::entities::{AttributeEntity, Insert};
     use acadrust::types::Vector3;
 
@@ -3909,10 +3920,7 @@ mod insert_unit_scale_tests {
     fn astronomical_units_use_precise_si_values() {
         assert_eq!(insunits_to_mm(18), Some(1.495_978_707e14));
         assert_eq!(insunits_to_mm(19), Some(9.460_730_472_580_8e18));
-        assert_eq!(
-            insunits_to_mm(20),
-            Some(3.085_677_581_491_367_3e19)
-        );
+        assert_eq!(insunits_to_mm(20), Some(3.085_677_581_491_367_3e19));
         assert_ne!(format_unit_factor(1.0e-7), "0.0000");
     }
 
@@ -4004,11 +4012,7 @@ mod apply_property_op_tests {
         app.tabs[i].dirty = false;
         app.apply_property_op(i, "CHPROP", &[h1, h2], |app2, h| {
             count2.set(count2.get() + 1);
-            if let Some(e) = app2.tabs[app2.active_tab]
-                .scene
-                .document
-                .get_entity_mut(h)
-            {
+            if let Some(e) = app2.tabs[app2.active_tab].scene.document.get_entity_mut(h) {
                 e.common_mut().color = Color::Index(7);
             }
         });
@@ -4038,19 +4042,22 @@ mod apply_property_op_tests {
         app.tabs[i].dirty = false;
         app.apply_property_op(i, "CHPROP", &[h1, missing], |app2, h| {
             count2.set(count2.get() + 1);
-            if let Some(e) = app2.tabs[app2.active_tab]
-                .scene
-                .document
-                .get_entity_mut(h)
-            {
+            if let Some(e) = app2.tabs[app2.active_tab].scene.document.get_entity_mut(h) {
                 e.common_mut().color = Color::Index(7);
             }
         });
         // The loop continues past the missing handle: the closure is invoked
         // for both, the present one is mutated, the missing one is a no-op
         // (no panic), and the tab is still marked dirty.
-        assert_eq!(count.get(), 2, "closure still called for the missing handle");
-        assert!(app.tabs[i].dirty, "tab marked dirty even with a missing handle");
+        assert_eq!(
+            count.get(),
+            2,
+            "closure still called for the missing handle"
+        );
+        assert!(
+            app.tabs[i].dirty,
+            "tab marked dirty even with a missing handle"
+        );
         let e = app.tabs[i]
             .scene
             .document
@@ -4111,32 +4118,68 @@ mod chprop_integration_tests {
         let _ = app.update(Message::PropColorChanged(Color::Index(5)));
 
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h1).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h1)
+                .unwrap()
+                .common()
+                .color,
             Color::Index(5)
         );
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h2).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h2)
+                .unwrap()
+                .common()
+                .color,
             Color::Index(5)
         );
         assert!(app.tabs[i].dirty, "helper must set the dirty bit");
 
         app.undo_active_tab();
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h1).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h1)
+                .unwrap()
+                .common()
+                .color,
             original
         );
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h2).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h2)
+                .unwrap()
+                .common()
+                .color,
             original
         );
 
         app.redo_active_tab();
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h1).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h1)
+                .unwrap()
+                .common()
+                .color,
             Color::Index(5)
         );
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h2).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h2)
+                .unwrap()
+                .common()
+                .color,
             Color::Index(5)
         );
     }
@@ -4164,14 +4207,26 @@ mod chprop_integration_tests {
         let _ = app.automation_op(r#"{"op":"select","type":"Line"}"#);
         let _ = app.automation_op(r#"{"op":"run","cmd":"CHPROP COLOR 3"}"#);
         assert_ne!(
-            app.tabs[i].scene.document.get_entity(h).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h)
+                .unwrap()
+                .common()
+                .color,
             original,
             "CHPROP COLOR 3 must have changed the line's colour"
         );
 
         app.undo_active_tab();
         assert_eq!(
-            app.tabs[i].scene.document.get_entity(h).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h)
+                .unwrap()
+                .common()
+                .color,
             original,
             "undo must restore the pre-CHPROP colour"
         );
@@ -4215,7 +4270,13 @@ mod chprop_integration_tests {
         let _ = app.update(Message::PropColorChanged(Color::Index(9)));
 
         assert_ne!(
-            app.tabs[i].scene.document.get_entity(h).unwrap().common().color,
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(h)
+                .unwrap()
+                .common()
+                .color,
             Color::Index(9),
             "a locked-layer entity must not be mutated by PropColorChanged"
         );
@@ -4257,12 +4318,12 @@ mod grip_limit_tests {
             let handles: Vec<_> = (0..n)
                 .map(|k| {
                     let x = k as f64;
-                    app.tabs[i].scene.add_entity(EntityType::Line(
-                        Line::from_points(
+                    app.tabs[i]
+                        .scene
+                        .add_entity(EntityType::Line(Line::from_points(
                             Vector3::new(x, 0.0, 0.0),
                             Vector3::new(x + 1.0, 1.0, 0.0),
-                        ),
-                    ))
+                        )))
                 })
                 .collect();
             for handle in handles {
@@ -4273,11 +4334,17 @@ mod grip_limit_tests {
         };
 
         assert!(
-            select_n(crate::app::settings::DEFAULT_GRIP_OBJECT_LIMIT as usize, None) > 0,
+            select_n(
+                crate::app::settings::DEFAULT_GRIP_OBJECT_LIMIT as usize,
+                None
+            ) > 0,
             "a selection at the limit must still show its grips",
         );
         assert_eq!(
-            select_n(crate::app::settings::DEFAULT_GRIP_OBJECT_LIMIT as usize + 1, None),
+            select_n(
+                crate::app::settings::DEFAULT_GRIP_OBJECT_LIMIT as usize + 1,
+                None
+            ),
             0,
             "one past the limit must show none at all",
         );
@@ -4347,10 +4414,12 @@ mod grip_limit_tests {
         let handles: Vec<_> = (0..over)
             .map(|k| {
                 let x = k as f64;
-                app.tabs[i].scene.add_entity(EntityType::Line(Line::from_points(
-                    Vector3::new(x, 0.0, 0.0),
-                    Vector3::new(x + 1.0, 1.0, 0.0),
-                )))
+                app.tabs[i]
+                    .scene
+                    .add_entity(EntityType::Line(Line::from_points(
+                        Vector3::new(x, 0.0, 0.0),
+                        Vector3::new(x + 1.0, 1.0, 0.0),
+                    )))
             })
             .collect();
         for handle in handles {

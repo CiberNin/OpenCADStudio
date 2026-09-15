@@ -48,16 +48,20 @@ use acadrust::{CadDocument, DxfReader, DxfWriter, EntityType};
 use glam::{DVec3, Mat4, Vec3};
 use iced::{Color, Point, Rectangle};
 
+use OpenCADStudio::scene::parametric_constraints::{
+    ConstraintKind, ParametricRef, ParametricScope,
+};
 use OpenCADStudio::scene::pick::hit_test::{box_hit, click_hit};
 use OpenCADStudio::scene::pick::interaction_index::InteractionIndex;
 use OpenCADStudio::scene::pick::selection_state::SelectionState;
 use OpenCADStudio::scene::pipeline::wire_arena::partition_wires;
-use OpenCADStudio::scene::sketch_constraints::{ConstraintKind, SketchRef, SketchScope};
 use OpenCADStudio::scene::view::camera::Camera;
 use OpenCADStudio::scene::{ChangeKind, Scene};
 use OpenCADStudio::snap::Snapper;
 use OpenCADStudio::ui::icons::{self, CHECK};
-use OpenCADStudio::ui::overlay::{grid_segments, GridCanvasState, GridKey, GridParams, GridStyle, should_reuse};
+use OpenCADStudio::ui::overlay::{
+    grid_segments, should_reuse, GridCanvasState, GridKey, GridParams, GridStyle,
+};
 use OpenCADStudio::ui::properties::LinetypeItem;
 use OpenCADStudio::ui::ribbon::{LayerInfo, Ribbon};
 
@@ -109,8 +113,8 @@ impl Default for BenchmarkRunner {
 impl BenchmarkRunner {
     pub fn new() -> Self {
         let args: Vec<String> = env::args().collect();
-        let quick_mode = args.iter().any(|a| a == "--quick" || a == "-q")
-            || env::var("CAD_BENCH_QUICK").is_ok();
+        let quick_mode =
+            args.iter().any(|a| a == "--quick" || a == "-q") || env::var("CAD_BENCH_QUICK").is_ok();
 
         let filter = args
             .windows(2)
@@ -220,22 +224,37 @@ impl BenchmarkRunner {
 
     /// Print summary table to stdout and persist JSON report.
     pub fn finish(&self) {
-        let baseline_map: HashMap<String, BenchmarkMetric> = if let Some(ref path) = self.baseline_path {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if let Ok(report) = serde_json::from_str::<BenchmarkSuiteReport>(&content) {
-                    println!("\nLoaded baseline from '{}' ({} metrics)", path.display(), report.metrics.len());
-                    report.metrics.into_iter().map(|m| (m.name.clone(), m)).collect()
+        let baseline_map: HashMap<String, BenchmarkMetric> =
+            if let Some(ref path) = self.baseline_path {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    if let Ok(report) = serde_json::from_str::<BenchmarkSuiteReport>(&content) {
+                        println!(
+                            "\nLoaded baseline from '{}' ({} metrics)",
+                            path.display(),
+                            report.metrics.len()
+                        );
+                        report
+                            .metrics
+                            .into_iter()
+                            .map(|m| (m.name.clone(), m))
+                            .collect()
+                    } else {
+                        eprintln!(
+                            "Warning: Failed to parse baseline JSON at '{}'",
+                            path.display()
+                        );
+                        HashMap::new()
+                    }
                 } else {
-                    eprintln!("Warning: Failed to parse baseline JSON at '{}'", path.display());
+                    eprintln!(
+                        "Warning: Could not read baseline file at '{}'",
+                        path.display()
+                    );
                     HashMap::new()
                 }
             } else {
-                eprintln!("Warning: Could not read baseline file at '{}'", path.display());
                 HashMap::new()
-            }
-        } else {
-            HashMap::new()
-        };
+            };
 
         println!("\n========================================================================================================================");
         println!("                                      OPENCADSTUDIO PERFORMANCE BENCHMARK REPORT                                        ");
@@ -301,7 +320,11 @@ impl BenchmarkRunner {
             timestamp: chrono_now(),
             os: env::consts::OS.to_string(),
             arch: env::consts::ARCH.to_string(),
-            profile: if cfg!(debug_assertions) { "debug".to_string() } else { "release".to_string() },
+            profile: if cfg!(debug_assertions) {
+                "debug".to_string()
+            } else {
+                "release".to_string()
+            },
             is_quick_mode: self.quick_mode,
             metrics: self.results.clone(),
         };
@@ -311,9 +334,16 @@ impl BenchmarkRunner {
                 let _ = std::fs::create_dir_all(parent);
             }
             if let Err(e) = std::fs::write(&self.output_path, json) {
-                eprintln!("Error saving metrics to '{}': {}", self.output_path.display(), e);
+                eprintln!(
+                    "Error saving metrics to '{}': {}",
+                    self.output_path.display(),
+                    e
+                );
             } else {
-                println!("Saved complete performance metrics JSON to: {}\n", self.output_path.display());
+                println!(
+                    "Saved complete performance metrics JSON to: {}\n",
+                    self.output_path.display()
+                );
             }
         }
     }
@@ -381,9 +411,27 @@ fn bench_scene_entity_ingestion(runner: &mut BenchmarkRunner) {
             let y = (i / 50) as f64 * 50.0 + 6000.0;
             let mut pl = LwPolyline::new();
             pl.vertices = vec![
-                LwVertex { location: Vector2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0, vertex_id: 0 },
-                LwVertex { location: Vector2::new(x + 20.0, y), bulge: 0.5, start_width: 0.0, end_width: 0.0, vertex_id: 1 },
-                LwVertex { location: Vector2::new(x + 20.0, y + 20.0), bulge: 0.0, start_width: 0.0, end_width: 0.0, vertex_id: 2 },
+                LwVertex {
+                    location: Vector2::new(x, y),
+                    bulge: 0.0,
+                    start_width: 0.0,
+                    end_width: 0.0,
+                    vertex_id: 0,
+                },
+                LwVertex {
+                    location: Vector2::new(x + 20.0, y),
+                    bulge: 0.5,
+                    start_width: 0.0,
+                    end_width: 0.0,
+                    vertex_id: 1,
+                },
+                LwVertex {
+                    location: Vector2::new(x + 20.0, y + 20.0),
+                    bulge: 0.0,
+                    start_width: 0.0,
+                    end_width: 0.0,
+                    vertex_id: 2,
+                },
             ];
             scene.add_entity(EntityType::LwPolyline(pl));
         }
@@ -462,8 +510,20 @@ fn bench_analytical_tessellation_zoom(runner: &mut BenchmarkRunner) {
         let mut pline = LwPolyline::new();
         pline.is_closed = true;
         pline.vertices = vec![
-            LwVertex { location: Vector2::new(x, y), bulge: 1.0, start_width: 0.0, end_width: 0.0, vertex_id: 0 },
-            LwVertex { location: Vector2::new(x + 30.0, y), bulge: 1.0, start_width: 0.0, end_width: 0.0, vertex_id: 1 },
+            LwVertex {
+                location: Vector2::new(x, y),
+                bulge: 1.0,
+                start_width: 0.0,
+                end_width: 0.0,
+                vertex_id: 0,
+            },
+            LwVertex {
+                location: Vector2::new(x + 30.0, y),
+                bulge: 1.0,
+                start_width: 0.0,
+                end_width: 0.0,
+                vertex_id: 1,
+            },
         ];
         scene.add_entity(EntityType::LwPolyline(pline));
     }
@@ -610,7 +670,12 @@ fn bench_hit_test_picking(runner: &mut BenchmarkRunner) {
 
     let view_rot = Mat4::IDENTITY;
     let eye = DVec3::new(1000.0, 1000.0, 2000.0);
-    let bounds = Rectangle { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 };
+    let bounds = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
 
     let n_queries = if runner.quick_mode { 200 } else { 1_000 };
     let mut click_samples = Vec::with_capacity(5);
@@ -620,7 +685,15 @@ fn bench_hit_test_picking(runner: &mut BenchmarkRunner) {
         for q in 0..n_queries {
             let cx = ((q * 37) % 1920) as f32;
             let cy = ((q * 53) % 1080) as f32;
-            let hit = click_hit(Point::new(cx, cy), wires.as_slice(), view_rot, eye, bounds, false, 8.0);
+            let hit = click_hit(
+                Point::new(cx, cy),
+                wires.as_slice(),
+                view_rot,
+                eye,
+                bounds,
+                false,
+                8.0,
+            );
             black_box(hit);
         }
         let per_query_us = (t0.elapsed().as_secs_f64() * 1_000_000.0) / (n_queries as f64);
@@ -716,7 +789,12 @@ fn bench_osnap_evaluation(runner: &mut BenchmarkRunner) {
 
     let view_rot = Mat4::IDENTITY;
     let eye = DVec3::new(500.0, 500.0, 1000.0);
-    let bounds = Rectangle { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 };
+    let bounds = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
     let grid_origin = Vec3::ZERO;
     let grid_axes = (Vec3::X, Vec3::Y, Vec3::Z);
 
@@ -729,10 +807,7 @@ fn bench_osnap_evaluation(runner: &mut BenchmarkRunner) {
             let wx = (q as f64 * 7.3) % 2500.0;
             let wy = (q as f64 * 11.7) % 2500.0;
             let cursor_world = DVec3::new(wx, wy, 0.0);
-            let cursor_screen = Point::new(
-                ((q * 23) % 1920) as f32,
-                ((q * 31) % 1080) as f32,
-            );
+            let cursor_screen = Point::new(((q * 23) % 1920) as f32, ((q * 31) % 1080) as f32);
 
             let hit = snapper.snap(
                 cursor_world,
@@ -798,11 +873,23 @@ fn bench_geometric_constraint_solving(runner: &mut BenchmarkRunner) {
             lines.push((h1, h2, h3));
         }
 
-        let cs = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+        let cs = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
         for &(h1, h2, h3) in &lines {
-            cs.add(ConstraintKind::Perpendicular, vec![SketchRef::whole(h1), SketchRef::whole(h2)], None);
-            cs.add(ConstraintKind::Perpendicular, vec![SketchRef::whole(h2), SketchRef::whole(h3)], None);
-            cs.add(ConstraintKind::Parallel, vec![SketchRef::whole(h1), SketchRef::whole(h3)], None);
+            cs.add(
+                ConstraintKind::Perpendicular,
+                vec![ParametricRef::whole(h1), ParametricRef::whole(h2)],
+                None,
+            );
+            cs.add(
+                ConstraintKind::Perpendicular,
+                vec![ParametricRef::whole(h2), ParametricRef::whole(h3)],
+                None,
+            );
+            cs.add(
+                ConstraintKind::Parallel,
+                vec![ParametricRef::whole(h1), ParametricRef::whole(h3)],
+                None,
+            );
         }
 
         let target = lines[run_idx % lines.len()].0;
@@ -858,7 +945,9 @@ fn bench_dxf_io_throughput(runner: &mut BenchmarkRunner) {
 
     for _ in 0..runs {
         let t0 = Instant::now();
-        let bytes = DxfWriter::new(&doc).write_to_vec().expect("DXF write succeeds");
+        let bytes = DxfWriter::new(&doc)
+            .write_to_vec()
+            .expect("DXF write succeeds");
         write_samples.push(t0.elapsed().as_secs_f64() * 1000.0);
         dxf_bytes = bytes;
     }
@@ -1095,8 +1184,12 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
     // ── 1. Uncached grid geometry generation ──
     if runner.should_run("ui_grid_geometry_uncached") {
         for _ in 0..10 {
-            let _ = black_box(grid_segments(view_rot1, eye1, bounds1, step1, origin1, axes1, limits1));
-            let _ = black_box(grid_segments(view_rot2, eye2, bounds2, step2, origin2, axes2, limits2));
+            let _ = black_box(grid_segments(
+                view_rot1, eye1, bounds1, step1, origin1, axes1, limits1,
+            ));
+            let _ = black_box(grid_segments(
+                view_rot2, eye2, bounds2, step2, origin2, axes2, limits2,
+            ));
         }
 
         let n = if runner.quick_mode { 20 } else { 100 };
@@ -1172,7 +1265,11 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
             let t0 = Instant::now();
             let mut hit_count = 0u32;
             for _ in 0..n {
-                let key = GridKey::from_grids(black_box(&grids), black_box(canvas_bounds), GridStyle::default());
+                let key = GridKey::from_grids(
+                    black_box(&grids),
+                    black_box(canvas_bounds),
+                    GridStyle::default(),
+                );
                 if should_reuse(state.key.borrow().as_ref(), &key) {
                     hit_count += 1;
                 }

@@ -1,13 +1,13 @@
 use acadrust::entities::Dimension;
 use acadrust::objects::{
-    AssocDimensionAssociation, AssocDimensionReference, AssociativeData,
-    AssociativeObject, ObjectType,
+    AssocDimensionAssociation, AssocDimensionReference, AssociativeData, AssociativeObject,
+    ObjectType,
 };
 use acadrust::types::{Handle, Transform, Vector3};
 use acadrust::EntityType;
 use cadkernel::geom2d::{
-    angle_within_arc, arc as tessellate_arc, arc_span, closest_point, Arc as KernelArc,
-    BulgeArc, Circle as KernelCircle, Curve as KernelCurve, DEFAULT_SEGMENTS_PER_RADIAN,
+    angle_within_arc, arc as tessellate_arc, arc_span, closest_point, Arc as KernelArc, BulgeArc,
+    Circle as KernelCircle, Curve as KernelCurve, DEFAULT_SEGMENTS_PER_RADIAN,
 };
 use cadkernel::space::Plane;
 use std::f64::consts::TAU;
@@ -29,8 +29,7 @@ pub(crate) fn polyline_arc_point_marker(segment: i32) -> i32 {
 }
 
 fn polyline_arc_segment_from_point_marker(marker: i32) -> Option<i32> {
-    (marker <= POLYLINE_ARC_POINT_MARKER_BASE)
-        .then_some(POLYLINE_ARC_POINT_MARKER_BASE - marker)
+    (marker <= POLYLINE_ARC_POINT_MARKER_BASE).then_some(POLYLINE_ARC_POINT_MARKER_BASE - marker)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,11 +168,13 @@ pub(crate) fn radial_source_at(
     entity: &EntityType,
     point: Vector3,
 ) -> Option<RadialSourceGeometry> {
-    radial_candidates(entity).into_iter().min_by(|first, second| {
-        first
-            .distance_squared_to(dpoint(point))
-            .total_cmp(&second.distance_squared_to(dpoint(point)))
-    })
+    radial_candidates(entity)
+        .into_iter()
+        .min_by(|first, second| {
+            first
+                .distance_squared_to(dpoint(point))
+                .total_cmp(&second.distance_squared_to(dpoint(point)))
+        })
 }
 
 fn radial_source_for_marker(entity: &EntityType, marker: i32) -> Option<RadialSourceGeometry> {
@@ -188,14 +189,16 @@ fn radial_source_matching(
     radius: f64,
     chord: Vector3,
 ) -> Option<RadialSourceGeometry> {
-    radial_candidates(entity).into_iter().min_by(|first, second| {
-        let score = |candidate: &RadialSourceGeometry| {
-            point_distance_squared(candidate.center_world(), center)
-                + (candidate.radius - radius).powi(2)
-                + candidate.distance_squared_to(dpoint(chord)) * 1e-6
-        };
-        score(first).total_cmp(&score(second))
-    })
+    radial_candidates(entity)
+        .into_iter()
+        .min_by(|first, second| {
+            let score = |candidate: &RadialSourceGeometry| {
+                point_distance_squared(candidate.center_world(), center)
+                    + (candidate.radius - radius).powi(2)
+                    + candidate.distance_squared_to(dpoint(chord)) * 1e-6
+            };
+            score(first).total_cmp(&score(second))
+        })
 }
 
 fn point_distance_squared(first: Vector3, second: Vector3) -> f64 {
@@ -246,9 +249,10 @@ fn polyline_arc_center(entity: &EntityType, segment: usize) -> Option<Vector3> {
         EntityType::LwPolyline(polyline) => {
             let count = polyline.vertices.len();
             let first = *polyline.vertices.get(segment)?;
-            let second = *polyline
-                .vertices
-                .get(next_segment_index(count, polyline.is_closed, segment)?)?;
+            let second =
+                *polyline
+                    .vertices
+                    .get(next_segment_index(count, polyline.is_closed, segment)?)?;
             bulge_center_world(
                 [first.location.x, first.location.y],
                 [second.location.x, second.location.y],
@@ -260,9 +264,10 @@ fn polyline_arc_center(entity: &EntityType, segment: usize) -> Option<Vector3> {
         EntityType::Polyline2D(polyline) => {
             let count = polyline.vertices.len();
             let first = polyline.vertices.get(segment)?;
-            let second = polyline
-                .vertices
-                .get(next_segment_index(count, polyline.is_closed(), segment)?)?;
+            let second =
+                polyline
+                    .vertices
+                    .get(next_segment_index(count, polyline.is_closed(), segment)?)?;
             bulge_center_world(
                 [first.location.x, first.location.y],
                 [second.location.x, second.location.y],
@@ -278,20 +283,24 @@ fn polyline_arc_center(entity: &EntityType, segment: usize) -> Option<Vector3> {
 /// Ordered, named points for an entity (line start/end, polyline vertices,
 /// ...), indexed by the same non-negative GsMarker convention
 /// `AssocDimensionReference::main_gs_marker` uses. Promoted to
-/// `pub(crate)` so `sketch::constraint_set` can address constraint
+/// `pub(crate)` so the parametric solver can address constraint
 /// endpoints the same way associative dimensions already address theirs,
 /// rather than inventing a second sub-element scheme.
 pub(crate) fn source_points(entity: &EntityType) -> Vec<Vector3> {
     match entity {
         EntityType::Line(line) => vec![line.start, line.end],
+        EntityType::Ray(ray) => vec![ray.base_point],
         EntityType::Arc(arc) => vec![arc.start_point_wcs(), arc.end_point_wcs()],
         EntityType::Circle(_) => Vec::new(),
         EntityType::Spline(spline) => crate::entities::spline::nurbs3(spline)
             .map(|curve| {
                 let (start, end) = curve.domain();
-                [curve.point_at_knot(start), curve.point_at_knot(end)].into_iter()
-                    .map(|point| Vector3::new(point[0], point[1], point[2])).collect()
-            }).unwrap_or_default(),
+                [curve.point_at_knot(start), curve.point_at_knot(end)]
+                    .into_iter()
+                    .map(|point| Vector3::new(point[0], point[1], point[2]))
+                    .collect()
+            })
+            .unwrap_or_default(),
         EntityType::LwPolyline(polyline) => polyline
             .vertices
             .iter()
@@ -356,8 +365,7 @@ fn source_marker(entity: &EntityType, point: Vector3) -> Option<i32> {
         .into_iter()
         .enumerate()
         .min_by(|(_, first), (_, second)| {
-            point_distance_squared(*first, point)
-                .total_cmp(&point_distance_squared(*second, point))
+            point_distance_squared(*first, point).total_cmp(&point_distance_squared(*second, point))
         })
         .map(|(index, _)| index as i32)
 }
@@ -599,9 +607,7 @@ fn resolve_local_by_marker(
         let angle = radial.start_angle + sweep * reference.osnap_distance.clamp(0.0, 1.0);
         return Some(radial.point_at_angle(angle));
     }
-    if let Some(segment) =
-        polyline_arc_segment_from_point_marker(reference.main_gs_marker)
-    {
+    if let Some(segment) = polyline_arc_segment_from_point_marker(reference.main_gs_marker) {
         let radial = radial_source_for_marker(entity, segment)?;
         let sweep = positive_sweep(radial.start_angle, radial.end_angle);
         let angle = radial.start_angle + sweep * reference.osnap_distance.clamp(0.0, 1.0);
@@ -620,9 +626,7 @@ fn resolve_local_by_marker(
     }
     if reference.main_gs_marker == -2 {
         return match entity {
-            EntityType::Circle(circle) => {
-                Some(circle.point_at_angle_wcs(reference.osnap_distance))
-            }
+            EntityType::Circle(circle) => Some(circle.point_at_angle_wcs(reference.osnap_distance)),
             EntityType::Arc(arc) => Some(arc.point_at_angle_wcs(reference.osnap_distance)),
             _ => None,
         };
@@ -638,14 +642,17 @@ fn resolve_local_by_marker(
         );
         let curve = circle_curve(circle);
         let stored_parameter = curve.parameter_at([stored.0, stored.1]) * TAU;
-        let parameter = if reference.osnap_distance.abs() > 1e-12
-            || stored_parameter.abs() <= 1e-12
+        let parameter = if reference.osnap_distance.abs() > 1e-12 || stored_parameter.abs() <= 1e-12
         {
             reference.osnap_distance
         } else {
             stored_parameter
         };
-        let parameter = if parameter.is_finite() { parameter } else { 0.0 };
+        let parameter = if parameter.is_finite() {
+            parameter
+        } else {
+            0.0
+        };
         let point = curve.point_at(parameter / TAU);
         return Some(ocs_point(
             point[0],
@@ -733,27 +740,13 @@ fn signed_angle_delta(value: f64) -> f64 {
     (value + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI
 }
 
-fn angle_about_plane(
-    plane: Plane,
-    center: Vector3,
-    point: Vector3,
-) -> f64 {
-    let delta = [
-        point.x - center.x,
-        point.y - center.y,
-        point.z - center.z,
-    ];
-    let dot = |axis: [f64; 3]| {
-        delta[0] * axis[0] + delta[1] * axis[1] + delta[2] * axis[2]
-    };
+fn angle_about_plane(plane: Plane, center: Vector3, point: Vector3) -> f64 {
+    let delta = [point.x - center.x, point.y - center.y, point.z - center.z];
+    let dot = |axis: [f64; 3]| delta[0] * axis[0] + delta[1] * axis[1] + delta[2] * axis[2];
     dot(plane.y_axis).atan2(dot(plane.x_axis))
 }
 
-fn point_on_radial_circle(
-    radial: RadialSourceGeometry,
-    radius: f64,
-    angle: f64,
-) -> Vector3 {
+fn point_on_radial_circle(radial: RadialSourceGeometry, radius: f64, angle: f64) -> Vector3 {
     vector3(radial.plane.point_at([
         radial.center[0] + radius * angle.cos(),
         radial.center[1] + radius * angle.sin(),
@@ -761,9 +754,7 @@ fn point_on_radial_circle(
 }
 
 fn plane_from_normal(origin: Vector3, normal: Vector3) -> Plane {
-    let (x_axis, y_axis) = crate::scene::view::transform::ocs_axes((
-        normal.x, normal.y, normal.z,
-    ));
+    let (x_axis, y_axis) = crate::scene::view::transform::ocs_axes((normal.x, normal.y, normal.z));
     Plane::from_axes(
         [origin.x, origin.y, origin.z],
         [x_axis.0, x_axis.1, x_axis.2],
@@ -817,35 +808,52 @@ pub(crate) fn constraint_from_associative_dimension(
     document: &acadrust::CadDocument,
     handle: Handle,
 ) -> Option<(
-    super::sketch_constraints::ConstraintKind,
-    Vec<super::sketch_constraints::SketchRef>,
+    super::parametric_constraints::ConstraintKind,
+    Vec<super::parametric_constraints::ParametricRef>,
     super::named_parameters::DrivingValue,
 )> {
     use super::named_parameters::DrivingValue;
-    use super::sketch_constraints::{ConstraintKind, SketchRef};
+    use super::parametric_constraints::{ConstraintKind, ParametricRef};
 
-    let EntityType::Dimension(dimension) = document.get_entity(handle)? else { return None };
+    let EntityType::Dimension(dimension) = document.get_entity(handle)? else {
+        return None;
+    };
     let association = document.objects.values().find_map(|object| {
-        let ObjectType::Associative(object) = object else { return None };
-        let AssociativeData::DimensionAssociation(association) = &object.data else { return None };
+        let ObjectType::Associative(object) = object else {
+            return None;
+        };
+        let AssociativeData::DimensionAssociation(association) = &object.data else {
+            return None;
+        };
         (association.dimension == handle && association.associativity != 0).then_some(association)
     })?;
     let point = |index: usize| {
         let reference = association.references.get(index)?.first()?;
-        Some(SketchRef::point(*reference.xrefs.first()?, reference.main_gs_marker))
+        Some(ParametricRef::point(
+            *reference.xrefs.first()?,
+            reference.main_gs_marker,
+        ))
     };
     let whole = |index: usize| {
         let reference = association.references.get(index)?.first()?;
-        Some(SketchRef::whole(*reference.xrefs.first()?))
+        Some(ParametricRef::whole(*reference.xrefs.first()?))
     };
     let measurement = DrivingValue::Literal(dimension.measurement());
     match dimension {
-        Dimension::Aligned(_) => Some((ConstraintKind::Distance, vec![point(0)?, point(1)?], measurement)),
+        Dimension::Aligned(_) => Some((
+            ConstraintKind::Distance,
+            vec![point(0)?, point(1)?],
+            measurement,
+        )),
         Dimension::Linear(linear) => {
             let direction = [linear.rotation.cos().abs(), linear.rotation.sin().abs()];
-            let kind = if direction[1] <= 1e-9 { ConstraintKind::DistanceX }
-                else if direction[0] <= 1e-9 { ConstraintKind::DistanceY }
-                else { return None };
+            let kind = if direction[1] <= 1e-9 {
+                ConstraintKind::DistanceX
+            } else if direction[0] <= 1e-9 {
+                ConstraintKind::DistanceY
+            } else {
+                return None;
+            };
             Some((kind, vec![point(0)?, point(1)?], measurement))
         }
         Dimension::Radius(_) | Dimension::LargeRadial(_) => {
@@ -853,16 +861,24 @@ pub(crate) fn constraint_from_associative_dimension(
         }
         Dimension::Diameter(_) => Some((ConstraintKind::Diameter, vec![whole(0)?], measurement)),
         Dimension::Angular2Ln(_) => {
-            let mut sources: Vec<Handle> = association.references.iter().flatten()
-                .filter_map(|reference| reference.xrefs.first().copied()).collect();
+            let mut sources: Vec<Handle> = association
+                .references
+                .iter()
+                .flatten()
+                .filter_map(|reference| reference.xrefs.first().copied())
+                .collect();
             sources.sort_unstable();
             sources.dedup();
-            let [first, second] = sources.as_slice() else { return None };
-            Some((ConstraintKind::Angle,
-                vec![SketchRef::whole(*first), SketchRef::whole(*second)], measurement))
+            let [first, second] = sources.as_slice() else {
+                return None;
+            };
+            Some((
+                ConstraintKind::Angle,
+                vec![ParametricRef::whole(*first), ParametricRef::whole(*second)],
+                measurement,
+            ))
         }
-        Dimension::Arc(_) => Some((ConstraintKind::ArcLength, vec![whole(0)?], measurement)),
-        Dimension::Angular3Pt(_) | Dimension::Ordinate(_) => None,
+        Dimension::Arc(_) | Dimension::Angular3Pt(_) | Dimension::Ordinate(_) => None,
     }
 }
 
@@ -959,8 +975,7 @@ impl Scene {
         dimension: Handle,
         sources: Vec<Option<DimensionAssociationSource>>,
     ) {
-        let Some(EntityType::Dimension(dimension_entity)) =
-            self.document.get_entity(dimension)
+        let Some(EntityType::Dimension(dimension_entity)) = self.document.get_entity(dimension)
         else {
             return;
         };
@@ -1046,22 +1061,20 @@ impl Scene {
             return;
         }
 
-        let reference = |source: Handle,
-                         marker: i32,
-                         parameter: f64,
-                         osnap_type: u8,
-                         point: Vector3| AssocDimensionReference {
-            class_name: "AcDbOsnapPointRef".to_string(),
-            osnap_type,
-            xrefs: vec![source],
-            main_subent_type: 1,
-            main_gs_marker: marker,
-            osnap_distance: parameter,
-            osnap_point: point,
-            ..AssocDimensionReference::default()
-        };
-        let mut references: [Vec<AssocDimensionReference>; 4] =
-            std::array::from_fn(|_| Vec::new());
+        let reference =
+            |source: Handle, marker: i32, parameter: f64, osnap_type: u8, point: Vector3| {
+                AssocDimensionReference {
+                    class_name: "AcDbOsnapPointRef".to_string(),
+                    osnap_type,
+                    xrefs: vec![source],
+                    main_subent_type: 1,
+                    main_gs_marker: marker,
+                    osnap_distance: parameter,
+                    osnap_point: point,
+                    ..AssocDimensionReference::default()
+                }
+            };
+        let mut references: [Vec<AssocDimensionReference>; 4] = std::array::from_fn(|_| Vec::new());
         let mut associativity = 0;
         for (index, resolved) in resolved.into_iter().enumerate() {
             if index >= references.len() {
@@ -1577,18 +1590,11 @@ impl Scene {
                 .entities()
                 .filter(|candidate| candidate.common().handle != dimension)
                 .filter_map(|candidate| {
-                    let radial = radial_source_matching(
-                        candidate,
-                        center,
-                        radius,
-                        chord,
-                    )?;
+                    let radial = radial_source_matching(candidate, center, radius, chord)?;
                     let center_error = point_distance_squared(radial.center_world(), center);
                     let radius_error = (radial.radius - radius).powi(2);
-                    (center_error + radius_error <= tolerance * tolerance).then_some((
-                        center_error + radius_error,
-                        candidate.common().handle,
-                    ))
+                    (center_error + radius_error <= tolerance * tolerance)
+                        .then_some((center_error + radius_error, candidate.common().handle))
                 })
                 .min_by(|first, second| first.0.total_cmp(&second.0))
                 .map(|(_, handle)| handle);
@@ -1617,8 +1623,7 @@ impl Scene {
         &mut self,
         changes: &[(Handle, ChangeKind)],
     ) -> Vec<(Handle, ChangeKind)> {
-        let changed: rustc_hash::FxHashSet<_> =
-            changes.iter().map(|(handle, _)| *handle).collect();
+        let changed: rustc_hash::FxHashSet<_> = changes.iter().map(|(handle, _)| *handle).collect();
         if changed.is_empty() {
             return Vec::new();
         }
@@ -1729,9 +1734,7 @@ impl Scene {
                 let entity = self.document.get_entity(walked.entity)?;
                 let segment = match reference.main_gs_marker {
                     -3 => 0,
-                    POLYLINE_ARC_CENTER_MARKER => {
-                        reference.osnap_distance.round().max(0.0) as i32
-                    }
+                    POLYLINE_ARC_CENTER_MARKER => reference.osnap_distance.round().max(0.0) as i32,
                     _ => return None,
                 };
                 let radial = radial_source_for_marker(entity, segment)?;
@@ -1912,10 +1915,7 @@ impl Scene {
                     let old_dim_radius = old_center.distance(&old_definition);
                     let radial_offset = old_dim_radius - old_source_radius;
                     let old_mid = arc.arc_start_parameter
-                        + positive_sweep(
-                            arc.arc_start_parameter,
-                            arc.arc_end_parameter,
-                        ) * 0.5;
+                        + positive_sweep(arc.arc_start_parameter, arc.arc_end_parameter) * 0.5;
                     let old_definition_angle =
                         angle_about_plane(old_plane, old_center, old_definition);
                     let definition_angle_offset =
@@ -1976,8 +1976,7 @@ impl Scene {
                         arc.base.insertion_point = definition;
                     }
                     if arc.has_leader {
-                        arc.first_leader_point =
-                            point_on_radial_circle(radial, dim_radius, middle);
+                        arc.first_leader_point = point_on_radial_circle(radial, dim_radius, middle);
                         arc.second_leader_point = second_leader;
                     }
                     arc.base.actual_measurement = arc.measurement();
@@ -2047,7 +2046,9 @@ fn centroid_shift(before: [Option<Vector3>; 2], after: [Option<Vector3>; 2]) -> 
 
 fn linear_measurement(linear: &acadrust::entities::DimensionLinear) -> f64 {
     let plane = plane_from_normal(linear.first_point, linear.base.normal);
-    let first = plane.project(dpoint(linear.first_point)).unwrap_or([0.0; 2]);
+    let first = plane
+        .project(dpoint(linear.first_point))
+        .unwrap_or([0.0; 2]);
     let second = plane.project(dpoint(linear.second_point)).unwrap_or(first);
     let axis = [linear.rotation.cos(), linear.rotation.sin()];
     ((second[0] - first[0]) * axis[0] + (second[1] - first[1]) * axis[1]).abs()
