@@ -2902,6 +2902,8 @@ pub enum Message {
     /// A Constraints-section row was clicked: select every entity in the
     /// list (replacing the current selection) in the viewport.
     PropConstraintLinkClick(Vec<acadrust::Handle>),
+    /// Remove one parametric constraint from the active standard graph scope.
+    PropConstraintDelete(crate::scene::parametric_constraints::ConstraintId),
     // ── About window ────────────────────────────────────────────────────
     AboutOpen,
     // ── Graphics warning ────────────────────────────────────────────────

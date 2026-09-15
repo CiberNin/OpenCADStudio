@@ -62,8 +62,10 @@ pub enum PropValue {
     /// row for one parametric constraint. Clicking it selects every
     /// entity in `handles` in the viewport. `conflicting` mirrors
     /// `ParametricConstraintSet::conflicts`, tinting the row the same danger
-    /// color the constraint's glyph pill already uses.
+    /// color the constraint's glyph pill already uses. `id` routes the row's
+    /// delete action back to that constraint in the active scope.
     EntityLink {
+        id: crate::scene::parametric_constraints::ConstraintId,
         handles: Vec<Handle>,
         conflicting: bool,
     },

@@ -484,6 +484,35 @@ impl OpenCADStudio {
                                 },
                             ],
                         },
+                        PropSection {
+                            title: t!("Parameters").into_owned(),
+                            props: {
+                                let mut props: Vec<Property> = scene
+                                    .named_parameters()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, parameter)| Property {
+                                        label: String::new(),
+                                        field: "named_parameter",
+                                        value: PropValue::ParamRow {
+                                            index,
+                                            name: parameter.name.clone(),
+                                            formula: parameter.source.clone(),
+                                            resolved: scene
+                                                .named_parameters()
+                                                .resolve(&parameter.name)
+                                                .map_err(|error| error.to_string()),
+                                        },
+                                    })
+                                    .collect();
+                                props.push(Property {
+                                    label: String::new(),
+                                    field: "named_parameter_add",
+                                    value: PropValue::ParamAddRow,
+                                });
+                                props
+                            },
+                        },
                     ];
                     ui::PropertiesPanel {
                         title: t!("No selection").into_owned(),
@@ -2202,6 +2231,11 @@ impl OpenCADStudio {
                         let scope = self.tabs[i].current_parametric_scope();
                         let scene = &self.tabs[i].scene;
                         if let Some(set) = scene.parametric_constraint_set(scope) {
+                            let parameters = if set.local_parameters.is_empty() {
+                                scene.named_parameters()
+                            } else {
+                                &set.local_parameters
+                            };
                             let props: Vec<crate::scene::model::object::Property> = set
                                 .constraints_touching(handle)
                                 .map(|c| {
@@ -2219,7 +2253,7 @@ impl OpenCADStudio {
                                             crate::scene::named_parameters::DrivingValue::Named(
                                                 name,
                                             ),
-                                        ) => match scene.named_parameters().resolve(name) {
+                                        ) => match parameters.resolve(name) {
                                             Ok(v) => format!(" = {name} ({v:.2})"),
                                             Err(_) => format!(" = {name} (?)"),
                                         },
@@ -2239,6 +2273,7 @@ impl OpenCADStudio {
                                         label,
                                         field: "parametric_constraint",
                                         value: crate::scene::model::object::PropValue::EntityLink {
+                                            id: c.id,
                                             handles,
                                             conflicting,
                                         },

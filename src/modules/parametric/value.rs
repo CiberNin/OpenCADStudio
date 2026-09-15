@@ -331,6 +331,12 @@ impl CadCommand for DistanceConstraintCommand {
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        // An existing parameter name wins over a mode keyword with the same spelling.
+        if let Some(value @ DrivingValue::Named(_)) =
+            parse_driving_value(text, &self.known_param_names)
+        {
+            return self.build(value);
+        }
         // Mode-switch keywords re-prompt instead of building — consumed
         // inputs return `Some(NeedPoint)` so the driver doesn't re-offer
         // the same token a second time (matches e.g. `trim.rs`'s
@@ -602,6 +608,24 @@ mod tests {
                 driving_param: Some(DrivingValue::Literal(8.0)),
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn a_parameter_named_like_a_mode_keyword_remains_usable() {
+        let mut scene = Scene::new();
+        let circle = add_circle(&mut scene);
+        scene.named_parameters_mut().set("r", "5").unwrap();
+        let mut cmd =
+            DistanceConstraintCommand::new(&scene, circle).expect("Circle supports DCONSTRAINT");
+
+        assert!(matches!(
+            cmd.on_text_input("R"),
+            Some(CmdResult::AddParametricConstraint {
+                kind: ConstraintKind::Radius,
+                driving_param: Some(DrivingValue::Named(name)),
+                ..
+            }) if name == "r"
         ));
     }
 

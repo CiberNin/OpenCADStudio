@@ -865,8 +865,8 @@ impl PropertiesPanel {
                 self.render_hatch_pattern_row(label, current)
             }
             PropValue::AttrText { tag, value } => self.render_attr_row(tag, value),
-            PropValue::EntityLink { handles, conflicting } => {
-                render_entity_link_row(label, handles.clone(), *conflicting)
+            PropValue::EntityLink { id, handles, conflicting } => {
+                render_entity_link_row(label, *id, handles.clone(), *conflicting)
             }
             PropValue::ParamRow { index, name, formula, resolved } => {
                 self.render_param_row(*index, name, formula, resolved)
@@ -1933,8 +1933,13 @@ fn render_ro_with_tooltip_row<'a>(
 /// field, so this doesn't use the usual `prop_row_widget` label|value split.
 /// Clicking it selects every entity in `handles`; a conflicting/redundant
 /// constraint (mirrors the viewport glyph pill's own color cue) tints red.
-fn render_entity_link_row<'a>(label: &'a str, handles: Vec<Handle>, conflicting: bool) -> Element<'a, Message> {
-    let btn = button(text(label).size(FONT_SZ).width(Length::Fill))
+fn render_entity_link_row<'a>(
+    label: &'a str,
+    id: crate::scene::parametric_constraints::ConstraintId,
+    handles: Vec<Handle>,
+    conflicting: bool,
+) -> Element<'a, Message> {
+    let link = button(text(label).size(FONT_SZ).width(Length::Fill))
         .on_press(Message::PropConstraintLinkClick(handles))
         .style(move |theme: &Theme, status| {
             let palette = theme.palette();
@@ -1955,7 +1960,13 @@ fn render_entity_link_row<'a>(label: &'a str, handles: Vec<Handle>, conflicting:
         })
         .padding([3, 8])
         .width(Length::Fill);
-    container(btn).width(Length::Fill).into()
+    let delete = button(text("\u{2715}").size(FONT_SZ))
+        .on_press(Message::PropConstraintDelete(id))
+        .style(button::text)
+        .padding([2, 6]);
+    container(row![link, delete].spacing(2).align_y(iced::Center))
+        .width(Length::Fill)
+        .into()
 }
 
 // ── Parameters section: "+ Add parameter" row ──────────────────────────────

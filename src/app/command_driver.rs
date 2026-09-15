@@ -966,22 +966,20 @@ impl OpenCADStudio {
         TableCellEditStart::Started
     }
 
-    /// Removes and re-solves the first conflicting constraint in the active scope.
-    pub(super) fn resolve_one_parametric_conflict(&mut self) {
+    fn remove_parametric_constraint(
+        &mut self,
+        id: crate::scene::parametric_constraints::ConstraintId,
+        label: &'static str,
+    ) -> bool {
         let i = self.active_tab;
         let scope = self.tabs[i].current_parametric_scope();
         let Some(set) = self.tabs[i].scene.parametric_constraint_set(scope) else {
-            return;
-        };
-        let Some(&(id, _kind)) = set.conflicts.first() else {
-            return;
+            return false;
         };
         let Some(constraint) = set.get(id) else {
-            return;
+            return false;
         };
         let touched: Vec<Handle> = constraint.refs.iter().map(|r| r.entity).collect();
-        let label = "Remove conflicting constraint";
-
         let constraints_before = set.clone();
         let pending = self.begin_undo(i, label, touched.len(), true);
         self.tabs[i]
@@ -999,6 +997,30 @@ impl OpenCADStudio {
         if let Some(pd) = pending {
             self.commit_undo_delta(i, pd);
         }
+        self.refresh_properties();
+        true
+    }
+
+    /// Removes and re-solves the first conflicting constraint in the active scope.
+    pub(super) fn resolve_one_parametric_conflict(&mut self) {
+        let i = self.active_tab;
+        let scope = self.tabs[i].current_parametric_scope();
+        let Some(id) = self.tabs[i]
+            .scene
+            .parametric_constraint_set(scope)
+            .and_then(|set| set.conflicts.first().map(|(id, _)| *id))
+        else {
+            return;
+        };
+        self.remove_parametric_constraint(id, "Remove conflicting constraint");
+    }
+
+    /// Removes one user-selected constraint from the active standard graph scope.
+    pub(super) fn delete_parametric_constraint(
+        &mut self,
+        id: crate::scene::parametric_constraints::ConstraintId,
+    ) {
+        self.remove_parametric_constraint(id, "Delete constraint");
     }
 
     /// Rebuilds the active tab's `Scene::named_parameters` from the
@@ -7867,6 +7889,44 @@ mod parametric_constraint_undo_tests {
         );
     }
 
+    #[test]
+    fn deleting_one_parametric_constraint_is_undoable() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let line = add_line(&mut app, 0.0, 0.0, 10.0, 3.0);
+        let _ = app.apply_cmd_result(CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Horizontal,
+            refs: vec![ParametricRef::whole(line)],
+            driving_param: None,
+            label: "Horizontal constraint",
+        });
+        let id = app.tabs[app.active_tab]
+            .scene
+            .parametric_constraint_set(ParametricScope::ModelSpace)
+            .unwrap()
+            .constraints[0]
+            .id;
+
+        app.delete_parametric_constraint(id);
+        assert!(app.tabs[app.active_tab]
+            .scene
+            .parametric_constraint_set(ParametricScope::ModelSpace)
+            .unwrap()
+            .constraints
+            .is_empty());
+
+        app.undo_steps(1);
+        assert_eq!(
+            app.tabs[app.active_tab]
+                .scene
+                .parametric_constraint_set(ParametricScope::ModelSpace)
+                .unwrap()
+                .constraints
+                .len(),
+            1
+        );
+    }
+
     /// `named_parameters_design.md` stage 4: applying the PARAMETERS editor's
     /// working buffer both defines the parameter and re-solves whatever
     /// constraint already references it by name — the entire point of a
@@ -7948,6 +8008,31 @@ mod parametric_constraint_undo_tests {
                 .resolve("target_len"),
             Ok(3.0)
         );
+    }
+
+    /// The no-selection page must expose the active drawing's named parameters.
+    #[test]
+    fn no_selection_properties_exposes_named_parameters() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        app.tabs[app.active_tab]
+            .scene
+            .named_parameters_mut()
+            .set("width", "12")
+            .unwrap();
+
+        app.refresh_properties();
+
+        assert!(app.tabs[app.active_tab]
+            .properties
+            .sections
+            .iter()
+            .flat_map(|section| &section.props)
+            .any(|property| matches!(
+                &property.value,
+                crate::scene::model::object::PropValue::ParamRow { name, .. }
+                    if name == "width"
+            )));
     }
 
     /// End-to-end through the actual `Message` handlers a Properties-panel

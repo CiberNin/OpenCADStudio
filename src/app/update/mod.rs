@@ -6250,6 +6250,10 @@ impl OpenCADStudio {
             Message::PropParamCommit { index, field } => self.on_prop_param_commit(index, field),
             Message::PropParamDelete(index) => self.on_prop_param_delete(index),
             Message::PropParamAddNew => self.on_prop_param_add_new(),
+            Message::PropConstraintDelete(id) => {
+                self.delete_parametric_constraint(id);
+                Task::none()
+            }
             Message::PropConstraintLinkClick(handles) => {
                 let i = self.active_tab;
                 self.tabs[i].scene.deselect_all();
