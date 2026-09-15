@@ -292,8 +292,8 @@ impl OpenCADStudio {
                 let confirm = self.drafting_settings_close_confirm;
                 sized_flow(
                     ex,
-                    700,
-                    480,
+                    780,
+                    500,
                     |flow| {
                         if let Some(state) = state {
                             crate::ui::window::drafting_settings::view_window(
