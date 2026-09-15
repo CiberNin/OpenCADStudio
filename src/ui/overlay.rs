@@ -27,6 +27,7 @@ const CONSTRAINT_GLYPH_PAD_X: f32 = 7.0;
 const CONSTRAINT_GLYPH_PAD_Y: f32 = 4.0;
 const CONSTRAINT_GLYPH_GAP: f32 = 6.0;
 const CONSTRAINT_GLYPH_ROW_GAP: f32 = 4.0;
+const CONSTRAINT_HOVER_MARKER_RADIUS: f32 = 7.0;
 
 fn constraint_glyph_size(label: &str) -> Size {
     let w = label.chars().count() as f32 * CONSTRAINT_GLYPH_SIZE * 0.62
@@ -749,7 +750,7 @@ pub fn selection_overlay<'a>(
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool)>,
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool, Vec<Point>)>,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -833,9 +834,9 @@ struct SelectionCanvas {
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
     /// Constraint glyph anchor, outward screen direction, label, conflict
-    /// state, and whether the pill itself is the current click-to-select
-    /// target (`Scene::selected_constraint`) — for the current scope.
-    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool)>,
+    /// state, whether the pill itself is the current click-to-select target,
+    /// and the points to mark while the pill is hovered.
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool, Vec<Point>)>,
 }
 
 fn draw_grip_marker(
@@ -1021,7 +1022,7 @@ impl canvas::Program<Message> for SelectionCanvas {
             let glyphs: Vec<_> = self
                 .constraint_glyphs
                 .iter()
-                .map(|(anchor, outward, label, conflict, _)| {
+                .map(|(anchor, outward, label, conflict, _, _)| {
                     (*anchor, *outward, label.clone(), *conflict)
                 })
                 .collect();
@@ -1747,15 +1748,18 @@ impl canvas::Program<Message> for SelectionCanvas {
         if !self.constraint_glyphs.is_empty() {
             // `constraint_glyph_offsets` only needs the anchor/outward/label/
             // conflict quadruple it was written against; project away the
-            // trailing `is_selected` flag rather than widen its signature.
+            // trailing display fields rather than widen its signature.
             let glyphs_for_offsets: Vec<(Point, [f32; 2], String, bool)> = self
                 .constraint_glyphs
                 .iter()
-                .map(|(anchor, outward, label, is_conflicting, _)| {
+                .map(|(anchor, outward, label, is_conflicting, _, _)| {
                     (*anchor, *outward, label.clone(), *is_conflicting)
                 })
                 .collect();
             let offsets = constraint_glyph_offsets(&glyphs_for_offsets);
+            let hovered = cursor
+                .position_in(bounds)
+                .and_then(|point| constraint_glyph_hit_test(&glyphs_for_offsets, point));
             let normal_bg = theme.palette().primary.base.color;
             let normal_fg = theme.palette().primary.base.text;
             // A redundant or conflicting constraint gets the danger palette
@@ -1765,7 +1769,7 @@ impl canvas::Program<Message> for SelectionCanvas {
             let conflict_bg = theme.palette().danger.base.color;
             let conflict_fg = theme.palette().danger.base.text;
             let selected_ring = theme.palette().primary.strong.color;
-            for ((anchor, outward, label, is_conflicting, is_selected), tangent_offset) in
+            for ((anchor, outward, label, is_conflicting, is_selected, _), tangent_offset) in
                 self.constraint_glyphs.iter().zip(offsets)
             {
                 if !anchor.x.is_finite() || !anchor.y.is_finite() {
@@ -1799,6 +1803,34 @@ impl canvas::Program<Message> for SelectionCanvas {
                     shaping: iced::advanced::text::Shaping::Advanced,
                     ..Default::default()
                 });
+            }
+            if let Some(index) = hovered {
+                let red = Color::from_rgb(1.0, 0.0, 0.0);
+                let stroke = canvas::Stroke::default().with_color(red).with_width(1.5);
+                for point in &self.constraint_glyphs[index].5 {
+                    let first = canvas::Path::line(
+                        Point::new(
+                            point.x - CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y - CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                        Point::new(
+                            point.x + CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y + CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                    );
+                    let second = canvas::Path::line(
+                        Point::new(
+                            point.x - CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y + CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                        Point::new(
+                            point.x + CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y - CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                    );
+                    frame.stroke(&first, stroke.clone());
+                    frame.stroke(&second, stroke.clone());
+                }
             }
         }
         // Small cross at each acquired tracking point.

@@ -813,7 +813,14 @@ bg={bg_ms:.1}ms n={view_count}"
                 .active_cmd
                 .as_ref()
                 .is_some_and(|cmd| !cmd.needs_entity_pick() && !cmd.is_selection_gathering());
-            let constraint_glyphs: Vec<(iced::Point, [f32; 2], String, bool, bool)> = if is_paper {
+            let constraint_glyphs: Vec<(
+                iced::Point,
+                [f32; 2],
+                String,
+                bool,
+                bool,
+                Vec<iced::Point>,
+            )> = if is_paper {
                 Vec::new()
             } else {
                 let scope = tab.current_parametric_scope();
@@ -825,9 +832,16 @@ bg={bg_ms:.1}ms n={view_count}"
                         self.constraint_bar_display,
                     )
                     .into_iter()
-                    .map(|(id, point, direction, label, is_conflicting)| {
+                    .map(|(id, point, direction, label, is_conflicting, hover_points)| {
                         let selected = tab.scene.selected_constraint == Some(id);
-                        (point, direction, label, is_conflicting, selected)
+                        (
+                            point,
+                            direction,
+                            label,
+                            is_conflicting,
+                            selected,
+                            hover_points,
+                        )
                     })
                     .collect()
             };

@@ -606,6 +606,123 @@ pub(crate) fn glyph_placement(
     }
 }
 
+/// World-space locations that explain what a hovered constraint acts on.
+/// Point constraints expose their referenced point directly; curve relations
+/// expose the contact or intersection that makes the relation visible.
+fn constraint_segment_endpoints(
+    document: &acadrust::CadDocument,
+    reference: ParametricRef,
+) -> Option<[Vector3; 2]> {
+    let segment = reference.segment_index()?;
+    let entity = document.get_entity(reference.entity)?;
+    let points = super::dimension_assoc::source_points(entity);
+    let closed = match entity {
+        acadrust::EntityType::LwPolyline(polyline) => polyline.is_closed,
+        acadrust::EntityType::Polyline2D(polyline) => polyline.is_closed(),
+        _ => return None,
+    };
+    let first = *points.get(segment)?;
+    let second = if segment + 1 < points.len() {
+        points[segment + 1]
+    } else if closed {
+        *points.first()?
+    } else {
+        return None;
+    };
+    Some([first, second])
+}
+
+fn constraint_reference_curve_xy(
+    document: &acadrust::CadDocument,
+    reference: ParametricRef,
+) -> Option<cadkernel::geom2d::Curve> {
+    if let Some([first, second]) = constraint_segment_endpoints(document, reference) {
+        return Some(cadkernel::geom2d::Curve::Line(cadkernel::geom2d::Line {
+            start: [first.x, first.y],
+            end: [second.x, second.y],
+        }));
+    }
+    crate::entities::curve::entity_curve_xy(document.get_entity(reference.entity)?)
+}
+
+pub(crate) fn constraint_hover_points(
+    document: &acadrust::CadDocument,
+    constraint: &ParametricConstraint,
+) -> Vec<Vector3> {
+    let mut points = Vec::new();
+    let push_unique = |points: &mut Vec<Vector3>, point: Vector3| {
+        if point.x.is_finite()
+            && point.y.is_finite()
+            && point.z.is_finite()
+            && !points
+                .iter()
+                .any(|existing| (*existing - point).length_squared() <= 1.0e-12)
+        {
+            points.push(point);
+        }
+    };
+
+    for reference in &constraint.refs {
+        let Some(marker) = reference.marker else {
+            continue;
+        };
+        let Some(entity) = document.get_entity(reference.entity) else {
+            continue;
+        };
+        if let Some(point) = resolve_point(entity, marker) {
+            push_unique(&mut points, point);
+        }
+    }
+
+    if matches!(
+        constraint.kind,
+        ConstraintKind::Horizontal | ConstraintKind::Vertical
+    ) {
+        for reference in &constraint.refs {
+            let Some(entity) = document.get_entity(reference.entity) else {
+                continue;
+            };
+            if let Some(endpoints) = constraint_segment_endpoints(document, *reference) {
+                for point in endpoints {
+                    push_unique(&mut points, point);
+                }
+            } else if matches!(entity, acadrust::EntityType::Line(_)) {
+                for point in super::dimension_assoc::source_points(entity) {
+                    push_unique(&mut points, point);
+                }
+            }
+        }
+    }
+
+    if matches!(
+        constraint.kind,
+        ConstraintKind::Perpendicular | ConstraintKind::Tangent
+    ) {
+        if let [first, second, ..] = constraint.refs.as_slice() {
+            if let (Some(first_curve), Some(second_curve)) = (
+                constraint_reference_curve_xy(document, *first),
+                constraint_reference_curve_xy(document, *second),
+            ) {
+                let elevation = glyph_placement(document, constraint)
+                    .map(|(anchor, _)| anchor.z)
+                    .unwrap_or(0.0);
+                for crossing in cadkernel::geom2d::intersect(
+                    &first_curve,
+                    &second_curve,
+                    cadkernel::geom2d::Tolerance::default(),
+                ) {
+                    push_unique(
+                        &mut points,
+                        Vector3::new(crossing.point[0], crossing.point[1], elevation),
+                    );
+                }
+            }
+        }
+    }
+
+    points
+}
+
 impl super::Scene {
     pub fn is_parametric_constraint_visible(
         &self,
@@ -964,8 +1081,9 @@ impl super::Scene {
     }
 
     /// Screen-projected parametric-constraint glyph placements for `scope`:
-    /// `(id, anchor, outward_screen_direction, label, is_conflicting)` for
-    /// every enabled, visible constraint whose glyph projects on-screen.
+    /// `(id, anchor, outward_screen_direction, label, is_conflicting,
+    /// hover_points)` for every enabled, visible constraint whose glyph
+    /// projects on-screen.
     /// `vp_size` is the full canvas size (as `SelectionState::vp_size`
     /// reports it), matching what `viewport_edit_frame`/
     /// `active_model_tile_bounds` expect. Mirrors the projection
@@ -980,7 +1098,14 @@ impl super::Scene {
         vp_size: (f32, f32),
         show_values: bool,
         display_mode: i16,
-    ) -> Vec<(ConstraintId, iced::Point, [f32; 2], String, bool)> {
+    ) -> Vec<(
+        ConstraintId,
+        iced::Point,
+        [f32; 2],
+        String,
+        bool,
+        Vec<iced::Point>,
+    )> {
         let Some(set) = self.parametric_constraint_set(scope) else {
             return Vec::new();
         };
@@ -1034,7 +1159,30 @@ impl super::Scene {
                 } else {
                     c.kind.glyph_symbol().to_string()
                 };
-                point.x.is_finite().then_some((c.id, point, direction.to_array(), label, is_conflicting))
+                let hover_points = constraint_hover_points(&self.document, c)
+                    .into_iter()
+                    .filter_map(|hover_point| {
+                        let projected = crate::scene::pick::grip::project_rte(
+                            glam::DVec3::new(hover_point.x, hover_point.y, hover_point.z),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )?;
+                        let point = iced::Point::new(
+                            bounds.x + projected.x,
+                            bounds.y + projected.y,
+                        );
+                        (point.x.is_finite() && point.y.is_finite()).then_some(point)
+                    })
+                    .collect();
+                point.x.is_finite().then_some((
+                    c.id,
+                    point,
+                    direction.to_array(),
+                    label,
+                    is_conflicting,
+                    hover_points,
+                ))
             })
             .collect()
     }
@@ -1060,7 +1208,7 @@ impl super::Scene {
         );
         let glyphs: Vec<(iced::Point, [f32; 2], String, bool)> = placements
             .iter()
-            .map(|(_, point, direction, label, is_conflicting)| {
+            .map(|(_, point, direction, label, is_conflicting, _)| {
                 (*point, *direction, label.clone(), *is_conflicting)
             })
             .collect();
