@@ -536,18 +536,12 @@ impl<'a> GroupBuilder<'a> {
         }
         let entity = self.document.get_entity(handle)?;
         let points = super::dimension_assoc::source_points(entity);
-        let closed = match entity {
+        let (closed, bulge) = match entity {
             EntityType::LwPolyline(polyline) => {
-                if polyline.vertices.get(index)?.bulge.abs() > 1e-9 {
-                    return None;
-                }
-                polyline.is_closed
+                (polyline.is_closed, polyline.vertices.get(index)?.bulge)
             }
             EntityType::Polyline2D(polyline) => {
-                if polyline.vertices.get(index)?.bulge.abs() > 1e-9 {
-                    return None;
-                }
-                polyline.is_closed()
+                (polyline.is_closed(), polyline.vertices.get(index)?.bulge)
             }
             _ => return None,
         };
@@ -560,19 +554,44 @@ impl<'a> GroupBuilder<'a> {
             return None;
         };
         let node_id = self.alloc_node_id();
-        self.push_node(
-            node_id,
-            "AcConstrainedBoundedLine",
-            AssocConstraintNodeData::BoundedLine {
-                geometry_dependency: Handle::NULL,
-                geometry_node_id: node_id,
-                point: start,
-                direction: (end - start).normalize(),
-                is_ray: false,
-                start_point: start,
-                end_point: end,
-            },
-        );
+        if bulge.abs() <= 1e-9 {
+            self.push_node(
+                node_id,
+                "AcConstrainedBoundedLine",
+                AssocConstraintNodeData::BoundedLine {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    point: start,
+                    direction: (end - start).normalize(),
+                    is_ray: false,
+                    start_point: start,
+                    end_point: end,
+                },
+            );
+        } else {
+            let arc = cadkernel::geom2d::BulgeArc::from_bulge(
+                [start.x, start.y],
+                [end.x, end.y],
+                bulge,
+            )?;
+            self.push_node(
+                node_id,
+                "AcConstrainedArc",
+                AssocConstraintNodeData::Arc {
+                    geometry_dependency: Handle::NULL,
+                    geometry_node_id: node_id,
+                    center: Vector3::new(arc.center[0], arc.center[1], start.z),
+                    normal: Vector3::UNIT_Z,
+                    direction: Vector3::UNIT_X,
+                    radius: arc.radius,
+                    start_parameter: arc.start_angle,
+                    end_parameter: arc.start_angle + arc.sweep,
+                    reserved: 0.0,
+                    start_point: start,
+                    end_point: end,
+                },
+            );
+        }
         self.entities
             .entry(handle)
             .or_default()
@@ -1537,7 +1556,7 @@ fn dependency_entity(
         (Some(EntityType::Line(_)), AssocConstraintNodeData::BoundedLine { is_ray, .. }) => !is_ray,
         (
             Some(EntityType::LwPolyline(_) | EntityType::Polyline2D(_)),
-            AssocConstraintNodeData::BoundedLine { .. },
+            AssocConstraintNodeData::BoundedLine { .. } | AssocConstraintNodeData::Arc { .. },
         ) => true,
         (Some(EntityType::Ray(_)), AssocConstraintNodeData::BoundedLine { is_ray, .. }) => *is_ray,
         (Some(EntityType::XLine(_)), AssocConstraintNodeData::Line { .. }) => true,
@@ -1580,13 +1599,18 @@ fn polyline_segment_reference(
     data: &AssocConstraintNodeData,
     work_plane: &[Vector3; 3],
 ) -> Option<ParametricRef> {
-    let AssocConstraintNodeData::BoundedLine {
-        start_point,
-        end_point,
-        ..
-    } = data
-    else {
-        return None;
+    let (start_point, end_point) = match data {
+        AssocConstraintNodeData::BoundedLine {
+            start_point,
+            end_point,
+            ..
+        }
+        | AssocConstraintNodeData::Arc {
+            start_point,
+            end_point,
+            ..
+        } => (*start_point, *end_point),
+        _ => return None,
     };
     let [origin, axis_x, axis_y] = *work_plane;
     let normal = Vector3::new(
@@ -1595,8 +1619,8 @@ fn polyline_segment_reference(
         axis_x.x * axis_y.y - axis_x.y * axis_y.x,
     );
     let to_world = |point: Vector3| origin + axis_x * point.x + axis_y * point.y + normal * point.z;
-    let start_point = to_world(*start_point);
-    let end_point = to_world(*end_point);
+    let start_point = to_world(start_point);
+    let end_point = to_world(end_point);
     let entity_value = document.get_entity(entity)?;
     let closed = match entity_value {
         EntityType::LwPolyline(polyline) => polyline.is_closed,
