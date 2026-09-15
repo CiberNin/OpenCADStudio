@@ -933,9 +933,10 @@ impl OpenCADStudio {
             return Task::none();
         }
         let i = self.active_tab;
+        self.constraint_glyph_tooltip = None;
         let constraint_hover = self
             .constraint_glyph_under(i, p)
-            .map(|(_, handles)| handles)
+            .map(|(_, references)| references)
             .unwrap_or_default();
         self.tabs[i]
             .scene
@@ -1766,7 +1767,7 @@ impl OpenCADStudio {
                 .solve_parametric_constraints_preview(
                     &edited_handles,
                     &driven_refs,
-                    self.constraint_solve_mode && !driven_refs.is_empty(),
+                    false,
                     &self.grip_originals,
                 );
             for (handle, _) in &solved_by_constraints {
@@ -2983,7 +2984,7 @@ impl OpenCADStudio {
         cursor: iced::Point,
     ) -> Option<(
         crate::scene::parametric_constraints::ConstraintKind,
-        Vec<acadrust::Handle>,
+        Vec<crate::scene::parametric_constraints::ParametricRef>,
     )> {
         if self.tabs[i].scene.current_layout != "Model" {
             return None;
@@ -2999,10 +3000,7 @@ impl OpenCADStudio {
         )?;
         let set = self.tabs[i].scene.parametric_constraint_set(scope)?;
         let constraint = set.get(id)?;
-        let mut handles: Vec<_> = constraint.refs.iter().map(|r| r.entity).collect();
-        handles.sort_unstable_by_key(|handle| handle.value());
-        handles.dedup();
-        Some((constraint.kind, handles))
+        Some((constraint.kind, constraint.refs.clone()))
     }
 
     pub(super) fn on_viewport_left_press(&mut self) -> Task<Message> {
@@ -3061,7 +3059,10 @@ impl OpenCADStudio {
         let (vw, vh) = vp_size;
 
         if self.tabs[i].active_cmd.is_none() {
-            if let Some((kind, handles)) = self.constraint_glyph_under(i, p) {
+            if let Some((kind, references)) = self.constraint_glyph_under(i, p) {
+                let mut handles: Vec<_> = references.iter().map(|reference| reference.entity).collect();
+                handles.sort_unstable_by_key(|handle| handle.value());
+                handles.dedup();
                 self.tabs[i].scene.deselect_all();
                 self.tabs[i].scene.select_entities(&handles);
                 self.refresh_selected_grips();
@@ -5179,6 +5180,7 @@ properties={:.1}ms picked={}",
         }
         self.tabs[i].scene.set_hover_highlight(None);
         self.hover_dwell = None;
+        self.constraint_glyph_tooltip = None;
         self.grip_hover = None;
         self.ucs_icon_hover = false;
     }
@@ -5500,6 +5502,10 @@ properties={:.1}ms picked={}",
             self.clear_navigation_hover(i);
             return Task::none();
         }
+        let cursor = self.tabs[i].scene.selection.borrow().last_move_pos;
+        self.constraint_glyph_tooltip = cursor.and_then(|point| {
+            self.constraint_glyph_under(i, point).map(|(kind, _)| kind)
+        });
         let bounds = iced::Rectangle {
             x: 0.0,
             y: 0.0,
@@ -6135,6 +6141,12 @@ mod selection_preview_tests {
                 current[1], before[1],
                 "constrained neighbor must follow each grip frame"
             );
+            let start_delta = current[0][0] - before[0][0];
+            let end_delta = current[0][1] - before[0][1];
+            assert!(
+                (start_delta + end_delta).length_squared() > 1.0e-8,
+                "the opposite endpoint must not mirror the dragged endpoint around a fixed midpoint"
+            );
         }
         let _ = app.on_viewport_left_release();
         assert!(app.tabs[i].active_grip.is_none());
@@ -6143,6 +6155,106 @@ mod selection_preview_tests {
         assert_eq!(geometry(&app), before);
         app.redo_steps(1);
         assert_eq!(geometry(&app), after);
+    }
+
+    #[test]
+    fn constrained_polyline_vertex_grip_reshapes_instead_of_translating() {
+        use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef, ParametricScope};
+        use acadrust::{entities::LwPolyline, types::Vector2, EntityType};
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.snapper.snap_enabled = false;
+        app.snapper.grid_snap_on = false;
+        app.snapper.otrack_enabled = false;
+        app.ortho_mode = false;
+        app.polar_mode = false;
+        app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        let mut rectangle = LwPolyline::from_points(vec![
+            Vector2::new(0.0, 0.0),
+            Vector2::new(4.0, 0.0),
+            Vector2::new(4.0, 2.0),
+            Vector2::new(0.0, 2.0),
+        ]);
+        rectangle.is_closed = true;
+        let handle = app.tabs[i].scene.add_entity(EntityType::LwPolyline(rectangle));
+        let set = app.tabs[i].scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        set.add(ConstraintKind::Parallel, vec![ParametricRef::segment(handle, 0), ParametricRef::segment(handle, 2)], None);
+        set.add(ConstraintKind::Parallel, vec![ParametricRef::segment(handle, 1), ParametricRef::segment(handle, 3)], None);
+        set.add(ConstraintKind::Perpendicular, vec![ParametricRef::segment(handle, 3), ParametricRef::segment(handle, 2)], None);
+        set.add(ConstraintKind::Horizontal, vec![ParametricRef::segment(handle, 2)], None);
+        let vertices = |app: &OpenCADStudio| {
+            let EntityType::LwPolyline(polyline) =
+                app.tabs[i].scene.document.get_entity(handle).unwrap()
+            else {
+                panic!("expected polyline")
+            };
+            polyline.vertices.iter().map(|vertex| vertex.location).collect::<Vec<_>>()
+        };
+        let before = vertices(&app);
+        app.tabs[i].active_grip = Some(GripEdit::single(handle, 0, false, glam::DVec3::ZERO));
+
+        let _ = app.on_viewport_move(Point::new(460.0, 220.0));
+
+        let after = vertices(&app);
+        let dragged = after[0] - before[0];
+        assert!(dragged.length_squared() > 1.0e-12);
+        assert!(after.iter().zip(&before).skip(1).any(|(after, before)|
+            (*after - *before - dragged).length_squared() > 1.0e-12));
+        let segments = [
+            after[1] - after[0],
+            after[2] - after[1],
+            after[3] - after[2],
+            after[0] - after[3],
+        ];
+        let cross = |a: Vector2, b: Vector2| a.x * b.y - a.y * b.x;
+        let dot = |a: Vector2, b: Vector2| a.x * b.x + a.y * b.y;
+        assert!(cross(segments[0], segments[2]).abs() < 1.0e-6);
+        assert!(cross(segments[1], segments[3]).abs() < 1.0e-6);
+        assert!(dot(segments[3], segments[2]).abs() < 1.0e-6);
+        assert!(segments[2].y.abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn constraint_glyph_tooltip_appears_after_hover_dwell() {
+        use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef, ParametricScope};
+        use acadrust::{entities::Line, types::Vector3, EntityType};
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        let handle = app.tabs[i].scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(-1.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        app.tabs[i].scene.parametric_constraint_set_mut(ParametricScope::ModelSpace).add(
+            ConstraintKind::Horizontal,
+            vec![ParametricRef::whole(handle)],
+            None,
+        );
+        let anchor = app.tabs[i].scene.constraint_glyph_placements_screen(
+            ParametricScope::ModelSpace,
+            (800.0, 600.0),
+            true,
+            3,
+        )[0].1;
+        let point = (-30..=30).find_map(|y| {
+            (-30..=30).find_map(|x| {
+                let point = Point::new(anchor.x + x as f32, anchor.y + y as f32);
+                app.constraint_glyph_under(i, point).is_some().then_some(point)
+            })
+        }).expect("projected constraint glyph should be hit-testable");
+
+        let _ = app.on_viewport_move(point);
+        assert_eq!(app.constraint_glyph_tooltip, None);
+        app.hover_dwell.as_mut().unwrap().last_move_at =
+            Instant::now()
+                - std::time::Duration::from_millis(crate::app::HOVER_DWELL_MS as u64 + 1);
+        let _ = app.on_hover_dwell_tick();
+
+        assert_eq!(app.constraint_glyph_tooltip, Some(ConstraintKind::Horizontal));
     }
 
     #[cfg(target_os = "linux")]

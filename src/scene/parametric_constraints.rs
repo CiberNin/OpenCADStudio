@@ -575,6 +575,37 @@ pub(crate) fn parametric_curve_ref_for_pick(
 }
 
 impl ConstraintKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Coincident => "Coincident",
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+            Self::Parallel => "Parallel",
+            Self::Perpendicular => "Perpendicular",
+            Self::Equal => "Equal",
+            Self::Distance => "Distance",
+            Self::Angle => "Angle",
+            Self::Angle3Point => "3-point angle",
+            Self::Radius => "Radius",
+            Self::Tangent => "Tangent",
+            Self::Smooth => "Smooth",
+            Self::Concentric => "Concentric",
+            Self::CenterPoint => "Center point",
+            Self::Colinear => "Collinear",
+            Self::Midpoint => "Midpoint",
+            Self::Fixed => "Fixed",
+            Self::PointOnCurve => "Point on curve",
+            Self::EqualDistance => "Equal distance",
+            Self::Symmetric => "Symmetric",
+            Self::Diameter => "Diameter",
+            Self::DistanceX => "Horizontal distance",
+            Self::DistanceY => "Vertical distance",
+            Self::DistanceDirected => "Directed distance",
+            Self::Normal => "Normal",
+            Self::RigidSet => "Rigid set",
+        }
+    }
+
     /// The short symbol a constraint glyph shows — matches the existing
     /// ribbon icons (`crate::modules::parametric::{tools,value}`) for
     /// the kinds that have a one-click button, so the same glyph means the
@@ -640,7 +671,13 @@ pub(crate) fn glyph_placement(
     document: &acadrust::CadDocument,
     constraint: &ParametricConstraint,
 ) -> Option<(Vector3, Vector3)> {
-    let r = constraint.refs.first()?;
+    glyph_placements(document, constraint).into_iter().next()
+}
+
+fn glyph_placement_for_reference(
+    document: &acadrust::CadDocument,
+    r: ParametricRef,
+) -> Option<(Vector3, Vector3)> {
     let entity = document.get_entity(r.entity)?;
     let line_midpoint = |line: &acadrust::entities::Line| {
         Vector3::new(
@@ -661,7 +698,7 @@ pub(crate) fn glyph_placement(
             entity,
             POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - segment as i32,
         )?;
-        let [start, end] = constraint_segment_endpoints(document, *r)?;
+        let [start, end] = constraint_segment_endpoints(document, r)?;
         return Some((anchor, segment_normal(start, end)));
     }
     match (entity, r.marker) {
@@ -702,6 +739,52 @@ pub(crate) fn glyph_placement(
         }
         _ => None,
     }
+}
+
+fn glyph_placements(
+    document: &acadrust::CadDocument,
+    constraint: &ParametricConstraint,
+) -> Vec<(Vector3, Vector3)> {
+    if constraint.kind == ConstraintKind::Parallel {
+        return constraint
+            .refs
+            .iter()
+            .filter_map(|reference| glyph_placement_for_reference(document, *reference))
+            .collect();
+    }
+
+    let Some(first) = constraint.refs.first().copied() else {
+        return Vec::new();
+    };
+    let fallback = glyph_placement_for_reference(document, first);
+    if matches!(
+        constraint.kind,
+        ConstraintKind::Perpendicular | ConstraintKind::Tangent
+    ) {
+        if let [first, second, ..] = constraint.refs.as_slice() {
+            if let (Some(first_curve), Some(second_curve), Some((anchor, outward))) = (
+                constraint_reference_curve_xy(document, *first),
+                constraint_reference_curve_xy(document, *second),
+                fallback,
+            ) {
+                if let Some(crossing) = cadkernel::geom2d::intersect(
+                    &first_curve,
+                    &second_curve,
+                    cadkernel::geom2d::Tolerance::default(),
+                )
+                .into_iter()
+                .next()
+                {
+                    return vec![(
+                        Vector3::new(crossing.point[0], crossing.point[1], anchor.z),
+                        outward,
+                    )];
+                }
+            }
+        }
+    }
+
+    fallback.into_iter().collect()
 }
 
 /// World-space locations that explain what a hovered constraint acts on.
@@ -1334,33 +1417,14 @@ impl super::Scene {
                     .any(|reference| self.selected.contains(&reference.entity));
                 self.should_display_parametric_constraint(scope, c.id, selected, display_mode)
             })
-            .filter_map(|c| {
-                let (anchor, outward) = glyph_placement(&self.document, c)?;
-                let screen = crate::scene::pick::grip::project_rte(
-                    glam::DVec3::new(anchor.x, anchor.y, anchor.z),
-                    view_rot,
-                    eye,
-                    bounds,
-                )?;
-                let outward_screen = crate::scene::pick::grip::project_rte(
-                    glam::DVec3::new(
-                        anchor.x + outward.x,
-                        anchor.y + outward.y,
-                        anchor.z + outward.z,
-                    ),
-                    view_rot,
-                    eye,
-                    bounds,
-                )?;
-                let direction = (outward_screen - screen).normalize_or(glam::Vec2::NEG_Y);
-                let point = iced::Point::new(bounds.x + screen.x, bounds.y + screen.y);
+            .flat_map(|c| {
                 let is_conflicting = set.conflicts.iter().any(|(id, _)| *id == c.id);
                 let label = if show_values {
                     glyph_label(c)
                 } else {
                     c.kind.glyph_symbol().to_string()
                 };
-                let hover_points = constraint_hover_points(&self.document, c)
+                let hover_points: Vec<iced::Point> = constraint_hover_points(&self.document, c)
                     .into_iter()
                     .filter_map(|hover_point| {
                         let projected = crate::scene::pick::grip::project_rte(
@@ -1376,14 +1440,38 @@ impl super::Scene {
                         (point.x.is_finite() && point.y.is_finite()).then_some(point)
                     })
                     .collect();
-                point.x.is_finite().then_some((
-                    c.id,
-                    point,
-                    direction.to_array(),
-                    label,
-                    is_conflicting,
-                    hover_points,
-                ))
+                glyph_placements(&self.document, c)
+                    .into_iter()
+                    .filter_map(|(anchor, outward)| {
+                        let screen = crate::scene::pick::grip::project_rte(
+                            glam::DVec3::new(anchor.x, anchor.y, anchor.z),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )?;
+                        let outward_screen = crate::scene::pick::grip::project_rte(
+                            glam::DVec3::new(
+                                anchor.x + outward.x,
+                                anchor.y + outward.y,
+                                anchor.z + outward.z,
+                            ),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )?;
+                        let direction =
+                            (outward_screen - screen).normalize_or(glam::Vec2::NEG_Y);
+                        let point = iced::Point::new(bounds.x + screen.x, bounds.y + screen.y);
+                        point.x.is_finite().then(|| (
+                            c.id,
+                            point,
+                            direction.to_array(),
+                            label.clone(),
+                            is_conflicting,
+                            hover_points.clone(),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect()
     }
@@ -1580,6 +1668,88 @@ mod tests {
             glyph_placement(&document, &constraint(ParametricRef::segment(h(3), 0))).unwrap();
         assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
         assert_eq!(direction, Vector3::new(0.0, 10.0, 0.0));
+
+        let mut tangent_line = acadrust::entities::Line::from_points(
+            Vector3::new(-10.0, 5.0, 0.0),
+            Vector3::new(10.0, 5.0, 0.0),
+        );
+        tangent_line.common.handle = h(4);
+        document.add_entity(acadrust::EntityType::Line(tangent_line)).unwrap();
+        let relation = |id, kind, refs| ParametricConstraint {
+            id,
+            kind,
+            refs,
+            driving_param: None,
+            enabled: true,
+            native_origin: None,
+            rigid_points: Vec::new(),
+            distance_direction_type: 0,
+            distance_direction: None,
+            angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
+        };
+        let tangent = relation(
+            1,
+            ConstraintKind::Tangent,
+            vec![ParametricRef::whole(h(4)), ParametricRef::whole(h(2))],
+        );
+        assert_eq!(
+            glyph_placement(&document, &tangent).unwrap().0,
+            Vector3::new(0.0, 5.0, 0.0)
+        );
+
+        let mut rectangle = acadrust::entities::LwPolyline::from_points(vec![
+            acadrust::types::Vector2::new(0.0, 0.0),
+            acadrust::types::Vector2::new(4.0, 0.0),
+            acadrust::types::Vector2::new(4.0, 2.0),
+            acadrust::types::Vector2::new(0.0, 2.0),
+        ]);
+        rectangle.common.handle = h(5);
+        rectangle.is_closed = true;
+        document.add_entity(acadrust::EntityType::LwPolyline(rectangle)).unwrap();
+        let parallel = glyph_placements(
+            &document,
+            &relation(
+                2,
+                ConstraintKind::Parallel,
+                vec![ParametricRef::segment(h(5), 0), ParametricRef::segment(h(5), 2)],
+            ),
+        );
+        assert_eq!(parallel.len(), 2);
+        assert_eq!(parallel[0].0, Vector3::new(2.0, 0.0, 0.0));
+        assert_eq!(parallel[1].0, Vector3::new(2.0, 2.0, 0.0));
+        let perpendicular = relation(
+            3,
+            ConstraintKind::Perpendicular,
+            vec![ParametricRef::segment(h(5), 3), ParametricRef::segment(h(5), 2)],
+        );
+        assert_eq!(
+            glyph_placement(&document, &perpendicular).unwrap().0,
+            Vector3::new(0.0, 2.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn polyline_constraint_hover_builds_only_the_referenced_segment() {
+        let mut scene = super::super::Scene::new();
+        let handle = scene.add_entity(acadrust::EntityType::LwPolyline(
+            acadrust::entities::LwPolyline::from_points(vec![
+                acadrust::types::Vector2::new(0.0, 0.0),
+                acadrust::types::Vector2::new(4.0, 0.0),
+                acadrust::types::Vector2::new(4.0, 2.0),
+            ]),
+        ));
+
+        scene.set_constraint_hover_highlights(&[ParametricRef::segment(handle, 1)]);
+
+        assert!(scene.constraint_hover_highlights.is_empty());
+        assert_eq!(scene.constraint_hover_wires.len(), 1);
+        let wire = &scene.constraint_hover_wires[0];
+        let points: Vec<_> = wire.points.iter().zip(&wire.points_low).map(|(high, low)| [
+            high[0] as f64 + low[0] as f64,
+            high[1] as f64 + low[1] as f64,
+            high[2] as f64 + low[2] as f64,
+        ]).collect();
+        assert_eq!(points, vec![[4.0, 0.0, 0.0], [4.0, 2.0, 0.0]]);
     }
 
     #[test]

@@ -1008,6 +1008,16 @@ impl Scene {
                 hover_changed = true;
             }
             hover_changed |= self.constraint_hover_highlights.remove(&h);
+            if self
+                .constraint_hover_refs
+                .iter()
+                .any(|reference| reference.entity == h)
+            {
+                self.constraint_hover_refs.clear();
+                self.constraint_hover_wires.clear();
+                self.constraint_hover_highlights.clear();
+                hover_changed = true;
+            }
             self.hatches.remove(&h);
             self.images.remove(&h);
             self.meshes.remove(&h);

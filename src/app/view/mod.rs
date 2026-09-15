@@ -888,6 +888,8 @@ bg={bg_ms:.1}ms n={view_count}"
                     grip_hover: self.model_space.grip_hover,
                 },
                 constraint_glyphs,
+                self.constraint_glyph_tooltip
+                    .map(|kind| crate::t!(kind.label()).into_owned()),
             )
         };
 
