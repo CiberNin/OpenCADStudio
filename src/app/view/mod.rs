@@ -813,71 +813,22 @@ bg={bg_ms:.1}ms n={view_count}"
                 .active_cmd
                 .as_ref()
                 .is_some_and(|cmd| !cmd.needs_entity_pick() && !cmd.is_selection_gathering());
-            // Constraint glyphs are displayed in model space only.
-            let constraint_glyphs: Vec<(iced::Point, [f32; 2], String, bool)> = if is_paper {
+            let constraint_glyphs: Vec<(iced::Point, [f32; 2], String, bool, bool)> = if is_paper {
                 Vec::new()
             } else {
-                let (vw, vh) = sel_ref.vp_size;
                 let scope = tab.current_parametric_scope();
-                match tab.scene.parametric_constraint_set(scope) {
-                    Some(set) if !set.constraints.is_empty() => {
-                        let edit_frame = tab.scene.viewport_edit_frame((vw, vh));
-                        let bounds = match &edit_frame {
-                            Some((_, full)) => *full,
-                            None => tab.scene.active_model_tile_bounds(vw, vh),
-                        };
-                        let (view_rot, eye) = if let Some((cam, _)) = &edit_frame {
-                            (cam.view_proj_rte(bounds), cam.eye())
-                        } else {
-                            let cam = tab.scene.camera.borrow();
-                            (cam.view_proj_rte(bounds), cam.eye())
-                        };
-                        set.constraints
-                            .iter()
-                            .filter(|c| c.enabled)
-                            .filter(|c| tab.scene.is_parametric_constraint_visible(scope, c.id))
-                            .filter_map(|c| {
-                                let (anchor, outward) =
-                                    crate::scene::parametric_constraints::glyph_placement(
-                                        &tab.scene.document,
-                                        c,
-                                    )?;
-                                let screen = crate::scene::pick::grip::project_rte(
-                                    glam::DVec3::new(anchor.x, anchor.y, anchor.z),
-                                    view_rot,
-                                    eye,
-                                    bounds,
-                                )?;
-                                let outward_screen = crate::scene::pick::grip::project_rte(
-                                    glam::DVec3::new(
-                                        anchor.x + outward.x,
-                                        anchor.y + outward.y,
-                                        anchor.z + outward.z,
-                                    ),
-                                    view_rot,
-                                    eye,
-                                    bounds,
-                                )?;
-                                let direction =
-                                    (outward_screen - screen).normalize_or(glam::Vec2::NEG_Y);
-                                let point =
-                                    iced::Point::new(bounds.x + screen.x, bounds.y + screen.y);
-                                let is_conflicting =
-                                    set.conflicts.iter().any(|(id, _)| *id == c.id);
-                                let label = if self.show_constraint_values {
-                                    crate::scene::parametric_constraints::glyph_label(c)
-                                } else {
-                                    c.kind.glyph_symbol().to_string()
-                                };
-                                point
-                                    .x
-                                    .is_finite()
-                                    .then(|| (point, direction.to_array(), label, is_conflicting))
-                            })
-                            .collect()
-                    }
-                    _ => Vec::new(),
-                }
+                tab.scene
+                    .constraint_glyph_placements_screen(
+                        scope,
+                        sel_ref.vp_size,
+                        self.show_constraint_values,
+                    )
+                    .into_iter()
+                    .map(|(id, point, direction, label, is_conflicting)| {
+                        let selected = tab.scene.selected_constraint == Some(id);
+                        (point, direction, label, is_conflicting, selected)
+                    })
+                    .collect()
             };
             crate::ui::overlay::selection_overlay(
                 std::sync::Arc::clone(&tab.scene.selection),
@@ -1624,7 +1575,6 @@ bg={bg_ms:.1}ms n={view_count}"
             } else {
                 34.0
             };
-
             // Quick Properties: stay near the selection cursor, flipping around
             // it as needed to remain inside the visible drawing area.
             if self.quick_properties && !tab.is_start {
@@ -1798,6 +1748,7 @@ bg={bg_ms:.1}ms n={view_count}"
                         command_line_inset,
                         has_cmd,
                         has_selection,
+                        tab.scene.selected_constraint,
                         isolation_active,
                         last_cmds,
                         draworder_open,

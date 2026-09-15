@@ -989,6 +989,9 @@ impl OpenCADStudio {
             .scene
             .parametric_constraint_set_mut(scope)
             .remove(id);
+        if self.tabs[i].scene.selected_constraint == Some(id) {
+            self.tabs[i].scene.selected_constraint = None;
+        }
         let changes: Vec<(Handle, crate::scene::ChangeKind)> = touched
             .into_iter()
             .map(|h| (h, crate::scene::ChangeKind::Modified))
@@ -7906,6 +7909,7 @@ mod parametric_constraint_undo_tests {
             .unwrap()
             .constraints[0]
             .id;
+        app.tabs[app.active_tab].scene.selected_constraint = Some(id);
 
         app.delete_parametric_constraint(id);
         assert!(app.tabs[app.active_tab]
@@ -7914,6 +7918,7 @@ mod parametric_constraint_undo_tests {
             .unwrap()
             .constraints
             .is_empty());
+        assert_eq!(app.tabs[app.active_tab].scene.selected_constraint, None);
 
         app.undo_steps(1);
         assert_eq!(

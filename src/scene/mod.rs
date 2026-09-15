@@ -1658,6 +1658,9 @@ pub struct Scene {
     /// Currently selected entity handles.
     pub selected: HashSet<Handle>,
     selected_order: Vec<Handle>,
+    /// The parametric-constraint glyph currently selected in the viewport.
+    /// Entity selection changes clear it so the two selections stay exclusive.
+    pub selected_constraint: Option<crate::scene::parametric_constraints::ConstraintId>,
     /// Session-only ISOLATEOBJECTS / HIDEOBJECTS state. Never written to DWG/DXF.
     pub object_isolation: ObjectIsolationState,
     /// Entity handles temporarily removed from the base render while an
@@ -2194,6 +2197,7 @@ impl Scene {
             lighting_cache: RefCell::new(HashMap::default()),
             selected: HashSet::default(),
             selected_order: Vec::new(),
+            selected_constraint: None,
             object_isolation: ObjectIsolationState::default(),
             preview_hidden: HashSet::default(),
             command_preview_hidden: HashSet::default(),

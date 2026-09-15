@@ -94,6 +94,32 @@ fn constraint_glyph_offsets(glyphs: &[(Point, [f32; 2], String, bool)]) -> Vec<f
     offsets
 }
 
+/// Hit-tests screen point `p` against the same glyph-pill layout `draw`
+/// renders — reusing `constraint_glyph_offsets`/`constraint_glyph_box` so
+/// the clickable area can never drift from what's actually drawn, including
+/// the tangential fan-out applied when several glyphs share one anchor.
+/// Returns the index into `glyphs` of the topmost (last-drawn) match.
+/// `Scene::constraint_glyph_hit` maps the index back to a constraint id.
+pub(crate) fn constraint_glyph_hit_test(
+    glyphs: &[(Point, [f32; 2], String, bool)],
+    p: Point,
+) -> Option<usize> {
+    let offsets = constraint_glyph_offsets(glyphs);
+    glyphs
+        .iter()
+        .zip(offsets)
+        .enumerate()
+        .rev()
+        .find_map(|(index, ((anchor, outward, label, _), tangent_offset))| {
+            let (top_left, size) = constraint_glyph_box(*anchor, *outward, label, tangent_offset);
+            let within = p.x >= top_left.x
+                && p.x <= top_left.x + size.width
+                && p.y >= top_left.y
+                && p.y <= top_left.y + size.height;
+            within.then_some(index)
+        })
+}
+
 /// Convert CURSORSIZE to a screen-space arm length while keeping the original
 /// 60 px cursor at the default value and the full-viewport result at 100.
 pub(crate) fn crosshair_arm_px(bounds: iced::Rectangle, value: i32) -> f32 {
@@ -723,7 +749,7 @@ pub fn selection_overlay<'a>(
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    constraint_glyphs: Vec<(Point, [f32; 2], String, bool)>,
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool)>,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -806,8 +832,10 @@ struct SelectionCanvas {
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    /// Constraint glyph anchor, outward screen direction, label, and conflict state.
-    constraint_glyphs: Vec<(Point, [f32; 2], String, bool)>,
+    /// Constraint glyph anchor, outward screen direction, label, conflict
+    /// state, and whether the pill itself is the current click-to-select
+    /// target (`Scene::selected_constraint`) — for the current scope.
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool)>,
 }
 
 fn draw_grip_marker(
@@ -1703,9 +1731,19 @@ impl canvas::Program<Message> for SelectionCanvas {
             frame.stroke(&b1, stroke.clone());
             frame.stroke(&b2, stroke);
         }
-        // Constraint glyphs are visual-only and have no hit testing.
+        // Hit testing shares this layout math with the scene projection.
         if !self.constraint_glyphs.is_empty() {
-            let offsets = constraint_glyph_offsets(&self.constraint_glyphs);
+            // `constraint_glyph_offsets` only needs the anchor/outward/label/
+            // conflict quadruple it was written against; project away the
+            // trailing `is_selected` flag rather than widen its signature.
+            let glyphs_for_offsets: Vec<(Point, [f32; 2], String, bool)> = self
+                .constraint_glyphs
+                .iter()
+                .map(|(anchor, outward, label, is_conflicting, _)| {
+                    (*anchor, *outward, label.clone(), *is_conflicting)
+                })
+                .collect();
+            let offsets = constraint_glyph_offsets(&glyphs_for_offsets);
             let normal_bg = theme.palette().primary.base.color;
             let normal_fg = theme.palette().primary.base.text;
             // A redundant or conflicting constraint gets the danger palette
@@ -1714,7 +1752,8 @@ impl canvas::Program<Message> for SelectionCanvas {
             // would show, surfaced right on the geometry.
             let conflict_bg = theme.palette().danger.base.color;
             let conflict_fg = theme.palette().danger.base.text;
-            for ((anchor, outward, label, is_conflicting), tangent_offset) in
+            let selected_ring = theme.palette().primary.strong.color;
+            for ((anchor, outward, label, is_conflicting, is_selected), tangent_offset) in
                 self.constraint_glyphs.iter().zip(offsets)
             {
                 if !anchor.x.is_finite() || !anchor.y.is_finite() {
@@ -1729,6 +1768,12 @@ impl canvas::Program<Message> for SelectionCanvas {
                     (size.height * 0.5).into(),
                 );
                 frame.fill(&pill, bg);
+                if *is_selected {
+                    frame.stroke(
+                        &pill,
+                        canvas::Stroke::default().with_color(selected_ring).with_width(2.0),
+                    );
+                }
                 frame.fill_text(canvas::Text {
                     content: label.clone(),
                     position: Point::new(
@@ -3424,6 +3469,9 @@ mod constraint_glyph_tests {
         assert!(
             (anchor.y - (left.y + right_size.height) - CONSTRAINT_GLYPH_GAP).abs() < 1e-6
         );
+
+        let click = Point::new(left.x + left_size.width * 0.5, left.y + left_size.height * 0.5);
+        assert_eq!(constraint_glyph_hit_test(&glyphs, click), Some(0));
     }
 }
 
