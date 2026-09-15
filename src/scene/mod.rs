@@ -30,6 +30,7 @@ mod boundary;
 mod camera_ops;
 pub(crate) mod centerline;
 pub(crate) mod dimension_assoc;
+pub(crate) mod dimension_assoc_chain;
 pub(crate) mod centermark;
 mod dwg_native_constraints;
 mod entity;
