@@ -255,12 +255,9 @@ pub fn set_on_entity(entity: &mut EntityType, code: i16, value: Option<XDataValu
     }
 
     let legacy = common.extended_data.get_record("ACAD_DSTYLE").is_some()
-        && common
-            .extended_data
-            .get_record("ACAD")
-            .is_some_and(|rec| {
-                !matches!(rec.values.first(), Some(XDataValue::String(n)) if n == "DSTYLE")
-            });
+        && common.extended_data.get_record("ACAD").is_some_and(
+            |rec| !matches!(rec.values.first(), Some(XDataValue::String(n)) if n == "DSTYLE"),
+        );
     let app = if legacy { "ACAD_DSTYLE" } else { "ACAD" };
 
     let values = if kept.is_empty() {
@@ -281,8 +278,7 @@ pub fn set_on_entity(entity: &mut EntityType, code: i16, value: Option<XDataValu
 
     let mut rebuilt = ExtendedData::new();
     for record in common.extended_data.records() {
-        if record.application_name != app
-            && !(!legacy && record.application_name == "ACAD_DSTYLE")
+        if record.application_name != app && !(!legacy && record.application_name == "ACAD_DSTYLE")
         {
             rebuilt.add_record(record.clone());
         }

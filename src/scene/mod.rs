@@ -43,7 +43,7 @@ mod limits;
 mod modify;
 mod mspace;
 pub mod viewport_ref;
-pub mod viewport_dim_seam;
+pub mod viewport_dimension_pick;
 pub mod named_parameters;
 mod page_setup;
 mod paper;

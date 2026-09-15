@@ -1,38 +1,8 @@
-//! Full reference chains for associative dimensions.
-//!
-//! An `AssocDimensionReference` addresses a *feature* — an osnap point on a
-//! piece of geometry — through a chain of handles:
-//!
-//! ```text
-//! dimension -> [viewport] -> [insert ...] -> entity -> feature
-//! ```
-//!
-//! `AssocDimensionReference::xrefs` is that chain, outermost first. AutoCAD
-//! calls the same list `mainObjectIds`; `intersection_objects`
-//! (`intersectObjectIds`) is the second chain an INTERSECTION / APPARENT
-//! INTERSECTION osnap needs.
-//!
-//! The pre-PR3 resolver only ever read `xrefs[0]`, which is correct for a
-//! model-space dimension on top-level geometry and wrong for everything else:
-//! a paper-space dimension measuring through a layout viewport stores the
-//! VIEWPORT as `xrefs[0]`, so the resolver stopped at a viewport entity, found
-//! no curve on it and gave up. Nine of the ten association objects in the
-//! 115448 regression drawing are of that shape.
-//!
-//! This module owns:
-//!  * [`walk_chain`] — turn `xrefs` into a viewport, a block-instance path
-//!    with its accumulated transform, and the innermost entity.
-//!  * [`feature_point`] — evaluate the osnap feature on that entity, in the
-//!    entity's own coordinates, then lift it through the block path into
-//!    model space.
-//!
-//! Mapping model -> paper through the viewport frame is deliberately *not*
-//! done here; the caller owns it, because only the caller knows whether the
-//! association is `trans_space` and which [`ViewportFrame`] is current.
-//!
-//! All arithmetic is `f64`.
-//!
-//! [`ViewportFrame`]: super::viewport_ref::ViewportFrame
+//! Resolve a dimension feature through `[viewport?, insert..., entity]`.
+//! `xrefs` stores the primary chain; `intersection_objects` stores the second
+//! intersection source. Features are evaluated in entity-local coordinates and
+//! transformed through their block instances. The caller projects viewport
+//! references onto the sheet. All arithmetic uses `f64`.
 
 use acadrust::objects::AssocDimensionReference;
 use acadrust::types::{Handle, Matrix4, Transform, Vector3};
@@ -45,12 +15,8 @@ use crate::entities::curve::entity_curve;
 /// `AcDb::OsnapMode`, the value stored in
 /// [`AssocDimensionReference::osnap_type`].
 ///
-/// These are the AutoCAD ObjectARX codes, not our own [`crate::snap::SnapType`]
-/// discriminants. The pre-PR3 writer already emitted `END` for generic points
-/// and `NEAR` for a point taken at a parameter on a circle, so those two keep
-/// meaning exactly what they used to.
-#[allow(dead_code)] // The full code table is kept so a reader can see what a
-                    // stored `osnap_type` means, including the modes we pass through untouched.
+/// These are ObjectARX codes, independent of [`crate::snap::SnapType`].
+#[allow(dead_code)] // Include codes preserved from unsupported imported modes.
 pub(crate) mod osnap {
     pub const NONE: u8 = 0;
     pub const END: u8 = 1;
@@ -72,7 +38,7 @@ pub(crate) mod osnap {
 ///
 /// Modes with no ObjectARX equivalent (grid, object pick) map to
 /// [`osnap::NONE`]; a reference carrying `NONE` resolves by marker/parameter
-/// alone, exactly like the pre-PR3 records.
+/// alone.
 pub(crate) fn osnap_type_for(snap: crate::snap::SnapType) -> u8 {
     use crate::snap::SnapType as S;
     match snap {
@@ -166,7 +132,11 @@ pub(crate) fn walk_chain(
             return Err(ChainError::Invalid);
         };
         // Arrays need an instance index that this reference format does not carry.
-        if insert.row_count > 1 || insert.column_count > 1 || block_path.contains(&handle) {
+        if insert.row_count > 1
+            || insert.column_count > 1
+            || block_path.len() >= 8
+            || block_path.contains(&handle)
+        {
             return Err(ChainError::Invalid);
         }
         let block = document
@@ -182,64 +152,23 @@ pub(crate) fn walk_chain(
     Err(ChainError::Empty)
 }
 
-/// Accumulated entity-local -> model transform for an ordered INSERT path.
-pub(crate) fn block_transform(document: &CadDocument, block_path: &[Handle]) -> Transform {
-    let mut transform = Transform::identity();
-    for handle in block_path {
-        if let Some(EntityType::Insert(insert)) = document.get_entity(*handle) {
-            transform = transform.compose(&crate::scene::render_graph::insert_transform(
-                document, insert,
-            ));
-        }
-    }
-    transform
-}
-
-/// Affine inverse of `transform`.
-///
-/// `acadrust::types::Matrix4` has no inverse of its own, and a block path only
-/// ever produces affine matrices (translate / rotate / scale), so this inverts
-/// the 3x3 linear part by cofactors and back-substitutes the translation. A
-/// degenerate (zero-scale) insert returns `None` rather than exploding.
+/// Invert an affine block transform, rejecting singular or nonfinite matrices.
 pub(crate) fn invert(transform: &Transform) -> Option<Transform> {
     let m = &transform.matrix.m;
-    let a = [
-        [m[0][0], m[0][1], m[0][2]],
-        [m[1][0], m[1][1], m[1][2]],
-        [m[2][0], m[2][1], m[2][2]],
-    ];
-    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-        - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
-    if !det.is_finite() || det.abs() < 1e-18 {
+    let matrix = glam::DMat4::from_cols_array_2d(&std::array::from_fn(|column| {
+        std::array::from_fn(|row| m[row][column])
+    }));
+    if !matrix.is_finite() || matrix.determinant().abs() < 1e-18 {
         return None;
     }
-    let inv_det = 1.0 / det;
-    let mut inverse = [[0.0f64; 3]; 3];
-    for row in 0..3 {
-        for col in 0..3 {
-            // Cofactor of (col, row) — transposed, which is the adjugate.
-            let (r0, r1) = ((col + 1) % 3, (col + 2) % 3);
-            let (c0, c1) = ((row + 1) % 3, (row + 2) % 3);
-            inverse[row][col] = (a[r0][c0] * a[r1][c1] - a[r0][c1] * a[r1][c0]) * inv_det;
-        }
+    let inverse = matrix.inverse();
+    if !inverse.is_finite() {
+        return None;
     }
-    let t = [m[0][3], m[1][3], m[2][3]];
-    let translation = [
-        -(inverse[0][0] * t[0] + inverse[0][1] * t[1] + inverse[0][2] * t[2]),
-        -(inverse[1][0] * t[0] + inverse[1][1] * t[1] + inverse[1][2] * t[2]),
-        -(inverse[2][0] * t[0] + inverse[2][1] * t[1] + inverse[2][2] * t[2]),
-    ];
-    Some(Transform {
-        matrix: Matrix4 {
-            m: [
-                [inverse[0][0], inverse[0][1], inverse[0][2], translation[0]],
-                [inverse[1][0], inverse[1][1], inverse[1][2], translation[1]],
-                [inverse[2][0], inverse[2][1], inverse[2][2], translation[2]],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-        },
-    })
+    let columns = inverse.to_cols_array_2d();
+    Some(Transform::from_matrix(Matrix4 {
+        m: std::array::from_fn(|row| std::array::from_fn(|column| columns[column][row])),
+    }))
 }
 
 // ── Feature evaluation ────────────────────────────────────────────────────
@@ -482,9 +411,7 @@ fn nearest_point(
     hint: Option<Vector3>,
 ) -> Option<Vector3> {
     let planar = entity_curve(entity)?;
-    // Circles and arcs carry an *angle* in `osnap_distance` — that is the
-    // convention the pre-PR3 writer established and imported files share it.
-    // Every other curve carries the kernel's normalised 0..1 parameter.
+    // Circles and arcs store an angle; other curves use a normalized parameter.
     match &planar.curve {
         KernelCurve::Circle(_) | KernelCurve::Arc(_) => match entity {
             EntityType::Circle(circle) => Some(circle.point_at_angle_wcs(reference.osnap_distance)),
@@ -506,14 +433,8 @@ fn nearest_point(
 
 // ── Tangent ───────────────────────────────────────────────────────────────
 
-/// Tangent point on `entity` for the touch line through `context.from`.
-///
-/// Circles and arcs have a closed form. A spline does not, so the stored
-/// parameter (`osnap_distance`) seeds a Newton refinement of the tangency
-/// condition `(C(u) - P) · C'(u) = 0`; with no usable parameter the seed is
-/// the point on the spline nearest the stored osnap point. That is what makes
-/// the 115448 drawing's tangent-to-spline reference survive an edit to the
-/// spline instead of silently freezing at its imported location.
+/// Tangent point for the line through `context.from`.
+/// Spline tangency solves `(C(u) - P) x C'(u) = 0` and validates the residual.
 fn tangent_point(
     entity: &EntityType,
     reference: &AssocDimensionReference,

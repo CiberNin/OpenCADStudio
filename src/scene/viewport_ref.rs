@@ -187,17 +187,8 @@ impl AcceptedSnap {
     }
 }
 
-/// The two independent factors that turn a raw measured distance into the
-/// number a linear/aligned/radial dimension displays.
-///
-/// * `user_lfac` is the drawing/style's DIMLFAC as the user intends it
-///   (always positive here; the sign convention of DXF DIMLFAC is resolved by
-///   [`MeasurementScale::from_dimlfac`]).
-/// * `viewport_compensation` undoes the viewport's paper-per-model scale for
-///   a dimension placed in paper space but measuring model geometry. It is
-///   `1.0` for model-space dimensions and for paper-only dimensions.
-///
-/// Angular dimensions never use either factor.
+/// Length dimensions store raw distances in their owning space. The displayed
+/// value uses `user_lfac * viewport_compensation`; angular dimensions are exempt.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeasurementScale {
     pub user_lfac: f64,
@@ -252,59 +243,13 @@ impl MeasurementScale {
         common.extended_data = data;
     }
 
-    pub const IDENTITY: Self = Self {
-        user_lfac: 1.0,
-        viewport_compensation: 1.0,
-    };
-
-    /// Resolve the DXF DIMLFAC convention:
-    /// * `dimlfac > 0`: applies to every dimension.
-    /// * `dimlfac < 0`: `|dimlfac|` applies only to dimensions created in
-    ///   paper space that measure model geometry through a viewport; model
-    ///   space dimensions use `1.0`.
-    /// * `dimlfac == 0`: treated as `1.0`.
-    ///
-    /// `viewport` supplies the compensation when the dimension measures
-    /// through a viewport; pass `None` for model-space or paper-only
-    /// dimensions.
-    pub fn from_dimlfac(dimlfac: f64, viewport: Option<&ViewportFrame>) -> Self {
-        let through_viewport = viewport.is_some();
-        let user_lfac = if dimlfac == 0.0 {
-            1.0
-        } else if dimlfac > 0.0 {
-            dimlfac
-        } else if through_viewport {
-            -dimlfac
-        } else {
-            1.0
-        };
-        let viewport_compensation = viewport
-            .map(ViewportFrame::paper_to_model_length_factor)
-            .unwrap_or(1.0);
-        Self {
-            user_lfac,
-            viewport_compensation,
-        }
-    }
-
     /// Combined factor applied to a distance measured on the paper sheet.
     pub fn paper_factor(&self) -> f64 {
         self.user_lfac * self.viewport_compensation
     }
 
-    /// Factor applied to a distance already measured in model space (the
-    /// viewport compensation must not be applied again).
-    pub fn model_factor(&self) -> f64 {
-        self.user_lfac
-    }
-
-    /// The DXF DIMLFAC sign convention, resolved without a [`ViewportFrame`].
-    ///
-    /// Rendering an *existing* dimension only knows whether the entity lives
-    /// in a paper-space layout; the viewport compensation is already baked
-    /// into the persisted magnitude. This is the same rule
-    /// as [`MeasurementScale::from_dimlfac`] with `viewport.is_some()`
-    /// replaced by `paper_space`.
+    /// Positive DIMLFAC applies everywhere; negative DIMLFAC applies only on
+    /// paper. Zero means one. Saved viewport compensation is already in DIMLFAC.
     pub fn user_lfac_for_space(dimlfac: f64, paper_space: bool) -> f64 {
         if dimlfac == 0.0 {
             1.0
@@ -317,39 +262,6 @@ impl MeasurementScale {
         }
     }
 }
-
-/// # Where the viewport compensation lives, once
-///
-/// A dimension that sits on a paper layout but measures model geometry seen
-/// through a viewport has **paper** definition points and displays a **model**
-/// number. Exactly one rule governs that, everywhere:
-///
-/// > `Dimension::actual_measurement` (DXF group 42) is always the **raw**
-/// > geometric measurement in the dimension's *own* space — paper, for a
-/// > viewport dimension. The viewport compensation lives **only** in the
-/// > magnitude of the negative DIMLFAC override
-/// > ([`MeasurementScale::viewport_dimlfac_override`]), and is applied
-/// > **once**, at format time, by the linear formatter.
-///
-/// So for a 1:10 viewport and a user DIMLFAC of 1: a 100-unit model line is
-/// 10 paper units, `actual_measurement` is `10`, the override is `-10`,
-/// [`MeasurementScale::user_lfac_for_space`] resolves that to `10` for a
-/// paper-space dimension, and the text reads `100`.
-///
-/// The consequence for association refresh
-/// (`Scene::refresh_associative_dimensions`) is that after re-placing a
-/// viewport dimension's definition points on the sheet it must write the
-/// **paper** measurement back — it must *not* substitute the model distance,
-/// and it must *not* multiply by [`MeasurementScale::model_factor`]. Doing
-/// either makes a refreshed dimension read a different number from an
-/// identical freshly-created one (`user_lfac` too many times). This is the
-/// rule that makes `attach_viewport_dimension_association` + refresh agree
-/// with creation by construction, and it is why `actual_measurement` stays
-/// raw: that is also what the DXF format specifies and what export writes.
-///
-/// Angular dimensions are exempt on both counts — a similarity preserves
-/// angles, so there is no compensation and no override.
-pub mod measurement_rule {}
 
 #[cfg(test)]
 mod tests {
@@ -385,34 +297,10 @@ mod tests {
     }
 
     #[test]
-    fn negative_dimlfac_only_applies_through_viewports() {
-        let f = frame(0.5, 0.0);
-        let through = MeasurementScale::from_dimlfac(-2.0, Some(&f));
-        assert_eq!(through.user_lfac, 2.0);
-        assert!((through.viewport_compensation - 2.0).abs() < 1e-12);
-        assert!((through.paper_factor() - 4.0).abs() < 1e-12);
-        assert!((through.model_factor() - 2.0).abs() < 1e-12);
-
-        let model = MeasurementScale::from_dimlfac(-2.0, None);
-        assert_eq!(model, MeasurementScale::IDENTITY);
-
-        let positive = MeasurementScale::from_dimlfac(3.0, None);
-        assert_eq!(positive.user_lfac, 3.0);
-        assert_eq!(positive.viewport_compensation, 1.0);
-    }
-
-    #[test]
-    fn user_lfac_for_space_matches_from_dimlfac() {
-        let f = frame(0.5, 0.0);
-        for lfac in [-2.0, 0.0, 1.0, 3.5] {
-            assert_eq!(
-                MeasurementScale::user_lfac_for_space(lfac, true),
-                MeasurementScale::from_dimlfac(lfac, Some(&f)).user_lfac
-            );
-            assert_eq!(
-                MeasurementScale::user_lfac_for_space(lfac, false),
-                MeasurementScale::from_dimlfac(lfac, None).user_lfac
-            );
+    fn dimlfac_sign_depends_on_dimension_space() {
+        for (factor, paper, model) in [(-2.0, 2.0, 1.0), (0.0, 1.0, 1.0), (3.5, 3.5, 3.5)] {
+            assert_eq!(MeasurementScale::user_lfac_for_space(factor, true), paper);
+            assert_eq!(MeasurementScale::user_lfac_for_space(factor, false), model);
         }
     }
 }

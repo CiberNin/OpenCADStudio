@@ -83,14 +83,7 @@ impl Scene {
         self.viewport_edit_frame_for(self.active_viewport?, canvas_px)
     }
 
-    /// [`viewport_edit_frame`] for an explicitly-named viewport, rather than
-    /// only the active (MSPACE) one.
-    ///
-    /// Paper-space snapping through viewports (PR1) needs the same camera +
-    /// screen rectangle pair for a viewport the user has NOT entered, so the
-    /// existing snap engine can run against that viewport's model wires on the
-    /// pixels the GPU actually drew them on. `viewport_edit_frame` is now a
-    /// thin wrapper over this.
+    /// Camera and canvas rectangle for snapping through an inactive viewport.
     pub fn viewport_edit_frame_for(
         &self,
         vp_handle: Handle,
@@ -101,15 +94,12 @@ impl Scene {
         Some((cam, full))
     }
 
-    /// Planar paper <-> model mapping for a layout viewport, derived from the
-    /// *same* camera the renderer displays its contents with
-    /// ([`camera_for_viewport`]) so a snap computed through the frame lands on
-    /// the pixels the GPU drew.
-    ///
-    /// Returns `None` for a viewport whose view is not an in-plane orthographic
-    /// top view (oblique / isometric / perspective viewports are unsupported by
-    /// the planar frame — callers fall back to no viewport snapping there).
-    pub fn viewport_frame(&self, vp_handle: Handle) -> Option<crate::scene::viewport_ref::ViewportFrame> {
+    /// Planar paper/model mapping derived from the viewport's display camera.
+    /// Oblique and perspective views have no supported planar mapping.
+    pub fn viewport_frame(
+        &self,
+        vp_handle: Handle,
+    ) -> Option<crate::scene::viewport_ref::ViewportFrame> {
         use crate::scene::viewport_ref::ViewportFrame;
 
         let (paper_center, vp_height, locked) = match self.document.get_entity(vp_handle) {
@@ -120,7 +110,7 @@ impl Scene {
             ),
             _ => return None,
         };
-        if vp_height.abs() < 1e-9 {
+        if !paper_center.is_finite() || !vp_height.is_finite() || vp_height < 1e-9 {
             return None;
         }
         let cam = self.camera_for_viewport(vp_handle)?;
@@ -133,7 +123,7 @@ impl Scene {
         // an oblique 3-D view: unsupported.
         let right = (cam.rotation * glam::Vec3::X).as_dvec3();
         let up = (cam.rotation * glam::Vec3::Y).as_dvec3();
-        if right.z.abs() > 1e-6 || up.z.abs() > 1e-6 {
+        if !right.is_finite() || !up.is_finite() || right.z.abs() > 1e-6 || up.z.abs() > 1e-6 {
             return None;
         }
         let normal = right.cross(up);
@@ -142,7 +132,7 @@ impl Scene {
         }
         // Model units visible across the viewport's height -> paper per model.
         let model_height = cam.ortho_size() as f64 * 2.0;
-        if model_height.abs() < 1e-12 {
+        if !model_height.is_finite() || model_height < 1e-12 {
             return None;
         }
         let scale = vp_height / model_height;
@@ -162,23 +152,28 @@ impl Scene {
 
     /// Visible, supported content viewports at a sheet point, topmost first.
     /// Shared by snapping and explicit dimension object picking.
-    pub fn viewport_frames_at_paper_point(&self, paper: glam::DVec3) -> Vec<crate::scene::viewport_ref::ViewportFrame> {
-        if self.current_layout == "Model" || self.active_viewport.is_some() { return Vec::new(); }
-        self.layout_content_viewports().iter().rev().filter_map(|&handle| {
-            if !self.viewport_displays_content(handle) || !self.viewport_displays_paper_point(handle, paper.truncate()) {
-                return None;
-            }
-            self.viewport_frame(handle)
-        }).collect()
+    pub fn viewport_frames_at_paper_point(
+        &self,
+        paper: glam::DVec3,
+    ) -> Vec<crate::scene::viewport_ref::ViewportFrame> {
+        if self.current_layout == "Model" || self.active_viewport.is_some() {
+            return Vec::new();
+        }
+        self.layout_content_viewports()
+            .iter()
+            .rev()
+            .filter_map(|&handle| {
+                if !self.viewport_displays_content(handle)
+                    || !self.viewport_displays_paper_point(handle, paper.truncate())
+                {
+                    return None;
+                }
+                self.viewport_frame(handle)
+            })
+            .collect()
     }
 
-    /// Does `paper` lie inside the viewport's displayed area?
-    ///
-    /// Always bounded by the viewport's paper rectangle; a viewport with a
-    /// `clip_boundary_handle` (non-rectangular / clipped viewport) additionally
-    /// has to contain the point inside that boundary polygon. Used so a
-    /// paper-space snap never reports a model feature the viewport does not
-    /// actually show.
+    /// Test the viewport rectangle and optional nonrectangular clip boundary.
     pub fn viewport_displays_paper_point(&self, vp_handle: Handle, paper: glam::DVec2) -> bool {
         let Some(EntityType::Viewport(vp)) = self.document.get_entity(vp_handle) else {
             return false;

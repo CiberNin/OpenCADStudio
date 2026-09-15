@@ -161,7 +161,7 @@ impl CadCommand for AlignedDimensionCommand {
         CmdResult::Cancel
     }
 
-    /// PR2: points and object picks may come through a paper-space viewport;
+    /// Points and object picks may come through a paper-space viewport;
     /// the committed dimension then reports the model measurement.
     fn measures_through_viewports(&self) -> bool {
         true
@@ -169,7 +169,8 @@ impl CadCommand for AlignedDimensionCommand {
 
     fn dimension_acquired_points(&self) -> Vec<DVec3> {
         match self.step {
-            Step::First => vec![], Step::Second(p) => vec![p],
+            Step::First => vec![],
+            Step::Second(p) => vec![p],
             Step::DimLine { p1, p2 } => vec![p1, p2],
         }
     }

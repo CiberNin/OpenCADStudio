@@ -149,24 +149,13 @@ fn viewport_dimension_creation_preserves_active_units_and_roundtrips() {
 }
 
 #[test]
-fn viewport_dimension_mixed_and_degenerate_picks_allow_retry() {
+fn viewport_dimension_conflicting_viewports_and_degenerate_picks_allow_retry() {
     let (mut app, line, frame) = fixture();
     let i = app.active_tab;
     let _ = app.dispatch_command("DIMALIGNED");
     point(&mut app, frame, line, DVec3::ZERO);
     point(&mut app, frame, line, DVec3::ZERO);
     assert_eq!(app.accepted_snaps().len(), 1);
-    let _ = app.feed_command(StepInput::Point(DVec3::new(60.0, 50.0, 0.0)));
-    assert_eq!(app.accepted_snaps().len(), 1);
-    assert_eq!(
-        app.tabs[i]
-            .active_cmd
-            .as_ref()
-            .unwrap()
-            .dimension_acquired_points()
-            .len(),
-        1
-    );
     let other = ViewportFrame {
         viewport: Handle::new(0xFFFF),
         ..frame
@@ -318,7 +307,12 @@ fn viewport_dimension_eligibility_is_shared_and_uses_clipping() {
     let top = scene.add_entity(overlay);
     let paper = DVec3::new(55.0, 50.0, 0.0);
     assert_eq!(
-        scene.viewport_frame_at_paper_point(paper).unwrap().viewport,
+        scene
+            .viewport_frames_at_paper_point(paper)
+            .into_iter()
+            .next()
+            .unwrap()
+            .viewport,
         top
     );
     assert_eq!(
@@ -340,7 +334,12 @@ fn viewport_dimension_eligibility_is_shared_and_uses_clipping() {
         vp.clip_boundary_handle = clip;
     }
     assert_eq!(
-        scene.viewport_frame_at_paper_point(paper).unwrap().viewport,
+        scene
+            .viewport_frames_at_paper_point(paper)
+            .into_iter()
+            .next()
+            .unwrap()
+            .viewport,
         first.viewport
     );
     assert_eq!(
@@ -354,7 +353,7 @@ fn viewport_dimension_eligibility_is_shared_and_uses_clipping() {
     if let Some(EntityType::Viewport(vp)) = scene.document.get_entity_mut(first.viewport) {
         vp.status.is_on = false;
     }
-    assert!(scene.viewport_frame_at_paper_point(paper).is_none());
+    assert!(scene.viewport_frames_at_paper_point(paper).is_empty());
     assert!(scene.dimension_pick_through_viewport(paper, 0.2).is_none());
 }
 
@@ -623,8 +622,8 @@ fn viewport_dimension_spline_tangency_is_parallel_and_validated() {
 }
 
 #[test]
-#[ignore = "Set OPENCAD_VIEWPORT_REGRESSION_DXF to the original local regression drawing"]
-fn viewport_dimension_original_drawing_keeps_unchanged_measurements() {
+#[ignore = "Set OPENCAD_VIEWPORT_REGRESSION_DXF to an external regression fixture"]
+fn viewport_dimension_external_fixture_keeps_unchanged_measurements() {
     use crate::scene::ChangeKind;
     let path = std::env::var("OPENCAD_VIEWPORT_REGRESSION_DXF").expect("regression drawing path");
     let doc = acadrust::DxfReader::from_file(std::path::Path::new(&path))
@@ -820,7 +819,9 @@ fn viewport_dimension_nested_block_path_survives_edit_and_copy() {
     let root = scene.add_entity(EntityType::Insert(root));
     scene.set_current_layout("Dimensions".into());
     let transform =
-        crate::scene::dimension_assoc_chain::block_transform(&scene.document, &[root, nested]);
+        crate::scene::dimension_assoc_chain::walk_chain(&scene.document, &[root, nested, leaf])
+            .unwrap()
+            .transform;
     let model = |x| {
         let v = transform.apply(Vector3::new(x, 0.0, 0.0));
         DVec3::new(v.x, v.y, v.z)
@@ -1094,4 +1095,250 @@ fn viewport_dimension_quadrant_keeps_its_feature_after_translation() {
         .scene
         .bump_entities(&[(source, ChangeKind::Modified)]);
     assert!((displayed(&app.tabs[i].scene.document) - 400.0).abs() < 1e-5);
+}
+
+fn start_centerline_dimension(
+    command: &str,
+    paper_first: bool,
+    paper_kind: SnapType,
+    factor: f64,
+) -> (OpenCADStudio, Handle, Handle, ViewportFrame) {
+    let (mut app, model, frame) = fixture();
+    let i = app.active_tab;
+    let paper = app.tabs[i]
+        .scene
+        .add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(55.0, 40.0, 0.0),
+            Vector3::new(55.0, 60.0, 0.0),
+        )));
+    let mut style = acadrust::tables::DimStyle::new("CenterlineUnits");
+    style.dimlfac = factor;
+    app.tabs[i].scene.document.dim_styles.add(style).unwrap();
+    app.tabs[i].scene.document.header.current_dimstyle_name = "CenterlineUnits".into();
+    let _ = app.dispatch_command(command);
+    let mut paper_hit = hit(frame, paper, DVec3::new(55.0, 50.0, 0.0));
+    paper_hit.world = DVec3::new(55.0, 50.0, 0.0);
+    paper_hit.model_point = None;
+    paper_hit.viewport = None;
+    paper_hit.snap_type = paper_kind;
+    let mut picks = [
+        (paper_hit, None),
+        (hit(frame, model, DVec3::X * 100.0), Some(frame)),
+    ];
+    if !paper_first {
+        picks.reverse();
+    }
+    for (snap, context) in picks {
+        assert!(app.record_accepted_snap(i, Some(snap), context, snap.world));
+        let result = app.tabs[i]
+            .active_cmd
+            .as_mut()
+            .unwrap()
+            .on_point(snap.world);
+        app.sync_dimension_snaps(i);
+        let _ = app.apply_cmd_result(result);
+    }
+    (app, model, paper, frame)
+}
+
+#[test]
+fn viewport_dimension_paper_centerline_uses_viewport_units_in_either_order() {
+    for command in ["DIMLINEAR", "DIMALIGNED"] {
+        for paper_first in [true, false] {
+            let (mut app, _, paper, _) =
+                start_centerline_dimension(command, paper_first, SnapType::Midpoint, 25.4);
+            let paper_snap = app
+                .accepted_snaps()
+                .iter()
+                .find(|s| s.viewport.is_none())
+                .unwrap();
+            assert_eq!(paper_snap.source.as_ref().unwrap().source.handle, paper);
+            assert_eq!(paper_snap.paper_point, paper_snap.model_point);
+            let _ = app.feed_command(StepInput::Point(DVec3::new(60.0, 80.0, 0.0)));
+            let doc = &app.tabs[app.active_tab].scene.document;
+            assert!(
+                (displayed(doc) - 1270.0).abs() < 1e-3,
+                "{command}: {}",
+                displayed(doc)
+            );
+            app.undo_steps(1);
+            app.redo_steps(1);
+            assert!((displayed(&app.tabs[app.active_tab].scene.document) - 1270.0).abs() < 1e-3);
+        }
+    }
+}
+
+#[test]
+fn viewport_dimension_paper_centerline_tracks_each_owning_space() {
+    use crate::scene::{ChangeKind, ReferenceStatus};
+    for (paper_first, kind) in [(true, SnapType::Midpoint), (false, SnapType::Perpendicular)] {
+        let (mut app, model, paper, frame) =
+            start_centerline_dimension("DIMALIGNED", paper_first, kind, 1.0);
+        let i = app.active_tab;
+        let _ = app.feed_command(StepInput::Point(DVec3::new(60.0, 80.0, 0.0)));
+        let dim = dimension(&app.tabs[i].scene.document).base().common.handle;
+        assert!((displayed(&app.tabs[i].scene.document) - 50.0).abs() < 1e-4);
+        let assoc = app.tabs[i].scene.dimension_association(dim).unwrap();
+        assert!(assoc.trans_space);
+        assert!(assoc
+            .references
+            .iter()
+            .flatten()
+            .any(|r| r.xrefs == vec![paper]));
+        assert!(assoc
+            .references
+            .iter()
+            .flatten()
+            .any(|r| r.xrefs == vec![frame.viewport, model]));
+        assert!(app.tabs[i]
+            .scene
+            .dimension_association_status(dim)
+            .iter()
+            .all(|(_, s)| *s == ReferenceStatus::Resolved));
+        let pending = app.begin_undo(i, "Move paper centerline", 1, true).unwrap();
+        let before = app.tabs[i].scene.document.get_entity_arc(paper);
+        app.tabs[i].scene.record_undo_before(paper, before);
+        let EntityType::Line(line) = app.tabs[i].scene.document.get_entity_mut(paper).unwrap()
+        else {
+            panic!()
+        };
+        line.start.x = 56.0;
+        line.end.x = 56.0;
+        app.tabs[i]
+            .scene
+            .bump_entities(&[(paper, ChangeKind::Modified)]);
+        app.commit_undo_delta(i, pending);
+        assert!((displayed(&app.tabs[i].scene.document) - 40.0).abs() < 1e-4);
+        app.undo_steps(1);
+        assert!((displayed(&app.tabs[i].scene.document) - 50.0).abs() < 1e-4);
+        app.redo_steps(1);
+        let EntityType::Viewport(vp) = app.tabs[i]
+            .scene
+            .document
+            .get_entity_mut(frame.viewport)
+            .unwrap()
+        else {
+            panic!()
+        };
+        vp.view_height = 500.0;
+        vp.custom_scale = 0.2;
+        app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+        // Model endpoint now appears at paper x=70; paper centerline stays x=56.
+        assert!((displayed(&app.tabs[i].scene.document) - 70.0).abs() < 1e-4);
+        let EntityType::Viewport(vp) = app.tabs[i]
+            .scene
+            .document
+            .get_entity_mut(frame.viewport)
+            .unwrap()
+        else {
+            panic!()
+        };
+        vp.view_target.x = 20.0;
+        app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+        assert!((displayed(&app.tabs[i].scene.document) - 50.0).abs() < 1e-4);
+        let EntityType::Line(line) = app.tabs[i].scene.document.get_entity_mut(model).unwrap()
+        else {
+            panic!()
+        };
+        line.end.x = 160.0;
+        app.tabs[i]
+            .scene
+            .bump_entities(&[(model, ChangeKind::Modified)]);
+        assert!((displayed(&app.tabs[i].scene.document) - 110.0).abs() < 1e-4);
+        for ext in ["dxf", "dwg"] {
+            let doc = &app.tabs[i].scene.document;
+            let bytes = crate::io::save_to_bytes(doc, ext, doc.version).unwrap();
+            let mut scene = Scene::new();
+            scene.document = crate::io::load_bytes(&format!("centerline.{ext}"), bytes).unwrap();
+            scene.notify_viewport_changed(frame.viewport);
+            assert!((displayed(&scene.document) - 110.0).abs() < 1e-4, "{ext}");
+            assert!(scene
+                .dimension_association_status(dim)
+                .iter()
+                .all(|(_, s)| *s == ReferenceStatus::Resolved));
+        }
+        let before = app.tabs[i].scene.document.get_entity(dim).unwrap().clone();
+        let model_owner = app.tabs[i]
+            .scene
+            .document
+            .get_entity(model)
+            .unwrap()
+            .common()
+            .owner_handle;
+        app.tabs[i]
+            .scene
+            .document
+            .get_entity_mut(paper)
+            .unwrap()
+            .common_mut()
+            .owner_handle = model_owner;
+        app.tabs[i].scene.notify_viewport_changed(frame.viewport);
+        assert_eq!(app.tabs[i].scene.document.get_entity(dim).unwrap(), &before);
+        assert!(app.tabs[i]
+            .scene
+            .dimension_association_status(dim)
+            .iter()
+            .any(|(_, s)| *s == ReferenceStatus::Unresolved));
+    }
+}
+
+#[test]
+fn viewport_dimension_invalid_paths_leave_no_partial_association() {
+    use crate::scene::viewport_ref::SnapSourceRef;
+    use acadrust::entities::{DimensionAligned, Insert};
+    use acadrust::tables::BlockRecord;
+
+    let (mut app, model, frame) = fixture();
+    let scene = &mut app.tabs[app.active_tab].scene;
+    let mut block = BlockRecord::new("Collapsed");
+    block.handle = scene.document.allocate_handle();
+    let owner = block.handle;
+    scene.document.block_records.add(block).unwrap();
+    let mut leaf = Line::from_points(Vector3::ZERO, Vector3::UNIT_X);
+    leaf.common.owner_handle = owner;
+    let leaf = scene.document.add_entity(EntityType::Line(leaf)).unwrap();
+    scene.set_current_layout("Model".into());
+    let mut insert = Insert::new("Collapsed", Vector3::ZERO);
+    insert.set_x_scale(0.0);
+    insert.set_y_scale(0.0);
+    let root = scene.add_entity(EntityType::Insert(insert));
+    scene.set_current_layout("Dimensions".into());
+    let paper = scene.add_entity(EntityType::Line(Line::from_points(
+        Vector3::new(55.0, 50.0, 0.0),
+        Vector3::new(55.0, 60.0, 0.0),
+    )));
+    for (source, path) in [(model, vec![Handle::new(u64::MAX)]), (leaf, vec![root])] {
+        let dim = scene.add_entity(EntityType::Dimension(Dimension::Aligned(
+            DimensionAligned::new(Vector3::new(50.0, 50.0, 0.0), Vector3::new(55.0, 50.0, 0.0)),
+        )));
+        let invalid = AcceptedSnap {
+            paper_point: DVec3::new(50.0, 50.0, 0.0),
+            model_point: DVec3::ZERO,
+            viewport: Some(frame.viewport),
+            frame: Some(frame),
+            source: Some(SnapSourceRef {
+                source: DimensionAssociationSource::inferred(source),
+                block_path: path,
+                snap_type: SnapType::Endpoint,
+                intersection: None,
+            }),
+        };
+        let mut valid = AcceptedSnap::free(DVec3::new(55.0, 50.0, 0.0));
+        valid.source = Some(SnapSourceRef {
+            source: DimensionAssociationSource::inferred(paper),
+            block_path: Vec::new(),
+            snap_type: SnapType::Endpoint,
+            intersection: None,
+        });
+        scene.attach_viewport_dimension_association(dim, &[Some(invalid), Some(valid)]);
+        let association = scene.dimension_association(dim).unwrap();
+        assert!(!association.trans_space);
+        assert!(association.references[0].is_empty());
+        assert_eq!(association.references[1][0].xrefs, vec![paper]);
+        assert_eq!(scene.dimension_association_sources(dim), vec![paper]);
+        assert_eq!(
+            scene.dimension_association_status(dim),
+            vec![(1, crate::scene::ReferenceStatus::Resolved)]
+        );
+    }
 }

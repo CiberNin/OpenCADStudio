@@ -1638,11 +1638,12 @@ pub(crate) fn dimension_in_paper_space(dimension: &Dimension, document: &CadDocu
     if !owner.is_valid() {
         return false;
     }
-    document.objects.values().any(|object| matches!(object,
-        acadrust::objects::ObjectType::Layout(layout)
-            if layout.name != "Model" && layout.block_record == owner
-    ))
-
+    document.objects.values().any(|object| {
+        matches!(object,
+            acadrust::objects::ObjectType::Layout(layout)
+                if layout.name != "Model" && layout.block_record == owner
+        )
+    })
 }
 
 /// The value a dimension's text reports for its measurement: the raw
@@ -1654,7 +1655,10 @@ pub(crate) fn dimension_in_paper_space(dimension: &Dimension, document: &CadDocu
 /// use when they want the number the user reads.
 pub(crate) fn displayed_measurement(dimension: &Dimension, style: Option<&DimStyle>) -> f64 {
     let raw = dimension.measurement();
-    if matches!(dimension, Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)) {
+    if matches!(
+        dimension,
+        Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)
+    ) {
         return raw;
     }
     let lfac = style.map(|s| s.dimlfac).unwrap_or(1.0);

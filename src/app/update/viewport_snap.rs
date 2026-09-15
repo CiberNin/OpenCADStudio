@@ -1,24 +1,7 @@
-//! Paper-space snapping THROUGH layout viewports (PR1).
-//!
-//! In a paper layout with no active viewport, `Scene::hit_test_wires` returns
-//! only the paper sheet's own entities — viewport contents are deliberately not
-//! interactive, and that must stay true for *selection*. Snapping, however,
-//! should see the model geometry a viewport displays, so a paper-space LINE /
-//! DIMENSION can pick a real model endpoint and land on the paper pixel where
-//! it is drawn.
-//!
-//! This module adds that as a SEPARATE query. It never changes
-//! `hit_test_wires`. For each displayed content viewport under the cursor
-//! (top-most first) it runs the EXISTING snap engine against that viewport's
-//! resident model wires, using the viewport's own camera and screen rectangle
-//! (`Scene::viewport_edit_frame_for` — the same adapter MSPACE editing uses),
-//! then maps the accepted model point back onto the sheet with
-//! [`ViewportFrame::model_to_paper`].
-//!
-//! Performance: no projected geometry is rebuilt per pointer event. The wire
-//! set comes from `model_wires_for_viewport_arc`, which is the renderer's own
-//! resident, camera-independent `Arc`, and the cursor-local broad phase reuses
-//! the shared interaction index built over it.
+//! Snap to displayed model geometry while a paper-space command is active.
+//! Viewport queries use the renderer's resident wires and interaction index,
+//! then project the accepted model point onto the sheet. Ordinary selection
+//! continues to use paper-space hit testing.
 
 use iced::Point;
 
@@ -34,37 +17,14 @@ const MAX_ACCEPTED_SNAPS: usize = 64;
 
 impl OpenCADStudio {
     /// Snaps accepted by the active command's point steps, oldest first, in
-    /// step order. Consumed by the dimension commands in PR2/PR3.
-    #[allow(dead_code)]
+    /// step order.
     pub(crate) fn accepted_snaps(&self) -> &[AcceptedSnap] {
         &self.accepted_snaps
     }
 
-    /// The most recently accepted snap, if any.
-    #[allow(dead_code)]
-    pub(crate) fn last_accepted_snap(&self) -> Option<&AcceptedSnap> {
-        self.accepted_snaps.last()
-    }
-
-    /// `Scene::infer_dimension_sources`, suppressed when the dimension being
-    /// created measures through a layout viewport.
-    ///
-    /// Inference works by looking for geometry near the dimension's own
-    /// definition points, in whatever space it is handed. A paper-space
-    /// dimension measured through a viewport has PAPER definition points that
-    /// happen to sit over projected model geometry, so unguarded inference
-    /// would either associate it with unrelated paper-sheet geometry at those
-    /// coordinates, or match model geometry using paper coordinates. Neither
-    /// is correct, and a wrong association is worse than none. Returning an
-    /// empty source list makes `attach_dimension_association` a no-op.
-    ///
-    /// The classification is
-    /// [`OpenCADStudio::dimension_measure_space`] — the *same* one that
-    /// decides whether to compensate the measurement, so the two can never
-    /// disagree. In particular it ignores the trailing dimension-line
-    /// placement click, which routinely lands inside a viewport rectangle for
-    /// an ordinary paper-space dimension and must not suppress its
-    /// association.
+    /// Infer direct sources only when the measurement uses the active space.
+    /// Projected model points must retain their acquired source identities;
+    /// proximity on the sheet could bind them to unrelated paper geometry.
     pub(crate) fn infer_dimension_sources_guarded(
         &self,
         tab: usize,
@@ -76,14 +36,8 @@ impl OpenCADStudio {
         self.tabs[tab].scene.infer_dimension_sources(dimension)
     }
 
-    /// The single gate on creating a paper-space association for the
-    /// dimension the active command is committing.
-    ///
-    /// `false` exactly when the dimension measures through (or partly through)
-    /// a layout viewport, whatever supplied its sources — inference,
-    /// an explicit object pick, or an explicit source list. Everything in the
-    /// commit path that used to decide this for itself now asks here, so the
-    /// measurement rule and the association rule cannot drift apart.
+    /// Whether the dimension can use ordinary active-space associations.
+    /// Placement clicks are excluded by the measurement classification.
     pub(crate) fn dimension_association_allowed(&self, tab: usize) -> bool {
         matches!(
             self.dimension_measure_space(tab),
@@ -177,7 +131,7 @@ impl OpenCADStudio {
             ) else {
                 return false;
             };
-            let distance = crate::scene::viewport_dim_seam::feature_pick_distance(
+            let distance = crate::scene::viewport_dimension_pick::feature_pick_distance(
                 &entity,
                 accepted.model_point,
                 Some(source.snap_type),
@@ -207,33 +161,15 @@ impl OpenCADStudio {
         }
     }
 
-    /// Append an already-built accepted snap, keeping the retention cap.
-    ///
-    /// Used by paths that are not point steps (the dimension object pick
-    /// resolved through a viewport) and therefore never reach the click
-    /// handler.
+    /// Retain a bounded history for point and object picks.
     pub(crate) fn push_accepted_snap(&mut self, accepted: AcceptedSnap) {
         if self.accepted_snaps.len() >= MAX_ACCEPTED_SNAPS {
             self.accepted_snaps.remove(0);
         }
         self.accepted_snaps.push(accepted);
     }
-    /// Snap the paper-space cursor to model geometry seen through a layout
-    /// viewport.
-    ///
-    /// * `i` — tab index.
-    /// * `cursor_canvas` — cursor in canvas pixels.
-    /// * `canvas` — canvas size in pixels.
-    /// * `cursor_paper` — the paper-space point under the cursor.
-    ///
-    /// Returns the hit expressed in PAPER coordinates (`world` projected onto
-    /// the sheet, `screen` in canvas pixels) together with the frame it came
-    /// through, so the caller can merge it with the ordinary paper-sheet snap
-    /// and later recover the model point.
-    ///
-    /// `None` in the Model layout, while a viewport is active (MSPACE already
-    /// snaps in model space), when snapping is off, or when the cursor is not
-    /// over a displayed viewport.
+    /// Query visible viewport geometry with a canvas-pixel cursor and sheet point.
+    /// Returns paper coordinates and canvas pixels, plus the source viewport frame.
     pub(in crate::app) fn paper_viewport_snap(
         &mut self,
         i: usize,
@@ -316,10 +252,7 @@ impl OpenCADStudio {
             let Some(hit) = hit.filter(|h| h.snap_type != SnapType::Grid) else {
                 continue;
             };
-            // The wire set is the whole model, not a clipped copy, so the only
-            // way a feature outside the visible part could be offered is via
-            // the aperture reaching past the clip. Reject those: a snap must be
-            // a real feature the viewport actually displays.
+            // The snap aperture can reach outside the visible clip boundary.
             let paper = frame.model_to_paper(hit.world);
             if !self.tabs[i]
                 .scene
