@@ -9,7 +9,7 @@
 //! Unlike the alias editor, each row also shows a live-computed resolved
 //! value or error (`preview`, below) — built fresh from the whole buffer on
 //! every render, not cached: the same "cheap enough to recompute from
-//! scratch" philosophy `ParameterTable`/`sketch_solve.rs` already use
+//! scratch" philosophy `ParameterTable`/`parametric_solve.rs` already use
 //! throughout this project, and it means the preview reflects circular/
 //! undefined-reference problems across rows immediately, before Apply.
 
@@ -393,7 +393,9 @@ mod tests {
 
     #[test]
     fn usage_lines_names_the_constraint_kind_and_its_entities() {
-        use crate::scene::sketch_constraints::{ConstraintKind, SketchRef, SketchScope};
+        use crate::scene::parametric_constraints::{
+            ConstraintKind, ParametricRef, ParametricScope,
+        };
         let mut scene = Scene::new();
         let line = scene.add_entity(acadrust::EntityType::Line(
             acadrust::entities::Line::from_points(
@@ -402,10 +404,10 @@ mod tests {
             ),
         ));
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Distance,
-                vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+                vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
                 Some(crate::scene::named_parameters::DrivingValue::Named(
                     "gap".to_string(),
                 )),

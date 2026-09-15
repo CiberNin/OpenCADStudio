@@ -1,8 +1,7 @@
-//! Persistent sketch-constraint data types and scope management.
+//! Runtime parametric-constraint data and scope management.
 
 use super::named_parameters::DrivingValue;
 use acadrust::types::{Handle, Vector3};
-use serde::{Deserialize, Serialize};
 
 /// One endpoint a constraint attaches to: an entity plus which sub-element
 /// of it.
@@ -14,11 +13,11 @@ use serde::{Deserialize, Serialize};
 /// [`dimension_assoc::source_points`](super::dimension_assoc::source_points)'s
 /// ordered per-entity-type point list when non-negative (0/1 = a line's
 /// start/end, ...), or names a special case when negative (-3 = a
-/// circle/arc's center; -2 = a point at a stored parameter, not currently
-/// used by constraint endpoints but reserved for consistency with the
-/// dimension scheme).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SketchRef {
+/// circle/arc's center; -2 = a bounded curve's midpoint). Polyline segment
+/// and segment-midpoint references use private negative ranges so they stay
+/// distinct from vertex markers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ParametricRef {
     pub entity: Handle,
     /// `None` addresses the entity as a whole — what a Radius, Length, or
     /// whole-curve constraint (Parallel, Perpendicular, Equal, Horizontal,
@@ -28,8 +27,9 @@ pub struct SketchRef {
 }
 
 const POLYLINE_SEGMENT_MARKER_BASE: i32 = -1_000_000;
+const POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE: i32 = -2_000_000;
 
-impl SketchRef {
+impl ParametricRef {
     pub fn whole(entity: Handle) -> Self {
         Self {
             entity,
@@ -64,8 +64,22 @@ impl SketchRef {
 
     pub fn segment_index(self) -> Option<usize> {
         let marker = self.marker?;
-        (marker <= POLYLINE_SEGMENT_MARKER_BASE)
+        (marker <= POLYLINE_SEGMENT_MARKER_BASE && marker > POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE)
             .then(|| (POLYLINE_SEGMENT_MARKER_BASE - marker) as usize)
+    }
+
+    /// Select the midpoint of one straight polyline segment.
+    pub fn segment_midpoint(entity: Handle, index: usize) -> Self {
+        Self {
+            entity,
+            marker: Some(POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - index as i32),
+        }
+    }
+
+    pub fn segment_midpoint_index(self) -> Option<usize> {
+        let marker = self.marker?;
+        (marker <= POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE)
+            .then(|| (POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - marker) as usize)
     }
 }
 
@@ -76,7 +90,7 @@ impl SketchRef {
 /// tools are (`crate::modules::parametric::tools`), plus the
 /// endpoint-picking kinds (`Coincident`, `Radius`, `Tangent`) that one-shot
 /// group never needed.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConstraintKind {
     Coincident,
     Horizontal,
@@ -91,12 +105,14 @@ pub enum ConstraintKind {
     /// selected entity.
     Distance,
     Angle,
+    /// Angle defined by two rays sharing the middle point.
+    Angle3Point,
     Radius,
     Tangent,
-    /// An open spline endpoint remains curvature-continuous with another curve endpoint.
+    /// An open spline endpoint remains curvature-continuous with another bounded curve endpoint.
     Smooth,
     /// Two circles/arcs share a center — `refs`: `[center(a), center(b)]`.
-    /// Solves identically to `Coincident` (`sketch_solve.rs` broadens that
+    /// Solves identically to `Coincident` (`parametric_solve.rs` broadens that
     /// match arm rather than duplicating it) — only the DWG-native class
     /// name (`ACCONCENTRICCONSTRAINT` vs `ACPOINTCOINCIDENCECONSTRAINT`)
     /// and the UI entry point differ.
@@ -111,7 +127,7 @@ pub enum ConstraintKind {
     Midpoint,
     /// Locks a whole entity at its current position — `refs`: `[whole(entity)]`.
     /// No `driving_param`: the target is the entity's own live geometry at
-    /// solve time, not a typed value (see `sketch_solve.rs`'s `Fixed` arm).
+    /// solve time, not a typed value (see `parametric_solve.rs`'s `Fixed` arm).
     Fixed,
     /// A point lies anywhere along a line's or circle's curve (not
     /// restricted to an endpoint/center) — `refs`: `[point, whole(entity)]`.
@@ -139,6 +155,9 @@ pub enum ConstraintKind {
     /// `DirectionType` set to a fixed `(1,0,0)`/`(0,1,0)` direction.
     DistanceX,
     DistanceY,
+    /// Signed point-to-point distance along an arbitrary fixed direction,
+    /// or along a direction derived from a third line reference.
+    DistanceDirected,
     /// A line perpendicular to a circle/arc's tangent at their point of
     /// contact — `refs`: `[whole(a), whole(b)]`, either order. For the
     /// Line/Circle-only entity model this is equivalent to "the line
@@ -148,43 +167,68 @@ pub enum ConstraintKind {
     /// `Perpendicular` (line-to-line only). Line-Line has no meaning here
     /// (that's plain `Perpendicular`) and isn't buildable.
     Normal,
-    /// An arc's arc length (`radius * sweep angle`) — `refs`:
-    /// `[whole(arc)]`. Solves against the arc's own `start_angle`/
-    /// `end_angle`, registered separately from its center/radius
-    /// (`sketch_solve.rs`'s `arc_angles` cache) — no native DWG
-    /// representation exists for this (neither `AcExplicitConstr.h` nor
-    /// `acadrust`'s `AssocConstraintNodeData` has an ArcLength-shaped
-    /// class/variant), so it persists in this app's own XRecord format
-    /// only, the same "DWG can't carry everything" gap the dependency-chain
-    /// DXF-omission precedent already documents.
-    ArcLength,
+    /// A standard rigid geometry container. Its referenced points keep their
+    /// original relative distances while the whole set may translate or rotate.
+    RigidSet,
 }
 
 pub type ConstraintId = u32;
 
-/// One persisted constraint record: a friendly [`ConstraintKind`], the
+pub(crate) mod distance_direction_type {
+    pub const UNDIRECTED: u8 = 0;
+    pub const FIXED: u8 = 1;
+    pub const PARALLEL_TO_LINE: u8 = 2;
+    pub const PERPENDICULAR_TO_LINE: u8 = 3;
+}
+
+pub(crate) mod angle_sector {
+    pub const PARALLEL_COUNTERCLOCKWISE: u8 = 0;
+    pub const ANTIPARALLEL_CLOCKWISE: u8 = 1;
+    pub const PARALLEL_CLOCKWISE: u8 = 2;
+    pub const ANTIPARALLEL_COUNTERCLOCKWISE: u8 = 3;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NativeConstraintOrigin {
+    pub(crate) group: Handle,
+    pub(crate) node: i32,
+}
+
+/// One runtime constraint: a friendly [`ConstraintKind`], the
 /// entities/points it relates, and — for a dimensional kind — the value
 /// driving it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SketchConstraint {
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParametricConstraint {
     pub id: ConstraintId,
     pub kind: ConstraintKind,
-    pub refs: Vec<SketchRef>,
+    pub refs: Vec<ParametricRef>,
     /// The target for a dimensional constraint (a `Distance`'s length, an
     /// `Angle`'s degrees, a `Radius`'s radius) — a literal number or a
     /// named-parameter reference resolved through `Scene::named_parameters` at solve time by
-    /// `sketch_solve::build_constraint`). `None` for every purely-geometric
+    /// `parametric_solve::build_constraint`). `None` for every purely-geometric
     /// kind (Coincident, Horizontal, Vertical, Parallel, Perpendicular,
     /// Equal, Tangent).
     pub driving_param: Option<DrivingValue>,
     /// Lets a user suppress a constraint without losing it — a re-solve
     /// skips a disabled constraint entirely.
     pub enabled: bool,
+    /// Standard graph node retained in place because its group also contains
+    /// graph features that are not safe to rebuild independently.
+    pub(crate) native_origin: Option<NativeConstraintOrigin>,
+    /// Original point positions for a standard rigid set. This is rebuilt
+    /// from the associative graph on open and never stored separately.
+    pub(crate) rigid_points: Vec<(ParametricRef, Vector3)>,
+    /// Standard distance direction mode and vector. A third entry in `refs`
+    /// identifies the direction line for the line-relative modes.
+    pub(crate) distance_direction_type: u8,
+    pub(crate) distance_direction: Option<Vector3>,
+    /// Which of the four directed sectors an angular constraint measures.
+    pub(crate) angle_sector: u8,
 }
 
 /// A constraint scope: model space or one block definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SketchScope {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ParametricScope {
     ModelSpace,
     /// A block definition's `BlockRecord` handle — matches
     /// `BlockEditSession::br_handle`
@@ -192,49 +236,55 @@ pub enum SketchScope {
     Block(Handle),
 }
 
-impl SketchScope {
+impl ParametricScope {
     /// The owner handle under which this scope is persisted.
     pub fn owner_handle(&self, document: &acadrust::CadDocument) -> Handle {
         match self {
-            SketchScope::ModelSpace => document.header.model_space_block_handle,
-            SketchScope::Block(handle) => *handle,
+            ParametricScope::ModelSpace => document.header.model_space_block_handle,
+            ParametricScope::Block(handle) => *handle,
         }
     }
 }
 
-/// Every persisted constraint for one [`SketchScope`]. Solver state is rebuilt
+/// Every constraint decoded from one standard graph scope. Solver state is rebuilt
 /// on demand and is not stored here.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SketchConstraintSet {
-    pub scope: SketchScope,
-    pub constraints: Vec<SketchConstraint>,
+#[derive(Debug, Clone)]
+pub struct ParametricConstraintSet {
+    pub scope: ParametricScope,
+    pub constraints: Vec<ParametricConstraint>,
     next_id: ConstraintId,
+    /// Parameters owned by this standard block scope. Model-space and
+    /// command-created constraints continue to use the drawing parameter
+    /// table; block definitions need their own namespace because identical
+    /// parameter names may legitimately occur in different blocks.
+    pub(crate) local_parameters: super::named_parameters::ParameterTable,
+    pub(crate) retained_standard_groups: Vec<Handle>,
     /// Cached total remaining degrees of freedom, summed across every
     /// independent solve partition in this scope — updated by
-    /// `sketch_solve::solve_scope` each time this set is resolved. `None`
+    /// `parametric_solve::solve_scope` each time this set is resolved. `None`
     /// until the first resolve (e.g. right after loading from disk, before
     /// any edit has touched this scope yet). The status badge reads this
     /// rather than recomputing it every frame. Not persisted:
     /// it's a derived cache, not real constraint state.
-    #[serde(skip)]
     pub dof: Option<usize>,
     /// Cached redundant/conflicting constraints found by the last resolve.
     /// Also a derived cache, not
     /// persisted; a `ConflictResolverPanel` reads this rather than calling
     /// `cadkernel_constraints::diagnosis::classify_redundant` itself.
-    #[serde(skip)]
     pub conflicts: Vec<(
         ConstraintId,
         cadkernel_constraints::diagnosis::RedundancyKind,
     )>,
 }
 
-impl SketchConstraintSet {
-    pub fn new(scope: SketchScope) -> Self {
+impl ParametricConstraintSet {
+    pub fn new(scope: ParametricScope) -> Self {
         Self {
             scope,
             constraints: Vec::new(),
             next_id: 0,
+            local_parameters: super::named_parameters::ParameterTable::new(),
+            retained_standard_groups: Vec::new(),
             dof: None,
             conflicts: Vec::new(),
         }
@@ -244,17 +294,22 @@ impl SketchConstraintSet {
     pub fn add(
         &mut self,
         kind: ConstraintKind,
-        refs: Vec<SketchRef>,
+        refs: Vec<ParametricRef>,
         driving_param: Option<DrivingValue>,
     ) -> ConstraintId {
         let id = self.next_id;
         self.next_id += 1;
-        self.constraints.push(SketchConstraint {
+        self.constraints.push(ParametricConstraint {
             id,
             kind,
             refs,
             driving_param,
             enabled: true,
+            native_origin: None,
+            rigid_points: Vec::new(),
+            distance_direction_type: 0,
+            distance_direction: None,
+            angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
         });
         id
     }
@@ -266,12 +321,15 @@ impl SketchConstraintSet {
         self.constraints.len() != before
     }
 
-    pub fn get(&self, id: ConstraintId) -> Option<&SketchConstraint> {
+    pub fn get(&self, id: ConstraintId) -> Option<&ParametricConstraint> {
         self.constraints.iter().find(|c| c.id == id)
     }
 
     /// Every enabled constraint referencing `entity`.
-    pub fn constraints_touching(&self, entity: Handle) -> impl Iterator<Item = &SketchConstraint> {
+    pub fn constraints_touching(
+        &self,
+        entity: Handle,
+    ) -> impl Iterator<Item = &ParametricConstraint> {
         self.constraints
             .iter()
             .filter(move |c| c.enabled && c.refs.iter().any(|r| r.entity == entity))
@@ -289,14 +347,12 @@ impl SketchConstraintSet {
     }
 }
 
-/// Resolves a [`SketchRef`] to its current world-space point, for building
+/// Resolves a [`ParametricRef`] to its current world-space point, for building
 /// an `cadkernel_constraints` `ParamStore` from live document geometry — the constraint
 /// endpoint's equivalent of `dimension_assoc::resolve_reference`, restricted
 /// to the marker conventions constraint endpoints actually use (whole-entity
-/// `None`, an ordinary `source_points()` index, or the `-3` center case).
-/// Returns `None` for a dangling reference (handle doesn't resolve) or a
-/// marker this scheme doesn't (yet) support (e.g. `-2`, or an out-of-range
-/// index).
+/// `None`, an ordinary `source_points()` index, the `-3` center case, or a
+/// bounded curve/segment midpoint).
 ///
 /// Solver-side registration reads raw entity fields directly. This helper is
 /// for UI-side consumers that need the current world-space position.
@@ -308,6 +364,36 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
             _ => None,
         };
     }
+    if marker == -2 {
+        let curve = crate::entities::curve::entity_curve(entity)?;
+        if curve.is_closed() {
+            return None;
+        }
+        let point = curve.point_at(0.5);
+        return Some(Vector3::new(point[0], point[1], point[2]));
+    }
+    let segment = ParametricRef {
+        entity: Handle::NULL,
+        marker: Some(marker),
+    }
+    .segment_midpoint_index();
+    if let Some(segment) = segment {
+        let points = super::dimension_assoc::source_points(entity);
+        let closed = match entity {
+            acadrust::EntityType::LwPolyline(polyline) => polyline.is_closed,
+            acadrust::EntityType::Polyline2D(polyline) => polyline.is_closed(),
+            _ => return None,
+        };
+        let a = *points.get(segment)?;
+        let b = if segment + 1 < points.len() {
+            points[segment + 1]
+        } else if closed {
+            *points.first()?
+        } else {
+            return None;
+        };
+        return Some((a + b) * 0.5);
+    }
     if marker < 0 {
         return None;
     }
@@ -317,27 +403,27 @@ pub(crate) fn resolve_point(entity: &acadrust::EntityType, marker: i32) -> Optio
 }
 
 /// Below this squared distance (1e-6 world units), two points count as
-/// already coincident for [`nearest_sketch_point`]'s purposes.
+/// already coincident for [`nearest_parametric_point`]'s purposes.
 const COINCIDENT_EPSILON_SQ: f64 = 1.0e-12;
 
 /// Finds the addressable entity point nearest a snapped world position.
 /// Returns `None` when no point in the scope is within the coincidence
 /// tolerance.
-pub(crate) fn nearest_sketch_point(
+pub(crate) fn nearest_parametric_point(
     document: &acadrust::CadDocument,
-    scope: SketchScope,
+    scope: ParametricScope,
     world_point: Vector3,
     exclude: Option<Handle>,
-) -> Option<SketchRef> {
+) -> Option<ParametricRef> {
     let owner = scope.owner_handle(document);
-    let mut best: Option<(f64, SketchRef)> = None;
+    let mut best: Option<(f64, ParametricRef)> = None;
     let mut consider = |handle: Handle, marker: i32, point: Vector3| {
         let dx = point.x - world_point.x;
         let dy = point.y - world_point.y;
         let dz = point.z - world_point.z;
         let dist_sq = dx * dx + dy * dy + dz * dz;
         if dist_sq <= COINCIDENT_EPSILON_SQ && best.as_ref().is_none_or(|(d, _)| dist_sq < *d) {
-            best = Some((dist_sq, SketchRef::point(handle, marker)));
+            best = Some((dist_sq, ParametricRef::point(handle, marker)));
         }
     };
     for candidate in document.entities() {
@@ -375,6 +461,7 @@ impl ConstraintKind {
             ConstraintKind::Equal => "=",
             ConstraintKind::Distance => "↔",
             ConstraintKind::Angle => "∠",
+            ConstraintKind::Angle3Point => "∠₃",
             ConstraintKind::Radius => "R",
             ConstraintKind::Tangent => "T",
             ConstraintKind::Smooth => "G²",
@@ -389,15 +476,16 @@ impl ConstraintKind {
             ConstraintKind::Diameter => "⌀",
             ConstraintKind::DistanceX => "↔ₓ",
             ConstraintKind::DistanceY => "↔ᵧ",
+            ConstraintKind::DistanceDirected => "↗",
             ConstraintKind::Normal => "⊾",
-            ConstraintKind::ArcLength => "⌢",
+            ConstraintKind::RigidSet => "▣",
         }
     }
 }
 
 /// The full glyph text for one constraint: its symbol, plus the driving
 /// value for a dimensional kind (Distance/Angle/Radius).
-pub(crate) fn glyph_label(constraint: &SketchConstraint) -> String {
+pub(crate) fn glyph_label(constraint: &ParametricConstraint) -> String {
     match (constraint.kind, &constraint.driving_param) {
         (ConstraintKind::Angle, Some(DrivingValue::Literal(value))) => {
             format!("{} {value:.1}°", constraint.kind.glyph_symbol())
@@ -422,7 +510,7 @@ pub(crate) fn glyph_label(constraint: &SketchConstraint) -> String {
 /// World-space anchor and outward direction for a constraint glyph.
 pub(crate) fn glyph_placement(
     document: &acadrust::CadDocument,
-    constraint: &SketchConstraint,
+    constraint: &ParametricConstraint,
 ) -> Option<(Vector3, Vector3)> {
     let r = constraint.refs.first()?;
     let entity = document.get_entity(r.entity)?;
@@ -434,19 +522,13 @@ pub(crate) fn glyph_placement(
         )
     };
     let line_normal = |line: &acadrust::entities::Line| {
-        let direction = Vector3::new(
-            -(line.end.y - line.start.y),
-            line.end.x - line.start.x,
-            0.0,
-        );
+        let direction = Vector3::new(-(line.end.y - line.start.y), line.end.x - line.start.x, 0.0);
         (direction.length_squared() > 1e-24)
             .then_some(direction)
             .unwrap_or(Vector3::UNIT_Y)
     };
     match (entity, r.marker) {
-        (acadrust::EntityType::Line(line), None) => {
-            Some((line_midpoint(line), line_normal(line)))
-        }
+        (acadrust::EntityType::Line(line), None) => Some((line_midpoint(line), line_normal(line))),
         (acadrust::EntityType::Circle(circle), None | Some(-3)) => {
             let center = circle.center_wcs();
             let anchor = circle.point_at_angle_wcs(0.0);
@@ -486,52 +568,72 @@ pub(crate) fn glyph_placement(
 }
 
 impl super::Scene {
-    pub fn is_sketch_constraint_visible(&self, scope: SketchScope, id: ConstraintId) -> bool {
-        !self.hidden_sketch_constraints.contains(&(scope, id))
+    pub fn is_parametric_constraint_visible(
+        &self,
+        scope: ParametricScope,
+        id: ConstraintId,
+    ) -> bool {
+        !self.hidden_parametric_constraints.contains(&(scope, id))
     }
 
-    pub fn set_sketch_constraint_visibility(
+    pub fn set_parametric_constraint_visibility(
         &mut self,
-        scope: SketchScope,
+        scope: ParametricScope,
         handles: Option<&[Handle]>,
         dimensional: bool,
         visible: bool,
     ) -> usize {
-        let ids: Vec<_> = self.sketch_constraint_set(scope).into_iter()
+        let ids: Vec<_> = self
+            .parametric_constraint_set(scope)
+            .into_iter()
             .flat_map(|set| set.constraints.iter())
             .filter(|constraint| constraint.driving_param.is_some() == dimensional)
-            .filter(|constraint| handles.is_none_or(|handles| constraint.refs.iter()
-                .any(|reference| handles.contains(&reference.entity))))
-            .map(|constraint| constraint.id).collect();
+            .filter(|constraint| {
+                handles.is_none_or(|handles| {
+                    constraint
+                        .refs
+                        .iter()
+                        .any(|reference| handles.contains(&reference.entity))
+                })
+            })
+            .map(|constraint| constraint.id)
+            .collect();
         for id in &ids {
-            if visible { self.hidden_sketch_constraints.remove(&(scope, *id)); }
-            else { self.hidden_sketch_constraints.insert((scope, *id)); }
+            if visible {
+                self.hidden_parametric_constraints.remove(&(scope, *id));
+            } else {
+                self.hidden_parametric_constraints.insert((scope, *id));
+            }
         }
         ids.len()
     }
 
     /// Infers relations already present in the selected geometry.
-    pub fn inferred_sketch_constraints(
+    pub fn inferred_parametric_constraints(
         &self,
-        scope: SketchScope,
+        scope: ParametricScope,
         handles: &[Handle],
-    ) -> Vec<(ConstraintKind, Vec<SketchRef>)> {
+    ) -> Vec<(ConstraintKind, Vec<ParametricRef>)> {
         use cadkernel::geom2d::{
             infer_constraints, Arc, Circle, ConstraintEndpoint, InferredConstraint, Line,
-            SketchPrimitive, Tolerance,
+            ParametricPrimitive, Tolerance,
         };
         let mut sources = Vec::new();
         for handle in handles {
             let primitive = match self.document.get_entity(*handle) {
-                Some(acadrust::EntityType::Line(line)) => SketchPrimitive::Line(Line {
-                    start: [line.start.x, line.start.y], end: [line.end.x, line.end.y],
+                Some(acadrust::EntityType::Line(line)) => ParametricPrimitive::Line(Line {
+                    start: [line.start.x, line.start.y],
+                    end: [line.end.x, line.end.y],
                 }),
-                Some(acadrust::EntityType::Circle(circle)) => SketchPrimitive::Circle(Circle {
-                    centre: [circle.center.x, circle.center.y], radius: circle.radius,
+                Some(acadrust::EntityType::Circle(circle)) => ParametricPrimitive::Circle(Circle {
+                    centre: [circle.center.x, circle.center.y],
+                    radius: circle.radius,
                 }),
-                Some(acadrust::EntityType::Arc(arc)) => SketchPrimitive::Arc(Arc {
-                    centre: [arc.center.x, arc.center.y], radius: arc.radius,
-                    start_angle: arc.start_angle, end_angle: arc.end_angle,
+                Some(acadrust::EntityType::Arc(arc)) => ParametricPrimitive::Arc(Arc {
+                    centre: [arc.center.x, arc.center.y],
+                    radius: arc.radius,
+                    start_angle: arc.start_angle,
+                    end_angle: arc.end_angle,
                 }),
                 _ => continue,
             };
@@ -542,54 +644,90 @@ impl super::Scene {
             ConstraintEndpoint::Start => 0,
             ConstraintEndpoint::End => 1,
         };
-        let mut mapped: Vec<_> = infer_constraints(
-            &primitives, Tolerance::new(1e-6), 0.5_f64.to_radians(),
-        ).into_iter().map(|relation| match relation {
-            InferredConstraint::Coincident { first, first_endpoint, second, second_endpoint } => (
-                ConstraintKind::Coincident,
-                vec![SketchRef::point(sources[first].0, marker(first_endpoint)),
-                     SketchRef::point(sources[second].0, marker(second_endpoint))],
-            ),
-            InferredConstraint::Collinear { first, second } => (
-                ConstraintKind::Colinear,
-                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
-            ),
-            InferredConstraint::Concentric { first, second } => (
-                ConstraintKind::Concentric,
-                vec![SketchRef::center(sources[first].0), SketchRef::center(sources[second].0)],
-            ),
-            InferredConstraint::Parallel { first, second } => (
-                ConstraintKind::Parallel,
-                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
-            ),
-            InferredConstraint::Perpendicular { first, second } => (
-                ConstraintKind::Perpendicular,
-                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
-            ),
-            InferredConstraint::Horizontal { entity } => (
-                ConstraintKind::Horizontal, vec![SketchRef::whole(sources[entity].0)],
-            ),
-            InferredConstraint::Vertical { entity } => (
-                ConstraintKind::Vertical, vec![SketchRef::whole(sources[entity].0)],
-            ),
-            InferredConstraint::Tangent { first, second } => (
-                ConstraintKind::Tangent,
-                vec![SketchRef::whole(sources[first].0), SketchRef::whole(sources[second].0)],
-            ),
-        }).collect();
-        if let Some(existing) = self.sketch_constraint_set(scope) {
-            mapped.retain(|(kind, refs)| !existing.constraints.iter().any(|constraint| {
-                constraint.kind == *kind && (constraint.refs == *refs
-                    || (constraint.refs.len() == 2 && refs.len() == 2
-                        && constraint.refs[0] == refs[1] && constraint.refs[1] == refs[0]))
-            }));
+        let mut mapped: Vec<_> =
+            infer_constraints(&primitives, Tolerance::new(1e-6), 0.5_f64.to_radians())
+                .into_iter()
+                .map(|relation| match relation {
+                    InferredConstraint::Coincident {
+                        first,
+                        first_endpoint,
+                        second,
+                        second_endpoint,
+                    } => (
+                        ConstraintKind::Coincident,
+                        vec![
+                            ParametricRef::point(sources[first].0, marker(first_endpoint)),
+                            ParametricRef::point(sources[second].0, marker(second_endpoint)),
+                        ],
+                    ),
+                    InferredConstraint::Collinear { first, second } => (
+                        ConstraintKind::Colinear,
+                        vec![
+                            ParametricRef::whole(sources[first].0),
+                            ParametricRef::whole(sources[second].0),
+                        ],
+                    ),
+                    InferredConstraint::Concentric { first, second } => (
+                        ConstraintKind::Concentric,
+                        vec![
+                            ParametricRef::center(sources[first].0),
+                            ParametricRef::center(sources[second].0),
+                        ],
+                    ),
+                    InferredConstraint::Parallel { first, second } => (
+                        ConstraintKind::Parallel,
+                        vec![
+                            ParametricRef::whole(sources[first].0),
+                            ParametricRef::whole(sources[second].0),
+                        ],
+                    ),
+                    InferredConstraint::Perpendicular { first, second } => (
+                        ConstraintKind::Perpendicular,
+                        vec![
+                            ParametricRef::whole(sources[first].0),
+                            ParametricRef::whole(sources[second].0),
+                        ],
+                    ),
+                    InferredConstraint::Horizontal { entity } => (
+                        ConstraintKind::Horizontal,
+                        vec![ParametricRef::whole(sources[entity].0)],
+                    ),
+                    InferredConstraint::Vertical { entity } => (
+                        ConstraintKind::Vertical,
+                        vec![ParametricRef::whole(sources[entity].0)],
+                    ),
+                    InferredConstraint::Tangent { first, second } => (
+                        ConstraintKind::Tangent,
+                        vec![
+                            ParametricRef::whole(sources[first].0),
+                            ParametricRef::whole(sources[second].0),
+                        ],
+                    ),
+                })
+                .collect();
+        if let Some(existing) = self.parametric_constraint_set(scope) {
+            mapped.retain(|(kind, refs)| {
+                !existing.constraints.iter().any(|constraint| {
+                    constraint.kind == *kind
+                        && (constraint.refs == *refs
+                            || (constraint.refs.len() == 2
+                                && refs.len() == 2
+                                && constraint.refs[0] == refs[1]
+                                && constraint.refs[1] == refs[0]))
+                })
+            });
         }
-        mapped.retain(|(kind, refs)| self.validate_sketch_constraint(*kind, refs, None).is_ok());
+        mapped.retain(|(kind, refs)| {
+            self.validate_parametric_constraint(*kind, refs, None)
+                .is_ok()
+        });
         mapped
     }
 
-    pub fn smooth_constraint_refs(&self, handles: &[Handle]) -> Option<Vec<SketchRef>> {
-        let [first, second] = handles else { return None };
+    pub fn smooth_constraint_refs(&self, handles: &[Handle]) -> Option<Vec<ParametricRef>> {
+        let [first, second] = handles else {
+            return None;
+        };
         let first_entity = self.document.get_entity(*first)?;
         let second_entity = self.document.get_entity(*second)?;
         let (spline_handle, spline, target_handle, target) = match (first_entity, second_entity) {
@@ -597,9 +735,11 @@ impl super::Scene {
             (target, acadrust::EntityType::Spline(spline)) => (*second, spline, *first, target),
             _ => return None,
         };
-        if spline.flags.closed || spline.flags.periodic { return None; }
-        let spline_points = super::dimension_assoc::source_points(
-            &acadrust::EntityType::Spline(spline.clone()));
+        if spline.flags.closed || spline.flags.periodic {
+            return None;
+        }
+        let spline_points =
+            super::dimension_assoc::source_points(&acadrust::EntityType::Spline(spline.clone()));
         let target_points = super::dimension_assoc::source_points(target);
         let spline_ends = [*spline_points.first()?, *spline_points.last()?];
         let target_ends = [*target_points.first()?, *target_points.last()?];
@@ -607,36 +747,46 @@ impl super::Scene {
         for (source_marker, source) in spline_ends.iter().enumerate() {
             for (target_marker, target) in target_ends.iter().enumerate() {
                 let distance = (*source - *target).length_squared();
-                if distance < best.0 { best = (distance, source_marker, target_marker); }
+                if distance < best.0 {
+                    best = (distance, source_marker, target_marker);
+                }
             }
         }
         Some(vec![
-            SketchRef::point(spline_handle, best.1 as i32),
-            SketchRef::point(target_handle, best.2 as i32),
+            ParametricRef::point(spline_handle, best.1 as i32),
+            ParametricRef::point(target_handle, best.2 as i32),
         ])
     }
 
     /// The constraint set for `scope`, if one has been created.
-    pub fn sketch_constraint_set(&self, scope: SketchScope) -> Option<&SketchConstraintSet> {
-        self.sketch_constraints.iter().find(|s| s.scope == scope)
+    pub fn parametric_constraint_set(
+        &self,
+        scope: ParametricScope,
+    ) -> Option<&ParametricConstraintSet> {
+        self.parametric_constraints
+            .iter()
+            .find(|s| s.scope == scope)
     }
 
     /// The constraint set for `scope`, creating an empty one on first use.
-    /// The `pub(crate)` `sketch_constraints` field itself stays private so
+    /// The `pub(crate)` `parametric_constraints` field itself stays private so
     /// nothing outside this module can end up with two sets for the same
     /// scope — this is the one way to reach a scope's set for both reading
     /// and mutating.
-    pub fn sketch_constraint_set_mut(&mut self, scope: SketchScope) -> &mut SketchConstraintSet {
+    pub fn parametric_constraint_set_mut(
+        &mut self,
+        scope: ParametricScope,
+    ) -> &mut ParametricConstraintSet {
         if let Some(index) = self
-            .sketch_constraints
+            .parametric_constraints
             .iter()
             .position(|s| s.scope == scope)
         {
-            &mut self.sketch_constraints[index]
+            &mut self.parametric_constraints[index]
         } else {
-            self.sketch_constraints
-                .push(SketchConstraintSet::new(scope));
-            self.sketch_constraints.last_mut().expect("just pushed")
+            self.parametric_constraints
+                .push(ParametricConstraintSet::new(scope));
+            self.parametric_constraints.last_mut().expect("just pushed")
         }
     }
 
@@ -654,24 +804,28 @@ impl super::Scene {
     /// scope, then triggers a solve for the newly duplicated geometry the
     /// same way any other edit would. A no-op when `handle_map` is empty or
     /// nothing constrained was duplicated.
-    pub fn duplicate_sketch_constraints_for(
+    pub fn duplicate_parametric_constraints_for(
         &mut self,
         handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
     ) {
         if handle_map.is_empty() {
             return;
         }
-        let mut to_add: Vec<(usize, ConstraintKind, Vec<SketchRef>, Option<DrivingValue>)> =
-            Vec::new();
-        for (scope_index, set) in self.sketch_constraints.iter().enumerate() {
+        let mut to_add: Vec<(
+            usize,
+            ConstraintKind,
+            Vec<ParametricRef>,
+            Option<DrivingValue>,
+        )> = Vec::new();
+        for (scope_index, set) in self.parametric_constraints.iter().enumerate() {
             for c in &set.constraints {
                 if !c.enabled || !c.refs.iter().all(|r| handle_map.contains_key(&r.entity)) {
                     continue;
                 }
-                let new_refs: Vec<SketchRef> = c
+                let new_refs: Vec<ParametricRef> = c
                     .refs
                     .iter()
-                    .map(|r| SketchRef {
+                    .map(|r| ParametricRef {
                         entity: handle_map[&r.entity],
                         marker: r.marker,
                     })
@@ -685,7 +839,7 @@ impl super::Scene {
         let mut touched: Vec<Handle> = Vec::new();
         for (scope_index, kind, refs, driving_param) in to_add {
             touched.extend(refs.iter().map(|r| r.entity));
-            self.sketch_constraints[scope_index].add(kind, refs, driving_param);
+            self.parametric_constraints[scope_index].add(kind, refs, driving_param);
         }
         touched.sort();
         touched.dedup();
@@ -705,7 +859,7 @@ impl super::Scene {
     /// still needs `Scene::document.get_entity`.
     pub fn parameter_usage(&self, name: &str) -> Vec<ParameterUsage> {
         let mut out = Vec::new();
-        for set in &self.sketch_constraints {
+        for set in &self.parametric_constraints {
             for c in &set.constraints {
                 let Some(DrivingValue::Named(n)) = &c.driving_param else {
                     continue;
@@ -732,7 +886,7 @@ impl super::Scene {
 /// result type.
 #[derive(Debug, Clone)]
 pub struct ParameterUsage {
-    pub scope: SketchScope,
+    pub scope: ParametricScope,
     pub constraint_id: ConstraintId,
     pub kind: ConstraintKind,
     pub entities: Vec<Handle>,
@@ -763,38 +917,43 @@ mod tests {
             .add_entity(acadrust::EntityType::Circle(circle))
             .unwrap();
 
-        let constraint = |reference| SketchConstraint {
+        let constraint = |reference| ParametricConstraint {
             id: 0,
             kind: ConstraintKind::Fixed,
             refs: vec![reference],
             driving_param: None,
             enabled: true,
+            native_origin: None,
+            rigid_points: Vec::new(),
+            distance_direction_type: 0,
+            distance_direction: None,
+            angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
         };
         let (anchor, direction) =
-            glyph_placement(&document, &constraint(SketchRef::whole(h(1)))).unwrap();
+            glyph_placement(&document, &constraint(ParametricRef::whole(h(1)))).unwrap();
         assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
         assert_eq!(direction, Vector3::new(0.0, 10.0, 0.0));
         let (anchor, direction) =
-            glyph_placement(&document, &constraint(SketchRef::point(h(1), 0))).unwrap();
+            glyph_placement(&document, &constraint(ParametricRef::point(h(1), 0))).unwrap();
         assert_eq!(anchor, Vector3::ZERO);
         assert_eq!(direction, Vector3::new(-5.0, 0.0, 0.0));
         let (anchor, direction) =
-            glyph_placement(&document, &constraint(SketchRef::center(h(2)))).unwrap();
+            glyph_placement(&document, &constraint(ParametricRef::center(h(2)))).unwrap();
         assert_eq!(anchor, Vector3::new(5.0, 0.0, 0.0));
         assert_eq!(direction, Vector3::new(5.0, 0.0, 0.0));
     }
 
     #[test]
     fn add_assigns_increasing_ids_and_get_finds_them() {
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         let a = set.add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(h(1))],
+            vec![ParametricRef::whole(h(1))],
             None,
         );
         let b = set.add(
             ConstraintKind::Distance,
-            vec![SketchRef::whole(h(1))],
+            vec![ParametricRef::whole(h(1))],
             Some(DrivingValue::Literal(25.0)),
         );
         assert_ne!(a, b);
@@ -807,13 +966,17 @@ mod tests {
 
     #[test]
     fn remove_drops_only_the_matching_id() {
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         let a = set.add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(h(1))],
+            vec![ParametricRef::whole(h(1))],
             None,
         );
-        let b = set.add(ConstraintKind::Vertical, vec![SketchRef::whole(h(2))], None);
+        let b = set.add(
+            ConstraintKind::Vertical,
+            vec![ParametricRef::whole(h(2))],
+            None,
+        );
         assert!(set.remove(a));
         assert!(
             !set.remove(a),
@@ -825,15 +988,15 @@ mod tests {
 
     #[test]
     fn constraints_touching_finds_entity_regardless_of_marker() {
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         set.add(
             ConstraintKind::Coincident,
-            vec![SketchRef::point(h(1), 0), SketchRef::point(h(2), 1)],
+            vec![ParametricRef::point(h(1), 0), ParametricRef::point(h(2), 1)],
             None,
         );
         set.add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(h(3))],
+            vec![ParametricRef::whole(h(3))],
             None,
         );
 
@@ -846,10 +1009,10 @@ mod tests {
 
     #[test]
     fn constraints_touching_skips_disabled() {
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         let id = set.add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(h(1))],
+            vec![ParametricRef::whole(h(1))],
             None,
         );
         set.constraints
@@ -862,15 +1025,15 @@ mod tests {
 
     #[test]
     fn remove_all_touching_drops_every_constraint_referencing_the_entity() {
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         let coincident = set.add(
             ConstraintKind::Coincident,
-            vec![SketchRef::point(h(1), 0), SketchRef::point(h(2), 1)],
+            vec![ParametricRef::point(h(1), 0), ParametricRef::point(h(2), 1)],
             None,
         );
         let horizontal_other = set.add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(h(3))],
+            vec![ParametricRef::whole(h(3))],
             None,
         );
 
@@ -886,17 +1049,17 @@ mod tests {
     #[test]
     fn scope_owner_handle_resolves_block_directly() {
         let block_handle = h(42);
-        let scope = SketchScope::Block(block_handle);
+        let scope = ParametricScope::Block(block_handle);
         let doc = acadrust::CadDocument::new();
         assert_eq!(scope.owner_handle(&doc), block_handle);
     }
 
     #[test]
     fn ref_center_constructor_matches_the_dash_three_convention() {
-        let r = SketchRef::center(h(7));
+        let r = ParametricRef::center(h(7));
         assert_eq!(
             r,
-            SketchRef {
+            ParametricRef {
                 entity: h(7),
                 marker: Some(-3)
             }
@@ -904,62 +1067,36 @@ mod tests {
     }
 
     #[test]
-    fn sketch_constraint_set_round_trips_through_bincode() {
-        let mut set = SketchConstraintSet::new(SketchScope::Block(h(5)));
-        set.add(
-            ConstraintKind::Coincident,
-            vec![SketchRef::point(h(1), 0), SketchRef::point(h(2), 1)],
-            None,
-        );
-        set.add(
-            ConstraintKind::Distance,
-            vec![SketchRef::whole(h(3))],
-            Some(DrivingValue::Literal(12.5)),
-        );
-
-        let bytes = bincode::serialize(&set).expect("serialize");
-        let restored: SketchConstraintSet = bincode::deserialize(&bytes).expect("deserialize");
-
-        assert_eq!(restored.scope, set.scope);
-        assert_eq!(restored.constraints.len(), set.constraints.len());
-        assert_eq!(
-            restored.constraints[1].driving_param,
-            Some(DrivingValue::Literal(12.5))
-        );
-        assert_eq!(restored.constraints[0].refs, set.constraints[0].refs);
-    }
-
-    #[test]
     fn parameter_usage_finds_every_constraint_driven_by_the_named_parameter() {
         let mut scene = super::super::Scene::new();
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Distance,
-                vec![SketchRef::point(h(1), 0), SketchRef::point(h(1), 1)],
+                vec![ParametricRef::point(h(1), 0), ParametricRef::point(h(1), 1)],
                 Some(DrivingValue::Named("gap".to_string())),
             );
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Radius,
-                vec![SketchRef::whole(h(2))],
+                vec![ParametricRef::whole(h(2))],
                 Some(DrivingValue::Named("gap".to_string())),
             );
         // Unrelated: a literal-driven constraint and one driven by a
         // different name must not show up.
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Radius,
-                vec![SketchRef::whole(h(3))],
+                vec![ParametricRef::whole(h(3))],
                 Some(DrivingValue::Literal(5.0)),
             );
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Distance,
-                vec![SketchRef::point(h(4), 0), SketchRef::point(h(4), 1)],
+                vec![ParametricRef::point(h(4), 0), ParametricRef::point(h(4), 1)],
                 Some(DrivingValue::Named("other".to_string())),
             );
 
@@ -984,15 +1121,15 @@ mod tests {
         let mut scene = super::super::Scene::new();
         let block = h(99);
         scene
-            .sketch_constraint_set_mut(SketchScope::Block(block))
+            .parametric_constraint_set_mut(ParametricScope::Block(block))
             .add(
                 ConstraintKind::Radius,
-                vec![SketchRef::whole(h(1))],
+                vec![ParametricRef::whole(h(1))],
                 Some(DrivingValue::Named("r".to_string())),
             );
         let usage = scene.parameter_usage("r");
         assert_eq!(usage.len(), 1);
-        assert_eq!(usage[0].scope, SketchScope::Block(block));
+        assert_eq!(usage[0].scope, ParametricScope::Block(block));
     }
 
     #[test]
@@ -1002,10 +1139,10 @@ mod tests {
         // entity (e.g. a line's own start and end) must list that entity
         // once, not twice.
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Distance,
-                vec![SketchRef::point(h(1), 0), SketchRef::point(h(1), 1)],
+                vec![ParametricRef::point(h(1), 0), ParametricRef::point(h(1), 1)],
                 Some(DrivingValue::Named("len".to_string())),
             );
         let usage = scene.parameter_usage("len");
@@ -1029,26 +1166,28 @@ mod tests {
             ),
         ));
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Horizontal,
-                vec![SketchRef::whole(first)],
+                vec![ParametricRef::whole(first)],
                 None,
             );
 
-        let inferred = scene.inferred_sketch_constraints(
-            SketchScope::ModelSpace,
-            &[first, second],
-        );
+        let inferred =
+            scene.inferred_parametric_constraints(ParametricScope::ModelSpace, &[first, second]);
 
         assert!(!inferred.iter().any(|(kind, refs)| {
-            *kind == ConstraintKind::Horizontal && *refs == [SketchRef::whole(first)]
+            *kind == ConstraintKind::Horizontal && *refs == [ParametricRef::whole(first)]
         }));
         assert!(inferred.iter().any(|(kind, refs)| {
-            *kind == ConstraintKind::Horizontal && *refs == [SketchRef::whole(second)]
+            *kind == ConstraintKind::Horizontal && *refs == [ParametricRef::whole(second)]
         }));
-        assert!(inferred.iter().any(|(kind, _)| *kind == ConstraintKind::Coincident));
-        assert!(inferred.iter().any(|(kind, _)| *kind == ConstraintKind::Colinear));
+        assert!(inferred
+            .iter()
+            .any(|(kind, _)| *kind == ConstraintKind::Coincident));
+        assert!(inferred
+            .iter()
+            .any(|(kind, _)| *kind == ConstraintKind::Colinear));
     }
 
     #[test]
@@ -1060,28 +1199,28 @@ mod tests {
                 Vector3::new(5.0, 0.0, 0.0),
             ),
         ));
-        let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
         let geometric = set.add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(line)],
+            vec![ParametricRef::whole(line)],
             None,
         );
         let dimensional = set.add(
             ConstraintKind::Distance,
-            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
             Some(DrivingValue::Literal(5.0)),
         );
 
         assert_eq!(
-            scene.set_sketch_constraint_visibility(
-                SketchScope::ModelSpace,
+            scene.set_parametric_constraint_visibility(
+                ParametricScope::ModelSpace,
                 None,
                 false,
                 false,
             ),
             1
         );
-        assert!(!scene.is_sketch_constraint_visible(SketchScope::ModelSpace, geometric));
-        assert!(scene.is_sketch_constraint_visible(SketchScope::ModelSpace, dimensional));
+        assert!(!scene.is_parametric_constraint_visible(ParametricScope::ModelSpace, geometric));
+        assert!(scene.is_parametric_constraint_visible(ParametricScope::ModelSpace, dimensional));
     }
 }

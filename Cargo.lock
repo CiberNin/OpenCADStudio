@@ -83,7 +83,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.5.5"
-source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=7709884f301cfe292f58a002a514939932be67d0#7709884f301cfe292f58a002a514939932be67d0"
+source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=568a12c#568a12cb97c24e14b1cc488085b3f81cf89b94d9"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -919,7 +919,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=2db3ac9aa8ce5e75b53f21fefd4b40ca1afaff8b#2db3ac9aa8ce5e75b53f21fefd4b40ca1afaff8b"
+source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=b8b664a#b8b664ae993e392fb84689966a44fa9a3f4e38cd"
 dependencies = [
  "acadrust",
  "cavalier_contours",
@@ -930,7 +930,7 @@ dependencies = [
 [[package]]
 name = "cadkernel-constraints"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=2db3ac9aa8ce5e75b53f21fefd4b40ca1afaff8b#2db3ac9aa8ce5e75b53f21fefd4b40ca1afaff8b"
+source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=b8b664a#b8b664ae993e392fb84689966a44fa9a3f4e38cd"
 dependencies = [
  "nalgebra",
 ]

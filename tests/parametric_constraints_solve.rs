@@ -1,7 +1,9 @@
 use acadrust::entities::EntityType;
 use acadrust::types::{Handle, Vector3};
 use OpenCADStudio::scene::named_parameters::DrivingValue;
-use OpenCADStudio::scene::sketch_constraints::{ConstraintKind, SketchRef, SketchScope};
+use OpenCADStudio::scene::parametric_constraints::{
+    ConstraintKind, ParametricRef, ParametricScope,
+};
 use OpenCADStudio::scene::{ChangeKind, Scene};
 
 fn add_line(scene: &mut Scene, x1: f64, y1: f64, x2: f64, y2: f64) -> Handle {
@@ -62,13 +64,6 @@ fn arc_geom(scene: &Scene, handle: Handle) -> (Vector3, f64) {
     }
 }
 
-fn arc_angles(scene: &Scene, handle: Handle) -> (f64, f64, f64) {
-    match scene.document.get_entity(handle).expect("entity exists") {
-        EntityType::Arc(a) => (a.radius, a.start_angle, a.end_angle),
-        other => panic!("expected an Arc, got {other:?}"),
-    }
-}
-
 fn add_ellipse(scene: &mut Scene, cx: f64, cy: f64, major_axis: (f64, f64), ratio: f64) -> Handle {
     scene.add_entity(EntityType::Ellipse(
         acadrust::entities::Ellipse::from_center_axes(
@@ -92,10 +87,10 @@ fn horizontal_constraint_levels_the_line_when_an_endpoint_moves() {
     let line = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(line)],
+            vec![ParametricRef::whole(line)],
             None,
         );
 
@@ -118,7 +113,7 @@ fn horizontal_constraint_levels_the_line_when_an_endpoint_moves() {
     // constraint-referenced params, so an untouched one was invisible to
     // `diagnose` entirely before this was fixed).
     let dof = scene
-        .sketch_constraint_set(SketchScope::ModelSpace)
+        .parametric_constraint_set(ParametricScope::ModelSpace)
         .and_then(|s| s.dof);
     assert_eq!(
         dof,
@@ -138,10 +133,10 @@ fn horizontal_constraint_levels_a_polyline_segment() {
         ]),
     ));
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::segment(polyline, 1)],
+            vec![ParametricRef::segment(polyline, 1)],
             None,
         );
 
@@ -163,10 +158,10 @@ fn horizontal_constraint_does_not_flatten_a_polyline_arc_segment() {
     let mut scene = Scene::new();
     let polyline = scene.add_entity(EntityType::LwPolyline(source));
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::segment(polyline, 0)],
+            vec![ParametricRef::segment(polyline, 0)],
             None,
         );
 
@@ -185,10 +180,10 @@ fn horizontal_constraint_aligns_two_selected_points() {
     let a = add_line(&mut scene, 0.0, 1.0, 4.0, 3.0);
     let b = add_line(&mut scene, 8.0, 7.0, 12.0, 9.0);
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::point(a, 0), SketchRef::point(b, 0)],
+            vec![ParametricRef::point(a, 0), ParametricRef::point(b, 0)],
             None,
         );
 
@@ -205,10 +200,10 @@ fn parallel_constraint_rotates_the_other_line_when_one_moves() {
     let b = add_line(&mut scene, 0.0, 5.0, 10.0, 5.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Parallel,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
 
@@ -234,10 +229,10 @@ fn distance_constraint_holds_the_target_length_after_an_unrelated_endpoint_edit(
     let line = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Distance,
-            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
             Some(DrivingValue::Literal(20.0)),
         );
 
@@ -265,10 +260,10 @@ fn distance_constraint_resolves_a_named_parameter_reference() {
         .unwrap();
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Distance,
-            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
             Some(DrivingValue::Named("target_len".to_string())),
         );
 
@@ -307,10 +302,10 @@ fn distance_constraint_with_an_undefined_named_reference_is_skipped_not_panicked
     let line = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Distance,
-            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
             Some(DrivingValue::Named("does_not_exist".to_string())),
         );
 
@@ -331,10 +326,10 @@ fn tangent_constraint_between_a_line_and_a_circle_solves_to_touching() {
     let line = add_line(&mut scene, -10.0, 10.0, 10.0, 10.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Tangent,
-            vec![SketchRef::whole(circle), SketchRef::whole(line)],
+            vec![ParametricRef::whole(circle), ParametricRef::whole(line)],
             None,
         );
     scene.bump_entities(&[(circle, ChangeKind::Modified), (line, ChangeKind::Modified)]);
@@ -355,10 +350,10 @@ fn tangent_constraint_between_two_circles_solves_to_external_tangency() {
     let b = add_circle(&mut scene, 20.0, 0.0, 2.0); // far apart: distance 20, r1+r2 = 5
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Tangent,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
     scene.bump_entities(&[(a, ChangeKind::Modified), (b, ChangeKind::Modified)]);
@@ -380,10 +375,10 @@ fn coincident_constraint_pulls_the_second_point_onto_the_first_when_it_moves() {
     let b = add_line(&mut scene, 5.0, 0.0, 5.0, 5.0); // b.start coincident with a.end
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Coincident,
-            vec![SketchRef::point(a, 1), SketchRef::point(b, 0)],
+            vec![ParametricRef::point(a, 1), ParametricRef::point(b, 0)],
             None,
         );
 
@@ -406,10 +401,10 @@ fn unrelated_entity_edit_does_not_touch_constrained_geometry() {
     let unrelated = add_line(&mut scene, 100.0, 100.0, 200.0, 100.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Horizontal,
-            vec![SketchRef::whole(line)],
+            vec![ParametricRef::whole(line)],
             None,
         );
 
@@ -434,20 +429,24 @@ fn erasing_a_constrained_entity_drops_its_constraints_instead_of_dangling() {
     let c = add_line(&mut scene, 20.0, 20.0, 30.0, 20.0); // unrelated, own constraint
 
     let parallel_id = scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Parallel,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
     let horizontal_id = scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
-        .add(ConstraintKind::Horizontal, vec![SketchRef::whole(c)], None);
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
+        .add(
+            ConstraintKind::Horizontal,
+            vec![ParametricRef::whole(c)],
+            None,
+        );
 
     scene.erase_entities(&[a]);
 
     let set = scene
-        .sketch_constraint_set(SketchScope::ModelSpace)
+        .parametric_constraint_set(ParametricScope::ModelSpace)
         .expect("scope still exists");
     assert!(
         set.get(parallel_id).is_none(),
@@ -475,16 +474,16 @@ fn copying_two_constrained_entities_carries_their_constraint_along() {
     let a = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
     let b = add_line(&mut scene, 0.0, 5.0, 10.0, 3.0); // deliberately not parallel yet
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Parallel,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
     // Solve once so the source pair is actually parallel before copying.
     scene.bump_entities(&[(a, ChangeKind::Modified), (b, ChangeKind::Modified)]);
     let constraints_before = scene
-        .sketch_constraint_set(SketchScope::ModelSpace)
+        .parametric_constraint_set(ParametricScope::ModelSpace)
         .unwrap()
         .constraints
         .len();
@@ -496,7 +495,7 @@ fn copying_two_constrained_entities_carries_their_constraint_along() {
     let (new_a, new_b) = (new_handles[0], new_handles[1]);
 
     let constraints_after = scene
-        .sketch_constraint_set(SketchScope::ModelSpace)
+        .parametric_constraint_set(ParametricScope::ModelSpace)
         .unwrap()
         .constraints
         .len();
@@ -534,25 +533,33 @@ fn copying_two_constrained_entities_carries_their_constraint_along() {
 // The "one edit that ripples through a constraint still records as one undo
 // step" case needs `Scene::record_undo_before`, which is `pub(crate)` (an
 // integration test crate can't reach it) — covered instead as an internal
-// unit test in `src/scene/sketch_solve.rs`.
+// unit test in `src/scene/parametric_solve.rs`.
 
 #[test]
 fn a_duplicated_horizontal_constraint_is_reported_as_redundant() {
     // `solve_scope` resolves the redundant row back to the
     // `ConstraintId` a `ConflictResolverPanel` would name.
     use cadkernel_constraints::diagnosis::RedundancyKind;
-    use OpenCADStudio::scene::sketch_constraints::ConstraintKind;
+    use OpenCADStudio::scene::parametric_constraints::ConstraintKind;
 
     let mut scene = Scene::new();
     let a = add_line(&mut scene, 0.0, 0.0, 10.0, 3.0);
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
-    let first = set.add(ConstraintKind::Horizontal, vec![SketchRef::whole(a)], None);
-    let second = set.add(ConstraintKind::Horizontal, vec![SketchRef::whole(a)], None); // exact duplicate
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+    let first = set.add(
+        ConstraintKind::Horizontal,
+        vec![ParametricRef::whole(a)],
+        None,
+    );
+    let second = set.add(
+        ConstraintKind::Horizontal,
+        vec![ParametricRef::whole(a)],
+        None,
+    ); // exact duplicate
 
     scene.bump_entities(&[(a, ChangeKind::Modified)]);
 
     let set = scene
-        .sketch_constraint_set(SketchScope::ModelSpace)
+        .parametric_constraint_set(ParametricScope::ModelSpace)
         .unwrap();
     assert_eq!(
         set.conflicts.len(),
@@ -570,26 +577,26 @@ fn a_duplicated_horizontal_constraint_is_reported_as_redundant() {
 #[test]
 fn two_conflicting_distance_targets_are_reported_as_conflicting() {
     use cadkernel_constraints::diagnosis::RedundancyKind;
-    use OpenCADStudio::scene::sketch_constraints::ConstraintKind;
+    use OpenCADStudio::scene::parametric_constraints::ConstraintKind;
 
     let mut scene = Scene::new();
     let a = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
     let first = set.add(
         ConstraintKind::Distance,
-        vec![SketchRef::point(a, 0), SketchRef::point(a, 1)],
+        vec![ParametricRef::point(a, 0), ParametricRef::point(a, 1)],
         Some(DrivingValue::Literal(20.0)),
     );
     let second = set.add(
         ConstraintKind::Distance,
-        vec![SketchRef::point(a, 0), SketchRef::point(a, 1)],
+        vec![ParametricRef::point(a, 0), ParametricRef::point(a, 1)],
         Some(DrivingValue::Literal(50.0)),
     );
 
     scene.bump_entities(&[(a, ChangeKind::Modified)]);
 
     let set = scene
-        .sketch_constraint_set(SketchScope::ModelSpace)
+        .parametric_constraint_set(ParametricScope::ModelSpace)
         .unwrap();
     assert_eq!(set.conflicts.len(), 1);
     let (flagged_id, kind) = set.conflicts[0];
@@ -619,10 +626,10 @@ fn concentric_constraint_pulls_the_second_circles_center_onto_the_firsts() {
     let b = add_circle(&mut scene, 5.0, 5.0, 1.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Concentric,
-            vec![SketchRef::center(a), SketchRef::center(b)],
+            vec![ParametricRef::center(a), ParametricRef::center(b)],
             None,
         );
 
@@ -649,10 +656,10 @@ fn center_point_constraint_pulls_a_lines_endpoint_onto_a_circles_center() {
     let line = add_line(&mut scene, 10.0, 10.0, 20.0, 20.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::CenterPoint,
-            vec![SketchRef::point(line, 0), SketchRef::center(circle)],
+            vec![ParametricRef::point(line, 0), ParametricRef::center(circle)],
             None,
         );
 
@@ -674,10 +681,10 @@ fn colinear_constraint_pulls_the_second_line_onto_the_firsts_infinite_line() {
     let b = add_line(&mut scene, 3.0, 4.0, 7.0, 6.0); // off-axis, not on a's line
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Colinear,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
 
@@ -707,10 +714,10 @@ fn midpoint_constraint_pulls_a_point_onto_a_lines_midpoint() {
     let marker = add_line(&mut scene, 20.0, 20.0, 21.0, 21.0); // marker.start is the tracked point
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Midpoint,
-            vec![SketchRef::point(marker, 0), SketchRef::whole(base)],
+            vec![ParametricRef::point(marker, 0), ParametricRef::whole(base)],
             None,
         );
 
@@ -734,10 +741,10 @@ fn midpoint_constraint_supports_a_point_entity() {
         Vector3::new(20.0, 20.0, 0.0),
     )));
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Midpoint,
-            vec![SketchRef::point(point, 0), SketchRef::whole(base)],
+            vec![ParametricRef::point(point, 0), ParametricRef::whole(base)],
             None,
         );
 
@@ -759,10 +766,13 @@ fn coincident_constraint_supports_a_block_insertion_point() {
         Vector3::new(30.0, 20.0, 0.0),
     )));
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Coincident,
-            vec![SketchRef::point(line, 1), SketchRef::point(insert, 0)],
+            vec![
+                ParametricRef::point(line, 1),
+                ParametricRef::point(insert, 0),
+            ],
             None,
         );
 
@@ -781,17 +791,17 @@ fn fixed_constraint_holds_an_entity_in_place_despite_a_connected_edit() {
     let fixed_line = add_line(&mut scene, 0.0, 0.0, 10.0, 0.0);
     let moving_line = add_line(&mut scene, 10.0, 0.0, 10.0, 10.0);
 
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
     set.add(
         ConstraintKind::Fixed,
-        vec![SketchRef::whole(fixed_line)],
+        vec![ParametricRef::whole(fixed_line)],
         None,
     );
     set.add(
         ConstraintKind::Coincident,
         vec![
-            SketchRef::point(fixed_line, 1),
-            SketchRef::point(moving_line, 0),
+            ParametricRef::point(fixed_line, 1),
+            ParametricRef::point(moving_line, 0),
         ],
         None,
     );
@@ -825,10 +835,13 @@ fn point_on_curve_constraint_pulls_a_point_onto_a_circles_circumference() {
     let marker = add_line(&mut scene, 100.0, 100.0, 101.0, 101.0); // marker.start is the tracked point
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::PointOnCurve,
-            vec![SketchRef::point(marker, 0), SketchRef::whole(circle)],
+            vec![
+                ParametricRef::point(marker, 0),
+                ParametricRef::whole(circle),
+            ],
             None,
         );
 
@@ -850,10 +863,13 @@ fn point_on_curve_constraint_pulls_a_point_onto_an_ellipse() {
     let marker = add_line(&mut scene, 12.0, 8.0, 13.0, 8.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::PointOnCurve,
-            vec![SketchRef::point(marker, 0), SketchRef::whole(ellipse)],
+            vec![
+                ParametricRef::point(marker, 0),
+                ParametricRef::whole(ellipse),
+            ],
             None,
         );
     scene.bump_entities(&[(marker, ChangeKind::Modified)]);
@@ -879,10 +895,10 @@ fn tangent_constraint_solves_an_ellipse_and_line() {
     let line = add_line(&mut scene, -8.0, 8.0, 8.0, 8.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Tangent,
-            vec![SketchRef::whole(ellipse), SketchRef::whole(line)],
+            vec![ParametricRef::whole(ellipse), ParametricRef::whole(line)],
             None,
         );
     scene.bump_entities(&[(line, ChangeKind::Modified)]);
@@ -911,10 +927,10 @@ fn equal_constraint_matches_ellipse_major_axes() {
     let b = add_ellipse(&mut scene, 20.0, 0.0, (2.0, 0.0), 0.5);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Equal,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
     scene.bump_entities(&[(b, ChangeKind::Modified)]);
@@ -938,14 +954,14 @@ fn equal_distance_constraint_matches_a_second_point_pairs_separation() {
     let b = add_line(&mut scene, 20.0, 20.0, 25.0, 20.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::EqualDistance,
             vec![
-                SketchRef::point(b, 0),
-                SketchRef::point(b, 1),
-                SketchRef::point(a, 0),
-                SketchRef::point(a, 1),
+                ParametricRef::point(b, 0),
+                ParametricRef::point(b, 1),
+                ParametricRef::point(a, 0),
+                ParametricRef::point(a, 1),
             ],
             None,
         );
@@ -972,21 +988,25 @@ fn symmetric_constraint_mirrors_one_circles_center_across_the_axis_line() {
     // scale dividing by zero at the very first solve iteration).
     let b = add_circle(&mut scene, 8.0, 9.0, 1.0);
 
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
     // Pin the axis and `a` in place — otherwise they're just as free to move
     // as `b`'s center, and with only 2 equations (MidpointOnLine +
     // Perpendicular) against that many more unknowns the solver is free to
     // converge on any of infinitely many valid configurations, not
     // necessarily "only b moves, to a's exact mirror" (which is the one
     // deterministic outcome this test actually wants to check).
-    set.add(ConstraintKind::Fixed, vec![SketchRef::whole(axis)], None);
-    set.add(ConstraintKind::Fixed, vec![SketchRef::whole(a)], None);
+    set.add(
+        ConstraintKind::Fixed,
+        vec![ParametricRef::whole(axis)],
+        None,
+    );
+    set.add(ConstraintKind::Fixed, vec![ParametricRef::whole(a)], None);
     set.add(
         ConstraintKind::Symmetric,
         vec![
-            SketchRef::center(a),
-            SketchRef::center(b),
-            SketchRef::whole(axis),
+            ParametricRef::center(a),
+            ParametricRef::center(b),
+            ParametricRef::whole(axis),
         ],
         None,
     );
@@ -1019,10 +1039,10 @@ fn radius_constraint_on_an_arc_solves_to_the_target() {
     let arc = add_arc(&mut scene, 0.0, 0.0, 3.0, 0.0, std::f64::consts::FRAC_PI_2);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Radius,
-            vec![SketchRef::whole(arc)],
+            vec![ParametricRef::whole(arc)],
             Some(DrivingValue::Literal(7.5)),
         );
     scene.bump_entities(&[(arc, ChangeKind::Modified)]);
@@ -1041,10 +1061,10 @@ fn tangent_constraint_between_a_line_and_an_arc_solves_to_touching() {
     let line = add_line(&mut scene, -10.0, 10.0, 10.0, 10.0); // clear of the arc's circle
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Tangent,
-            vec![SketchRef::whole(arc), SketchRef::whole(line)],
+            vec![ParametricRef::whole(arc), ParametricRef::whole(line)],
             None,
         );
     scene.bump_entities(&[(arc, ChangeKind::Modified), (line, ChangeKind::Modified)]);
@@ -1064,10 +1084,10 @@ fn concentric_constraint_between_an_arc_and_a_circle_pulls_centers_together() {
     let circle = add_circle(&mut scene, 10.0, -6.0, 2.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Concentric,
-            vec![SketchRef::center(arc), SketchRef::center(circle)],
+            vec![ParametricRef::center(arc), ParametricRef::center(circle)],
             None,
         );
     scene.bump_entities(&[(arc, ChangeKind::Modified), (circle, ChangeKind::Modified)]);
@@ -1102,10 +1122,10 @@ fn coincident_constraint_pulls_a_lines_endpoint_onto_an_arcs_start_point() {
     let line = add_line(&mut scene, 20.0, 20.0, 30.0, 30.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Coincident,
-            vec![SketchRef::point(arc, 0), SketchRef::point(line, 0)],
+            vec![ParametricRef::point(arc, 0), ParametricRef::point(line, 0)],
             None,
         );
 
@@ -1138,11 +1158,18 @@ fn an_arcs_endpoint_stays_consistent_with_its_center_radius_and_angle_after_solv
     let arc = add_arc(&mut scene, 0.0, 0.0, 5.0, 0.0, std::f64::consts::PI);
     let anchor = add_line(&mut scene, 12.0, 7.0, 12.0, 7.0);
 
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
-    set.add(ConstraintKind::Fixed, vec![SketchRef::whole(anchor)], None);
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+    set.add(
+        ConstraintKind::Fixed,
+        vec![ParametricRef::whole(anchor)],
+        None,
+    );
     set.add(
         ConstraintKind::Coincident,
-        vec![SketchRef::point(arc, 0), SketchRef::point(anchor, 0)],
+        vec![
+            ParametricRef::point(arc, 0),
+            ParametricRef::point(anchor, 0),
+        ],
         None,
     );
     scene.bump_entities(&[(arc, ChangeKind::Modified)]);
@@ -1176,10 +1203,10 @@ fn point_on_curve_constraint_pulls_a_point_onto_an_arcs_underlying_circle() {
     let marker = add_line(&mut scene, 20.0, 20.0, 21.0, 20.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::PointOnCurve,
-            vec![SketchRef::point(marker, 0), SketchRef::whole(arc)],
+            vec![ParametricRef::point(marker, 0), ParametricRef::whole(arc)],
             None,
         );
     scene.bump_entities(&[(marker, ChangeKind::Modified)]);
@@ -1202,16 +1229,23 @@ fn radius_and_endpoint_coincident_constraints_coexist_on_the_same_arc() {
     let arc = add_arc(&mut scene, 0.0, 0.0, 3.0, 0.0, std::f64::consts::FRAC_PI_2);
     let anchor = add_line(&mut scene, 9.0, -4.0, 9.0, -4.0);
 
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
-    set.add(ConstraintKind::Fixed, vec![SketchRef::whole(anchor)], None);
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+    set.add(
+        ConstraintKind::Fixed,
+        vec![ParametricRef::whole(anchor)],
+        None,
+    );
     set.add(
         ConstraintKind::Coincident,
-        vec![SketchRef::point(arc, 0), SketchRef::point(anchor, 0)],
+        vec![
+            ParametricRef::point(arc, 0),
+            ParametricRef::point(anchor, 0),
+        ],
         None,
     );
     set.add(
         ConstraintKind::Radius,
-        vec![SketchRef::whole(arc)],
+        vec![ParametricRef::whole(arc)],
         Some(DrivingValue::Literal(6.0)),
     );
     scene.bump_entities(&[(arc, ChangeKind::Modified)]);
@@ -1238,10 +1272,10 @@ fn diameter_constraint_drives_the_radius_to_half_the_target() {
     let circle = add_circle(&mut scene, 0.0, 0.0, 3.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Diameter,
-            vec![SketchRef::whole(circle)],
+            vec![ParametricRef::whole(circle)],
             Some(DrivingValue::Literal(16.0)),
         );
     scene.bump_entities(&[(circle, ChangeKind::Modified)]);
@@ -1261,10 +1295,10 @@ fn distance_x_constraint_pins_only_the_x_component() {
     let line = add_line(&mut scene, 0.0, 0.0, 6.0, 8.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::DistanceX,
-            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
             Some(DrivingValue::Literal(10.0)),
         );
     scene.bump_entities(&[(line, ChangeKind::Modified)]);
@@ -1289,10 +1323,10 @@ fn normal_constraint_pulls_the_line_through_the_circles_center() {
     let line = add_line(&mut scene, -10.0, 0.0, 10.0, 0.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Normal,
-            vec![SketchRef::whole(circle), SketchRef::whole(line)],
+            vec![ParametricRef::whole(circle), ParametricRef::whole(line)],
             None,
         );
     scene.bump_entities(&[(circle, ChangeKind::Modified), (line, ChangeKind::Modified)]);
@@ -1305,42 +1339,6 @@ fn normal_constraint_pulls_the_line_through_the_circles_center() {
     assert!(
         signed_dist.abs() < 1e-6,
         "the circle's center should lie on the (infinite) line after solving: dist={signed_dist}"
-    );
-}
-
-// Phase 4a of the same plan: `ArcLength` registers an arc's
-// `start_angle`/`end_angle` separately from its center/radius (which still
-// flow through the existing `EntityGeom::Circle` aliasing), so it can
-// combine with a `Radius` constraint on the same arc in one solve.
-
-#[test]
-fn arc_length_constraint_drives_the_swept_length_to_the_target() {
-    let mut scene = Scene::new();
-    // radius 5, a 90° span (length ≈ 7.85) — deliberately not the target.
-    let arc = add_arc(&mut scene, 0.0, 0.0, 5.0, 0.0, std::f64::consts::FRAC_PI_2);
-
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
-    set.add(
-        ConstraintKind::Radius,
-        vec![SketchRef::whole(arc)],
-        Some(DrivingValue::Literal(5.0)),
-    );
-    set.add(
-        ConstraintKind::ArcLength,
-        vec![SketchRef::whole(arc)],
-        Some(DrivingValue::Literal(10.0)),
-    );
-    scene.bump_entities(&[(arc, ChangeKind::Modified)]);
-
-    let (radius, start_angle, end_angle) = arc_angles(&scene, arc);
-    assert!(
-        (radius - 5.0).abs() < 1e-6,
-        "Radius constraint should still hold: got {radius}"
-    );
-    let length = radius * (end_angle - start_angle);
-    assert!(
-        (length - 10.0).abs() < 1e-5,
-        "swept length should equal the ArcLength target: got {length}"
     );
 }
 
@@ -1358,10 +1356,13 @@ fn concentric_constraint_between_an_ellipse_and_a_circle_pulls_centers_together(
     let circle = add_circle(&mut scene, 10.0, -6.0, 2.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Concentric,
-            vec![SketchRef::center(ellipse), SketchRef::center(circle)],
+            vec![
+                ParametricRef::center(ellipse),
+                ParametricRef::center(circle),
+            ],
             None,
         );
     scene.bump_entities(&[
@@ -1384,10 +1385,13 @@ fn center_point_constraint_pulls_a_lines_endpoint_onto_an_ellipses_center() {
     let line = add_line(&mut scene, 10.0, 10.0, 20.0, 20.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::CenterPoint,
-            vec![SketchRef::point(line, 0), SketchRef::center(ellipse)],
+            vec![
+                ParametricRef::point(line, 0),
+                ParametricRef::center(ellipse),
+            ],
             None,
         );
 
@@ -1421,10 +1425,13 @@ fn a_tilted_ellipse_round_trips_through_the_solver_without_drifting() {
     let circle = add_circle(&mut scene, 2.0, -3.0, 1.0); // already concentric — no solving needed
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Concentric,
-            vec![SketchRef::center(ellipse), SketchRef::center(circle)],
+            vec![
+                ParametricRef::center(ellipse),
+                ParametricRef::center(circle),
+            ],
             None,
         );
     scene.bump_entities(&[(ellipse, ChangeKind::Modified)]);
@@ -1463,10 +1470,13 @@ fn concentric_constraint_does_not_reshape_the_ellipse_when_its_center_actually_m
     let circle = add_circle(&mut scene, 10.0, 7.0, 1.5);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::Concentric,
-            vec![SketchRef::center(ellipse), SketchRef::center(circle)],
+            vec![
+                ParametricRef::center(ellipse),
+                ParametricRef::center(circle),
+            ],
             None,
         );
     scene.bump_entities(&[
@@ -1500,11 +1510,18 @@ fn fixed_constraint_holds_an_ellipse_in_place_despite_a_connected_edit() {
     let ellipse = add_ellipse(&mut scene, 0.0, 0.0, (6.0, 0.0), 0.5);
     let line = add_line(&mut scene, 0.0, 0.0, 5.0, 5.0);
 
-    let set = scene.sketch_constraint_set_mut(SketchScope::ModelSpace);
-    set.add(ConstraintKind::Fixed, vec![SketchRef::whole(ellipse)], None);
+    let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+    set.add(
+        ConstraintKind::Fixed,
+        vec![ParametricRef::whole(ellipse)],
+        None,
+    );
     set.add(
         ConstraintKind::CenterPoint,
-        vec![SketchRef::point(line, 0), SketchRef::center(ellipse)],
+        vec![
+            ParametricRef::point(line, 0),
+            ParametricRef::center(ellipse),
+        ],
         None,
     );
 
@@ -1534,10 +1551,10 @@ fn distance_y_constraint_pins_only_the_y_component() {
     let line = add_line(&mut scene, 0.0, 0.0, 6.0, 8.0);
 
     scene
-        .sketch_constraint_set_mut(SketchScope::ModelSpace)
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
         .add(
             ConstraintKind::DistanceY,
-            vec![SketchRef::point(line, 0), SketchRef::point(line, 1)],
+            vec![ParametricRef::point(line, 0), ParametricRef::point(line, 1)],
             Some(DrivingValue::Literal(-3.0)),
         );
     scene.bump_entities(&[(line, ChangeKind::Modified)]);

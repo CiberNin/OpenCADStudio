@@ -8,7 +8,7 @@
 //! comment for the same constraint on `DCONSTRAINT`/`ACONSTRAINT`), so this
 //! command only accumulates the two raw points `on_point` receives and hands
 //! them back as `CmdResult::AddCoincidentConstraint` — the host resolves
-//! each point to a real `SketchRef` (`sketch_constraints::nearest_sketch_point`)
+//! each point to a real `ParametricRef` (`parametric_constraints::nearest_parametric_point`)
 //! and adds the constraint, the same split `ReassociateCenterMark` already
 //! uses for a similar reason.
 

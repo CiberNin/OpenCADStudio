@@ -7,7 +7,7 @@
 //! endpoint) so it doesn't need interactive picking; the point side does
 //! (which of a line's two endpoints, or some other addressable point), so
 //! this command accumulates just that one point pick and hands it back for
-//! the host to resolve via `nearest_sketch_point` — the same split
+//! the host to resolve via `nearest_parametric_point` — the same split
 //! `CoincidentConstraintCommand` uses and for the same reason (`CadCommand`
 //! has no document access).
 
@@ -15,7 +15,7 @@ use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
-use crate::scene::sketch_constraints::ConstraintKind;
+use crate::scene::parametric_constraints::ConstraintKind;
 use acadrust::types::Handle;
 
 pub mod center_point_tool {

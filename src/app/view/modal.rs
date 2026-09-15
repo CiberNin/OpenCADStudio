@@ -201,7 +201,6 @@ impl OpenCADStudio {
                     crate::ui::window::options::view_window(
                         &self.default_save_format,
                         self.file_assoc_enabled,
-                        self.write_dwg_native_constraints,
                         self.show_constraint_values,
                         &self.ui_theme,
                         &self.theme_color_inputs,

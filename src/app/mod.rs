@@ -7,6 +7,7 @@ pub(crate) fn automation_action_names() -> &'static [&'static str] {
 pub(crate) mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub use automation::{export_headless, serve};
+mod annotation_data;
 mod command_driver;
 pub(crate) mod commands;
 mod document;
@@ -30,7 +31,6 @@ mod startup;
 mod style_ops;
 mod text_inline;
 mod tolerance_dialog;
-mod annotation_data;
 mod update;
 mod view;
 mod visibility;
@@ -260,12 +260,12 @@ pub(crate) enum FindMatchKey {
 }
 use crate::snap::Snapper;
 use crate::ui::{CommandLine, Ribbon, StatusBar};
-use acadrust::CadDocument;
 use acadrust::types::{Color as AcadColor, LineWeight};
+use acadrust::CadDocument;
 
 use iced::time::Instant;
 use iced::window;
-use iced::{Point, Task, Theme, mouse};
+use iced::{mouse, Point, Task, Theme};
 use std::sync::Arc;
 
 pub(super) const POLY_START_DELAY_MS: u128 = 150;
@@ -552,11 +552,7 @@ pub(super) struct OpenCADStudio {
     /// When true (default), the app registers itself as a .dwg/.dxf/.bak file
     /// handler on each launch. Toggle with the FILEASSOC command.
     pub file_assoc_enabled: bool,
-    /// When true, saving creates native constraint objects alongside the
-    /// application's own persistence record. Existing native objects remain
-    /// synchronized regardless of this setting.
-    pub write_dwg_native_constraints: bool,
-    /// When true (default), a sketch constraint's viewport pill shows its
+    /// When true (default), a parametric constraint's viewport pill shows its
     /// glyph plus a driven value or named-parameter name. When false, every
     /// pill shows only the glyph.
     pub show_constraint_values: bool,
@@ -2118,8 +2114,6 @@ pub enum Message {
     /// Register or unregister as the .dwg/.dxf handler, from Options. Same
     /// setting the FILEASSOC command carries.
     FileAssocChanged(bool),
-    /// Toggle writing native constraint objects on save.
-    WriteDwgNativeConstraintsChanged(bool),
     /// Toggle showing driven values/named-parameter names on constraint
     /// pills, from Options. See `show_constraint_values`'s doc comment.
     ShowConstraintValuesChanged(bool),
@@ -2547,9 +2541,9 @@ pub enum Message {
     /// Cycle the coordinate readout mode ($COORDS): static → live → polar.
     CycleCoordsMode,
     /// Removes one flagged redundant or conflicting constraint from the
-    /// current sketch scope.
+    /// current parametric scope.
     /// No-op if the scope currently has no flagged conflict.
-    ResolveOneSketchConflict,
+    ResolveOneParametricConflict,
     /// Toggle the status-bar customization menu open/closed.
     ToggleStatusBarMenu,
     /// Close the status-bar customization menu.
@@ -3636,7 +3630,6 @@ impl OpenCADStudio {
             dimension_continue_mode: 1,
             backup_on_save: true,
             file_assoc_enabled: true,
-            write_dwg_native_constraints: false,
             show_constraint_values: true,
             savetime_min: 10,
             default_bg_color: None,

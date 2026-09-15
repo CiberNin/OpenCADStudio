@@ -1,16 +1,15 @@
-//! Builds and solves persistent two-dimensional sketch constraints through the geometry kernel.
+//! Builds and solves two-dimensional parametric constraints through the geometry kernel.
 //! Unsupported entity shapes, invalid target values, and incompatible planes are skipped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use acadrust::entities::EntityType;
 use acadrust::types::{Handle, Vector3};
 
 use cadkernel_constraints::constraints::angle_distance::L2LAngle;
-use cadkernel_constraints::constraints::circle_arc::{
-    ArcLength, C2LDistance, P2CDistance, TangentCircumf,
-};
+use cadkernel_constraints::constraints::bspline::{Coord as SplineCoord, PointOnBSpline};
+use cadkernel_constraints::constraints::circle_arc::{C2LDistance, P2CDistance, TangentCircumf};
 use cadkernel_constraints::constraints::conic::{
     EqualMajorAxesConic, PointOnEllipse, TangentEllipseLine,
 };
@@ -18,18 +17,20 @@ use cadkernel_constraints::constraints::curve_generic::CurveValue;
 use cadkernel_constraints::constraints::point_line::{
     CenterOfGravity, Difference, Equal, EqualLineLength, MidpointOnLine, P2PDistance,
     Parallel as ParallelConstraint, Perpendicular as PerpendicularConstraint, PointOnLine,
+    ProjectedDistance, ProjectedDistanceAlongLine,
 };
 use cadkernel_constraints::constraints::Constraint;
 use cadkernel_constraints::geo::{
-    Arc as GArc, Circle as GCircle, Conic as GConic, Ellipse as GEllipse, Line as GLine,
-    Point as GPoint,
+    Arc as GArc, BSpline as GBSpline, Circle as GCircle, Conic as GConic, Ellipse as GEllipse,
+    Line as GLine, Point as GPoint,
 };
 use cadkernel_constraints::solvers::dogleg::solve_dl;
 use cadkernel_constraints::system::System;
 
 use super::named_parameters::ParameterTable;
-use super::sketch_constraints::{
-    ConstraintId, ConstraintKind, SketchConstraint, SketchConstraintSet, SketchRef,
+use super::parametric_constraints::{
+    angle_sector, distance_direction_type, ConstraintId, ConstraintKind, ParametricConstraint,
+    ParametricConstraintSet, ParametricRef,
 };
 use super::{ChangeKind, Scene};
 
@@ -39,6 +40,8 @@ use super::{ChangeKind, Scene};
 enum EntityGeom {
     Point(GPoint),
     Line(GLine),
+    Ray(GLine),
+    XLine(GLine),
     Polyline {
         points: Rc<Vec<GPoint>>,
         straight: Rc<Vec<bool>>,
@@ -52,18 +55,23 @@ enum EntityGeom {
     Arc(GArc),
     /// See `register_entity` for the entity-to-kernel parametrization.
     Ellipse(GEllipse),
+    Spline {
+        curve: GBSpline,
+        control_z: Rc<Vec<f64>>,
+    },
 }
 
 impl EntityGeom {
     /// The `cadkernel_constraints::geo::Point` for a marker on this entity — `None` for
     /// a marker this entity type/value doesn't support (see
-    /// `sketch_constraints::resolve_point` for the same convention on the
+    /// `parametric_constraints::resolve_point` for the same convention on the
     /// read side).
     fn point_for_marker(&self, marker: i32) -> Option<GPoint> {
         match (self, marker) {
             (EntityGeom::Point(point), 0) => Some(*point),
             (EntityGeom::Line(l), 0) => Some(l.p1),
             (EntityGeom::Line(l), 1) => Some(l.p2),
+            (EntityGeom::Ray(l), 0) => Some(l.p1),
             (EntityGeom::Polyline { points, .. }, marker) if marker >= 0 => {
                 points.get(marker as usize).copied()
             }
@@ -72,6 +80,8 @@ impl EntityGeom {
             (EntityGeom::Arc(a), 1) => Some(a.end),
             (EntityGeom::Arc(a), -3) => Some(a.circle.center),
             (EntityGeom::Ellipse(e), -3) => Some(e.center),
+            (EntityGeom::Spline { curve, .. }, 0) if !curve.periodic => Some(curve.start),
+            (EntityGeom::Spline { curve, .. }, 1) if !curve.periodic => Some(curve.end),
             _ => None,
         }
     }
@@ -111,13 +121,14 @@ enum CircleOrLine {
     Other,
 }
 
-fn as_circle_or_line(g: EntityGeom, reference: SketchRef) -> CircleOrLine {
+fn as_circle_or_line(g: EntityGeom, reference: ParametricRef) -> CircleOrLine {
     match g {
         EntityGeom::Circle(c) => CircleOrLine::Circle(c),
         EntityGeom::Arc(a) => CircleOrLine::Circle(a.circle),
-        EntityGeom::Line(l) => CircleOrLine::Line(l),
+        EntityGeom::Line(l) | EntityGeom::Ray(l) | EntityGeom::XLine(l) => CircleOrLine::Line(l),
         EntityGeom::Ellipse(ellipse) => CircleOrLine::Ellipse(ellipse),
         EntityGeom::Point(_) => CircleOrLine::Other,
+        EntityGeom::Spline { .. } => CircleOrLine::Other,
         EntityGeom::Polyline { .. } => reference
             .segment_index()
             .and_then(|index| g.line_segment(index))
@@ -215,6 +226,30 @@ fn register_entity(
             let p2 = GPoint::new(sys.add_param(l.end.x, false), sys.add_param(l.end.y, false));
             Some(EntityGeom::Line(GLine { p1, p2 }))
         }
+        EntityType::Ray(ray) => {
+            let p1 = GPoint::new(
+                sys.add_param(ray.base_point.x, false),
+                sys.add_param(ray.base_point.y, false),
+            );
+            let through = ray.base_point + ray.direction;
+            let p2 = GPoint::new(
+                sys.add_param(through.x, false),
+                sys.add_param(through.y, false),
+            );
+            Some(EntityGeom::Ray(GLine { p1, p2 }))
+        }
+        EntityType::XLine(line) => {
+            let p1 = GPoint::new(
+                sys.add_param(line.base_point.x, false),
+                sys.add_param(line.base_point.y, false),
+            );
+            let through = line.base_point + line.direction;
+            let p2 = GPoint::new(
+                sys.add_param(through.x, false),
+                sys.add_param(through.y, false),
+            );
+            Some(EntityGeom::XLine(GLine { p1, p2 }))
+        }
         EntityType::Circle(c) => {
             let center = GPoint::new(
                 sys.add_param(c.center.x, false),
@@ -291,11 +326,49 @@ fn register_entity(
                 radmin,
             }))
         }
+        EntityType::Spline(spline) => {
+            let source = crate::entities::spline::nurbs3(spline)?;
+            let poles: Vec<_> = source
+                .control_points()
+                .iter()
+                .map(|point| {
+                    GPoint::new(
+                        sys.add_param(point[0], false),
+                        sys.add_param(point[1], false),
+                    )
+                })
+                .collect();
+            let start = *poles.first()?;
+            let end = *poles.last()?;
+            let weights = source
+                .weights()
+                .iter()
+                .map(|weight| sys.add_param(*weight, true))
+                .collect();
+            Some(EntityGeom::Spline {
+                curve: GBSpline {
+                    poles,
+                    weights,
+                    knots: source.knots().to_vec(),
+                    start,
+                    end,
+                    degree: source.degree(),
+                    periodic: source.periodicity(),
+                },
+                control_z: Rc::new(
+                    source
+                        .control_points()
+                        .iter()
+                        .map(|point| point[2])
+                        .collect(),
+                ),
+            })
+        }
         _ => None,
     }
 }
 
-/// Resolves one [`SketchRef`] against the entity-geometry cache, registering
+/// Resolves one [`ParametricRef`] against the entity-geometry cache, registering
 /// the entity on first use. `None` if the handle is dangling, isn't a
 /// supported entity type, or (for a point ref) uses a marker that entity
 /// type doesn't support.
@@ -303,7 +376,7 @@ fn resolve_ref(
     document: &acadrust::CadDocument,
     sys: &mut System,
     cache: &mut HashMap<Handle, EntityGeom>,
-    r: SketchRef,
+    r: ParametricRef,
 ) -> Option<EntityGeom> {
     if let Some(geometry) = cache.get(&r.entity) {
         return Some(geometry.clone());
@@ -311,6 +384,166 @@ fn resolve_ref(
     let geometry = register_entity(document, sys, r.entity)?;
     cache.insert(r.entity, geometry.clone());
     Some(geometry)
+}
+
+/// Resolves a point reference and installs the kernel equations for standard
+/// implicit midpoints. Endpoint and center markers reuse entity parameters;
+/// midpoint markers are derived parameters so moving either parent geometry
+/// or another constrained object recomputes them in the same solve.
+fn resolve_constraint_point(
+    document: &acadrust::CadDocument,
+    sys: &mut System,
+    cache: &mut HashMap<Handle, EntityGeom>,
+    reference: ParametricRef,
+) -> Option<GPoint> {
+    let marker = reference.marker?;
+    let geometry = resolve_ref(document, sys, cache, reference)?;
+    if let Some(point) = geometry.point_for_marker(marker) {
+        return Some(point);
+    }
+
+    let midpoint_line = reference
+        .segment_midpoint_index()
+        .and_then(|index| geometry.line_segment(index))
+        .or_else(|| {
+            (marker == -2)
+                .then_some(&geometry)
+                .and_then(|geometry| match geometry {
+                    EntityGeom::Line(line) => Some(*line),
+                    _ => None,
+                })
+        });
+    if let Some(line) = midpoint_line {
+        let (x1, y1, x2, y2) = {
+            let store = sys.store();
+            (
+                store.get(line.p1.x),
+                store.get(line.p1.y),
+                store.get(line.p2.x),
+                store.get(line.p2.y),
+            )
+        };
+        let point = GPoint::new(
+            sys.add_param((x1 + x2) * 0.5, false),
+            sys.add_param((y1 + y2) * 0.5, false),
+        );
+        sys.add_constraint(Rc::new(CenterOfGravity::new(
+            point.x,
+            vec![line.p1.x, line.p2.x],
+            vec![0.5, 0.5],
+        )));
+        sys.add_constraint(Rc::new(CenterOfGravity::new(
+            point.y,
+            vec![line.p1.y, line.p2.y],
+            vec![0.5, 0.5],
+        )));
+        return Some(point);
+    }
+    if marker != -2 {
+        return None;
+    }
+
+    match geometry {
+        EntityGeom::Arc(arc) => {
+            let (start, end) = {
+                let store = sys.store();
+                (store.get(arc.start_angle), store.get(arc.end_angle))
+            };
+            let parameter_value = if end < start {
+                (start + end + std::f64::consts::TAU) * 0.5
+            } else {
+                (start + end) * 0.5
+            };
+            let end_parameter = if end < start {
+                let adjusted = sys.add_param(end + std::f64::consts::TAU, false);
+                let turn = sys.add_param(std::f64::consts::TAU, true);
+                sys.add_constraint(Rc::new(Difference::new(arc.end_angle, adjusted, turn)));
+                adjusted
+            } else {
+                arc.end_angle
+            };
+            let parameter = sys.add_param(parameter_value, false);
+            sys.add_constraint(Rc::new(CenterOfGravity::new(
+                parameter,
+                vec![arc.start_angle, end_parameter],
+                vec![0.5, 0.5],
+            )));
+            let point = {
+                let value = cadkernel_constraints::geo::Curve::value(
+                    &arc,
+                    sys.store(),
+                    parameter_value,
+                    0.0,
+                    None,
+                );
+                GPoint::new(sys.add_param(value.x, false), sys.add_param(value.y, false))
+            };
+            let curve = Rc::new(arc);
+            sys.add_constraint(Rc::new(CurveValue::new(
+                point,
+                point.x,
+                curve.clone(),
+                parameter,
+            )));
+            sys.add_constraint(Rc::new(CurveValue::new(point, point.y, curve, parameter)));
+            Some(point)
+        }
+        EntityGeom::Ellipse(ellipse) => {
+            let EntityType::Ellipse(source) = document.get_entity(reference.entity)? else {
+                return None;
+            };
+            if source.is_full() {
+                return None;
+            }
+            let parameter_value = (source.start_parameter + source.end_parameter) * 0.5;
+            let value = cadkernel_constraints::geo::Curve::value(
+                &ellipse,
+                sys.store(),
+                parameter_value,
+                0.0,
+                None,
+            );
+            let point = GPoint::new(sys.add_param(value.x, false), sys.add_param(value.y, false));
+            let parameter = sys.add_param(parameter_value, true);
+            let curve = Rc::new(ellipse);
+            sys.add_constraint(Rc::new(CurveValue::new(
+                point,
+                point.x,
+                curve.clone(),
+                parameter,
+            )));
+            sys.add_constraint(Rc::new(CurveValue::new(point, point.y, curve, parameter)));
+            Some(point)
+        }
+        EntityGeom::Spline { curve, .. } if !curve.periodic => {
+            let from = curve.knots[curve.degree];
+            let to = curve.knots[curve.poles.len()];
+            let parameter_value = (from + to) * 0.5;
+            let value = cadkernel_constraints::geo::Curve::value(
+                &curve,
+                sys.store(),
+                parameter_value,
+                0.0,
+                None,
+            );
+            let point = GPoint::new(sys.add_param(value.x, false), sys.add_param(value.y, false));
+            let parameter = sys.add_param(parameter_value, true);
+            sys.add_constraint(Rc::new(PointOnBSpline::new(
+                point.x,
+                parameter,
+                SplineCoord::X,
+                curve.clone(),
+            )));
+            sys.add_constraint(Rc::new(PointOnBSpline::new(
+                point.y,
+                parameter,
+                SplineCoord::Y,
+                curve,
+            )));
+            Some(point)
+        }
+        _ => None,
+    }
 }
 
 const PLANE_EPS: f64 = 1e-9;
@@ -340,6 +573,16 @@ fn entity_plane_z(entity: &EntityType) -> Option<f64> {
         {
             line.start.z
         }
+        EntityType::Ray(ray)
+            if ray.direction.z.abs() <= PLANE_EPS && ray.base_point.z.is_finite() =>
+        {
+            ray.base_point.z
+        }
+        EntityType::XLine(line)
+            if line.direction.z.abs() <= PLANE_EPS && line.base_point.z.is_finite() =>
+        {
+            line.base_point.z
+        }
         EntityType::Circle(circle) if is_world_z(circle.normal) => circle.center.z,
         EntityType::Arc(arc) if is_world_z(arc.normal) => arc.center.z,
         EntityType::Ellipse(ellipse)
@@ -347,7 +590,7 @@ fn entity_plane_z(entity: &EntityType) -> Option<f64> {
         {
             ellipse.center.z
         }
-        EntityType::Spline(spline) if !spline.flags.closed && !spline.flags.periodic => {
+        EntityType::Spline(spline) => {
             let curve = crate::entities::spline::nurbs3(spline)?;
             let first = *curve.control_points().first()?;
             if !curve
@@ -386,7 +629,7 @@ fn entity_plane_z(entity: &EntityType) -> Option<f64> {
     z.is_finite().then_some(z)
 }
 
-fn refs_share_supported_plane(document: &acadrust::CadDocument, refs: &[SketchRef]) -> bool {
+fn refs_share_supported_plane(document: &acadrust::CadDocument, refs: &[ParametricRef]) -> bool {
     let mut plane_z = None;
     for reference in refs {
         let Some(entity) = document.get_entity(reference.entity) else {
@@ -403,22 +646,27 @@ fn refs_share_supported_plane(document: &acadrust::CadDocument, refs: &[SketchRe
     plane_z.is_some()
 }
 
-fn resolved_target(params: &ParameterTable, constraint: &SketchConstraint) -> Option<f64> {
+fn resolved_target(params: &ParameterTable, constraint: &ParametricConstraint) -> Option<f64> {
     let value = constraint.driving_param.as_ref()?.resolve(params).ok()?;
     if !value.is_finite() {
         return None;
     }
     let must_be_positive = matches!(
         constraint.kind,
-        ConstraintKind::Distance
-            | ConstraintKind::Radius
-            | ConstraintKind::Diameter
-            | ConstraintKind::ArcLength
+        ConstraintKind::Distance | ConstraintKind::Radius | ConstraintKind::Diameter
     );
     (!must_be_positive || value > 0.0).then_some(value)
 }
 
-/// One [`SketchConstraint`]'s `cadkernel_constraints` construction: every system-level
+fn oriented_distance(target: f64, current_projection: f64) -> f64 {
+    if target >= 0.0 && current_projection < 0.0 {
+        -target
+    } else {
+        target
+    }
+}
+
+/// One [`ParametricConstraint`]'s `cadkernel_constraints` construction: every system-level
 /// constraint it contributes (most kinds contribute exactly one; a few —
 /// `Coincident`/`Concentric`/`CenterPoint`'s X+Y halves, `Colinear`'s two
 /// endpoints, `Midpoint`'s X+Y, `Symmetric`'s midpoint+perpendicular pair,
@@ -438,13 +686,21 @@ fn build_constraint(
     sys: &mut System,
     cache: &mut HashMap<Handle, EntityGeom>,
     params: &ParameterTable,
-    c: &SketchConstraint,
+    c: &ParametricConstraint,
 ) -> Vec<Rc<dyn Constraint>> {
     if !c.enabled || !refs_share_supported_plane(document, &c.refs) {
         return Vec::new();
     }
 
-    let whole_line = |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| {
+    let whole_line = |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| {
+        let geometry = resolve_ref(document, sys, cache, r)?;
+        match geometry {
+            EntityGeom::Line(line) | EntityGeom::Ray(line) | EntityGeom::XLine(line) => Some(line),
+            EntityGeom::Polyline { .. } => geometry.line_segment(r.segment_index()?),
+            _ => None,
+        }
+    };
+    let bounded_line = |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| {
         let geometry = resolve_ref(document, sys, cache, r)?;
         match geometry {
             EntityGeom::Line(line) => Some(line),
@@ -453,19 +709,21 @@ fn build_constraint(
         }
     };
     let whole_circle =
-        |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| match resolve_ref(
+        |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| match resolve_ref(
             document, sys, cache, r,
         )? {
             EntityGeom::Circle(circ) => Some(circ),
             EntityGeom::Arc(a) => Some(a.circle),
             EntityGeom::Point(_)
             | EntityGeom::Line(_)
+            | EntityGeom::Ray(_)
+            | EntityGeom::XLine(_)
             | EntityGeom::Polyline { .. }
-            | EntityGeom::Ellipse(_) => None,
+            | EntityGeom::Ellipse(_)
+            | EntityGeom::Spline { .. } => None,
         };
-    let point_ref = |sys: &mut System, cache: &mut HashMap<_, _>, r: SketchRef| {
-        let marker = r.marker?;
-        resolve_ref(document, sys, cache, r)?.point_for_marker(marker)
+    let point_ref = |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| {
+        resolve_constraint_point(document, sys, cache, r)
     };
 
     // `Coincident`/`Concentric`/`CenterPoint` all solve identically — two
@@ -474,7 +732,7 @@ fn build_constraint(
     // name and the UI entry point that produces their `refs` differ.
     let point_pair_equal = |sys: &mut System,
                             cache: &mut HashMap<_, _>,
-                            refs: &[SketchRef]|
+                            refs: &[ParametricRef]|
      -> Vec<Rc<dyn Constraint>> {
         let [a, b] = refs else { return Vec::new() };
         let (Some(pa), Some(pb)) = (point_ref(sys, cache, *a), point_ref(sys, cache, *b)) else {
@@ -544,7 +802,9 @@ fn build_constraint(
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
             };
-            if let (Some(la), Some(lb)) = (whole_line(sys, cache, *a), whole_line(sys, cache, *b)) {
+            if let (Some(la), Some(lb)) =
+                (bounded_line(sys, cache, *a), bounded_line(sys, cache, *b))
+            {
                 return vec![Rc::new(EqualLineLength::new(lb, la))];
             }
             if let (Some(EntityGeom::Ellipse(a)), Some(EntityGeom::Ellipse(b))) = (
@@ -601,7 +861,8 @@ fn build_constraint(
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
             };
-            let (Some(p), Some(l)) = (point_ref(sys, cache, *a), whole_line(sys, cache, *b)) else {
+            let (Some(p), Some(l)) = (point_ref(sys, cache, *a), bounded_line(sys, cache, *b))
+            else {
                 return Vec::new();
             };
             vec![
@@ -628,7 +889,9 @@ fn build_constraint(
                 return Vec::new();
             };
             match geom {
-                EntityGeom::Line(l) => vec![Rc::new(PointOnLine::new(p, l))],
+                EntityGeom::Line(l) | EntityGeom::Ray(l) | EntityGeom::XLine(l) => {
+                    vec![Rc::new(PointOnLine::new(p, l))]
+                }
                 EntityGeom::Circle(circ) => {
                     let zero = sys.add_param(0.0, true);
                     vec![Rc::new(P2CDistance::new(circ, p, zero))]
@@ -643,6 +906,32 @@ fn build_constraint(
                 }
                 EntityGeom::Ellipse(ellipse) => {
                     vec![Rc::new(PointOnEllipse::new(p, ellipse))]
+                }
+                EntityGeom::Spline { curve, .. } => {
+                    let (x, y) = {
+                        let store = sys.store();
+                        (store.get(p.x), store.get(p.y))
+                    };
+                    let Some(EntityType::Spline(source)) = document.get_entity(b.entity) else {
+                        return Vec::new();
+                    };
+                    let Some(source_curve) = crate::entities::spline::nurbs3(source) else {
+                        return Vec::new();
+                    };
+                    let Some(z) = source_curve.control_points().first().map(|point| point[2])
+                    else {
+                        return Vec::new();
+                    };
+                    let parameter = sys.add_param(source_curve.parameter_at([x, y, z]), false);
+                    vec![
+                        Rc::new(PointOnBSpline::new(
+                            p.x,
+                            parameter,
+                            SplineCoord::X,
+                            curve.clone(),
+                        )),
+                        Rc::new(PointOnBSpline::new(p.y, parameter, SplineCoord::Y, curve)),
+                    ]
                 }
                 EntityGeom::Polyline { .. } => b
                     .segment_index()
@@ -740,7 +1029,7 @@ fn build_constraint(
                         })
                         .collect()
                 }
-                EntityGeom::Line(l) => {
+                EntityGeom::Line(l) | EntityGeom::Ray(l) | EntityGeom::XLine(l) => {
                     let (x1, y1, x2, y2) = {
                         let store = sys.store();
                         (
@@ -817,6 +1106,27 @@ fn build_constraint(
                         Rc::new(Equal::new(el.radmin, sys.add_param(b, true), 1.0)),
                     ]
                 }
+                EntityGeom::Spline { curve, .. } => {
+                    let values: Vec<_> = curve
+                        .poles
+                        .iter()
+                        .map(|point| {
+                            let store = sys.store();
+                            (point, store.get(point.x), store.get(point.y))
+                        })
+                        .collect();
+                    values
+                        .into_iter()
+                        .flat_map(|(point, x, y)| {
+                            [
+                                Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0))
+                                    as Rc<dyn Constraint>,
+                                Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0))
+                                    as Rc<dyn Constraint>,
+                            ]
+                        })
+                        .collect()
+                }
             }
         }
         ConstraintKind::Distance => {
@@ -833,6 +1143,77 @@ fn build_constraint(
             let target = sys.add_param(resolved, true);
             vec![Rc::new(P2PDistance::new(pa, pb, target))]
         }
+        ConstraintKind::DistanceDirected => {
+            let Some((&a, rest)) = c.refs.split_first() else {
+                return Vec::new();
+            };
+            let Some((&b, direction_ref)) = rest.split_first() else {
+                return Vec::new();
+            };
+            let (Some(pa), Some(pb)) = (point_ref(sys, cache, a), point_ref(sys, cache, b)) else {
+                return Vec::new();
+            };
+            let Some(resolved) = resolved_target(params, c) else {
+                return Vec::new();
+            };
+            if matches!(
+                c.distance_direction_type,
+                distance_direction_type::PARALLEL_TO_LINE
+                    | distance_direction_type::PERPENDICULAR_TO_LINE
+            ) {
+                if let Some(line) = direction_ref
+                    .first()
+                    .and_then(|reference| whole_line(sys, cache, *reference))
+                {
+                    let current = {
+                        let store = sys.store();
+                        let delta = [
+                            store.get(pb.x) - store.get(pa.x),
+                            store.get(pb.y) - store.get(pa.y),
+                        ];
+                        let axis = [
+                            store.get(line.p2.x) - store.get(line.p1.x),
+                            store.get(line.p2.y) - store.get(line.p1.y),
+                        ];
+                        let length = axis[0].hypot(axis[1]);
+                        if length <= f64::EPSILON {
+                            0.0
+                        } else if c.distance_direction_type
+                            == distance_direction_type::PERPENDICULAR_TO_LINE
+                        {
+                            delta[0] * (-axis[1] / length) + delta[1] * (axis[0] / length)
+                        } else {
+                            delta[0] * (axis[0] / length) + delta[1] * (axis[1] / length)
+                        }
+                    };
+                    let target = sys.add_param(oriented_distance(resolved, current), true);
+                    return vec![Rc::new(ProjectedDistanceAlongLine::new(
+                        pa,
+                        pb,
+                        target,
+                        line,
+                        c.distance_direction_type == distance_direction_type::PERPENDICULAR_TO_LINE,
+                    ))];
+                }
+            }
+            let Some(direction) = c.distance_direction else {
+                return Vec::new();
+            };
+            let current = {
+                let store = sys.store();
+                let length = direction.x.hypot(direction.y);
+                if length <= f64::EPSILON {
+                    0.0
+                } else {
+                    (store.get(pb.x) - store.get(pa.x)) * direction.x / length
+                        + (store.get(pb.y) - store.get(pa.y)) * direction.y / length
+                }
+            };
+            let target = sys.add_param(oriented_distance(resolved, current), true);
+            ProjectedDistance::new(pa, pb, target, [direction.x, direction.y])
+                .map(|constraint| vec![Rc::new(constraint) as Rc<dyn Constraint>])
+                .unwrap_or_default()
+        }
         ConstraintKind::Angle => {
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
@@ -845,8 +1226,43 @@ fn build_constraint(
             let Some(resolved) = resolved_target(params, c) else {
                 return Vec::new();
             };
-            let angle = sys.add_param(resolved.to_radians(), true);
+            let angle = resolved.to_radians();
+            let angle = match c.angle_sector {
+                angle_sector::ANTIPARALLEL_CLOCKWISE => std::f64::consts::PI - angle,
+                angle_sector::PARALLEL_CLOCKWISE => -angle,
+                angle_sector::ANTIPARALLEL_COUNTERCLOCKWISE => std::f64::consts::PI + angle,
+                _ => angle,
+            };
+            let angle = sys.add_param(angle, true);
             vec![Rc::new(L2LAngle::new(fixed, moving, angle))]
+        }
+        ConstraintKind::Angle3Point => {
+            let [a, vertex, b] = c.refs.as_slice() else {
+                return Vec::new();
+            };
+            let (Some(a), Some(vertex), Some(b)) = (
+                point_ref(sys, cache, *a),
+                point_ref(sys, cache, *vertex),
+                point_ref(sys, cache, *b),
+            ) else {
+                return Vec::new();
+            };
+            let Some(resolved) = resolved_target(params, c) else {
+                return Vec::new();
+            };
+            let angle = resolved.to_radians();
+            let angle = match c.angle_sector {
+                angle_sector::ANTIPARALLEL_CLOCKWISE => std::f64::consts::PI - angle,
+                angle_sector::PARALLEL_CLOCKWISE => -angle,
+                angle_sector::ANTIPARALLEL_COUNTERCLOCKWISE => std::f64::consts::PI + angle,
+                _ => angle,
+            };
+            let angle = sys.add_param(angle, true);
+            vec![Rc::new(L2LAngle::new(
+                GLine { p1: vertex, p2: a },
+                GLine { p1: vertex, p2: b },
+                angle,
+            ))]
         }
         ConstraintKind::Radius => {
             let Some(r) = c.refs.first() else {
@@ -879,11 +1295,9 @@ fn build_constraint(
             let target = sys.add_param(resolved, true);
             vec![Rc::new(Equal::new(circle.rad, target, 0.5))]
         }
-        // Signed X-only/Y-only component of the distance between two
-        // points — `Difference::new(p1, p2, d)` is `p2 - p1 == d`, matching
-        // the native format's `ACDISTANCECONSTRAINT` with a fixed-direction
-        // vector rather than a distinct native class
-        // (`dwg_native_constraints.rs`).
+        // X-only/Y-only distance between two points. Positive standard
+        // dimension values are magnitudes, so retain the geometry's current
+        // orientation; an explicitly negative command value remains signed.
         ConstraintKind::DistanceX => {
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
@@ -895,7 +1309,11 @@ fn build_constraint(
             let Some(resolved) = resolved_target(params, c) else {
                 return Vec::new();
             };
-            let target = sys.add_param(resolved, true);
+            let current = {
+                let store = sys.store();
+                store.get(pb.x) - store.get(pa.x)
+            };
+            let target = sys.add_param(oriented_distance(resolved, current), true);
             vec![Rc::new(Difference::new(pa.x, pb.x, target))]
         }
         ConstraintKind::DistanceY => {
@@ -909,7 +1327,11 @@ fn build_constraint(
             let Some(resolved) = resolved_target(params, c) else {
                 return Vec::new();
             };
-            let target = sys.add_param(resolved, true);
+            let current = {
+                let store = sys.store();
+                store.get(pb.y) - store.get(pa.y)
+            };
+            let target = sys.add_param(oriented_distance(resolved, current), true);
             vec![Rc::new(Difference::new(pa.y, pb.y, target))]
         }
         ConstraintKind::Tangent => {
@@ -977,6 +1399,39 @@ fn build_constraint(
         // Smooth edits the endpoint controls through cadkernel's spatial
         // NURBS operation after the ordinary 2D system has settled.
         ConstraintKind::Smooth => Vec::new(),
+        ConstraintKind::RigidSet => {
+            let points: Vec<_> = c
+                .rigid_points
+                .iter()
+                .filter_map(|(reference, original)| {
+                    point_ref(sys, cache, *reference).map(|point| (point, *original))
+                })
+                .collect();
+            let Some(second) = (1..points.len()).find(|&index| {
+                let delta = points[index].1 - points[0].1;
+                delta.x * delta.x + delta.y * delta.y > 1.0e-18
+            }) else {
+                return Vec::new();
+            };
+            let mut pairs = vec![(0, second)];
+            for index in 1..points.len() {
+                if index == second {
+                    continue;
+                }
+                pairs.push((0, index));
+                pairs.push((second, index));
+            }
+            pairs
+                .into_iter()
+                .map(|(a, b)| {
+                    let delta = points[b].1 - points[a].1;
+                    let target =
+                        sys.add_param((delta.x * delta.x + delta.y * delta.y).sqrt(), true);
+                    Rc::new(P2PDistance::new(points[a].0, points[b].0, target))
+                        as Rc<dyn Constraint>
+                })
+                .collect()
+        }
         // A circle's radius is always normal to its own tangent, so
         // "line normal to circle/arc" reduces to "line passes through the
         // circle's center" — the same `PointOnLine` primitive
@@ -1001,19 +1456,6 @@ fn build_constraint(
                 // different, not-yet-implemented relation.
                 _ => Vec::new(),
             }
-        }
-        ConstraintKind::ArcLength => {
-            let Some(r) = c.refs.first() else {
-                return Vec::new();
-            };
-            let Some(EntityGeom::Arc(arc)) = resolve_ref(document, sys, cache, *r) else {
-                return Vec::new();
-            };
-            let Some(resolved) = resolved_target(params, c) else {
-                return Vec::new();
-            };
-            let target = sys.add_param(resolved, true);
-            vec![Rc::new(ArcLength::new(arc, target))]
         }
     }
 }
@@ -1042,7 +1484,7 @@ fn smooth_target_jet(entity: &EntityType, marker: i32) -> Option<cadkernel::spac
 
 fn apply_smooth_constraints(
     document: &acadrust::CadDocument,
-    set: &SketchConstraintSet,
+    set: &ParametricConstraintSet,
     results: &mut Vec<(Handle, EntityType)>,
 ) {
     for constraint in set
@@ -1120,16 +1562,21 @@ type SolveResult = (
 /// on a successful solve.
 fn solve_scope(
     document: &acadrust::CadDocument,
-    params: &ParameterTable,
-    set: &SketchConstraintSet,
+    drawing_params: &ParameterTable,
+    set: &ParametricConstraintSet,
 ) -> Option<SolveResult> {
+    let params = if set.local_parameters.is_empty() {
+        drawing_params
+    } else {
+        &set.local_parameters
+    };
     let mut sys = System::new();
     let mut cache: HashMap<Handle, EntityGeom> = HashMap::new();
     // Tracks which system-level `cadkernel_constraints` constraint(s) came from which
-    // `SketchConstraint` — a `SubSystem`'s redundant-row indices (from
+    // `ParametricConstraint` — a `SubSystem`'s redundant-row indices (from
     // `cadkernel_constraints::diagnosis`) are local to that partition's own constraint
     // list, not `set.constraints`' indices, and several kinds contribute
-    // more than one system-level constraint per `SketchConstraint` (see
+    // more than one system-level constraint per `ParametricConstraint` (see
     // `build_constraint`'s doc comment). `Rc::ptr_eq` against this after
     // partitioning resolves a row back to the `ConstraintId` the UI
     // actually names.
@@ -1153,7 +1600,7 @@ fn solve_scope(
     // Arc rules (this module's doc comment): keep every registered arc's
     // `start`/`end` points consistent with its center/radius/angle,
     // unconditionally — the kernel adds these the moment an arc
-    // exists, not only when some `SketchConstraint` happens to reference
+    // exists, not only when some `ParametricConstraint` happens to reference
     // its endpoint. Not tracked in `owner`: these are solver-internal
     // bookkeeping, never redundant with anything a user-facing constraint
     // could name, so there's no `ConstraintId` for them to report against.
@@ -1235,7 +1682,7 @@ fn solve_scope(
         .values()
         .map(|g| match g {
             EntityGeom::Point(_) => 2,
-            EntityGeom::Line(_) => 4,
+            EntityGeom::Line(_) | EntityGeom::Ray(_) | EntityGeom::XLine(_) => 4,
             EntityGeom::Polyline { points, .. } => points.len() * 2,
             EntityGeom::Circle(_) => 3,
             // Raw param count (center×2, rad, start×2, end×2, both
@@ -1247,6 +1694,7 @@ fn solve_scope(
             // same way any other constraint would.
             EntityGeom::Arc(_) => 9,
             EntityGeom::Ellipse(_) => 5,
+            EntityGeom::Spline { curve, .. } => curve.poles.len() * 2,
         })
         .sum();
     let touched_free: usize = partitions.iter().map(|s| s.p_size()).sum();
@@ -1261,12 +1709,20 @@ fn solve_scope(
         if diag.redundant.is_empty() {
             continue;
         }
-        // Opt-in per `classify_redundant`'s own doc comment (one extra solve
-        // per redundant row) — only reached when a partition is actually
-        // over-constrained, which is rare, so this never costs anything on
-        // the common "no redundancy" path.
+        let mut seen = HashSet::new();
+        let reportable: Vec<_> = diag
+            .redundant
+            .iter()
+            .copied()
+            .filter(|row| {
+                owner
+                    .iter()
+                    .find(|(rc, _)| Rc::ptr_eq(rc, &sub.constraints()[*row]))
+                    .is_some_and(|(_, id)| seen.insert(*id))
+            })
+            .collect();
         for (row, kind) in
-            cadkernel_constraints::diagnosis::classify_redundant(sub, sys.store(), &diag.redundant)
+            cadkernel_constraints::diagnosis::classify_redundant(sub, sys.store(), &reportable)
         {
             let row_constraint = &sub.constraints()[row];
             if let Some(&(_, id)) = owner.iter().find(|(rc, _)| Rc::ptr_eq(rc, row_constraint)) {
@@ -1394,6 +1850,54 @@ fn solve_scope(
                     results.push((handle, EntityType::Line(updated)));
                 }
             }
+            (EntityType::Ray(ray), EntityGeom::Ray(g)) => {
+                let (x1, y1, x2, y2) = (
+                    store.get(g.p1.x),
+                    store.get(g.p1.y),
+                    store.get(g.p2.x),
+                    store.get(g.p2.y),
+                );
+                let length = (x2 - x1).hypot(y2 - y1);
+                let direction = if length > MOVE_EPS {
+                    Vector3::new((x2 - x1) / length, (y2 - y1) / length, 0.0)
+                } else {
+                    ray.direction
+                };
+                if (x1 - ray.base_point.x).abs() > MOVE_EPS
+                    || (y1 - ray.base_point.y).abs() > MOVE_EPS
+                    || (direction - ray.direction).length() > MOVE_EPS
+                {
+                    let mut updated = ray.clone();
+                    updated.base_point.x = x1;
+                    updated.base_point.y = y1;
+                    updated.direction = direction;
+                    results.push((handle, EntityType::Ray(updated)));
+                }
+            }
+            (EntityType::XLine(line), EntityGeom::XLine(g)) => {
+                let (x1, y1, x2, y2) = (
+                    store.get(g.p1.x),
+                    store.get(g.p1.y),
+                    store.get(g.p2.x),
+                    store.get(g.p2.y),
+                );
+                let length = (x2 - x1).hypot(y2 - y1);
+                let direction = if length > MOVE_EPS {
+                    Vector3::new((x2 - x1) / length, (y2 - y1) / length, 0.0)
+                } else {
+                    line.direction
+                };
+                if (x1 - line.base_point.x).abs() > MOVE_EPS
+                    || (y1 - line.base_point.y).abs() > MOVE_EPS
+                    || (direction - line.direction).length() > MOVE_EPS
+                {
+                    let mut updated = line.clone();
+                    updated.base_point.x = x1;
+                    updated.base_point.y = y1;
+                    updated.direction = direction;
+                    results.push((handle, EntityType::XLine(updated)));
+                }
+            }
             (EntityType::LwPolyline(polyline), EntityGeom::Polyline { points, .. }) => {
                 let mut updated = polyline.clone();
                 let mut changed = false;
@@ -1515,6 +2019,41 @@ fn solve_scope(
                     results.push((handle, EntityType::Ellipse(updated)));
                 }
             }
+            (EntityType::Spline(spline), EntityGeom::Spline { curve, control_z }) => {
+                let mut changed =
+                    spline.fit_points.len() > 0 || spline.control_points.len() != curve.poles.len();
+                let control_points: Vec<_> = curve
+                    .poles
+                    .iter()
+                    .zip(control_z.iter())
+                    .enumerate()
+                    .map(|(index, (point, z))| {
+                        let next = Vector3::new(store.get(point.x), store.get(point.y), *z);
+                        changed |= spline
+                            .control_points
+                            .get(index)
+                            .is_none_or(|old| (next - *old).length() > MOVE_EPS);
+                        next
+                    })
+                    .collect();
+                if changed {
+                    let mut updated = spline.clone();
+                    updated.degree = curve.degree as i32;
+                    updated.knots = curve.knots.clone();
+                    updated.control_points = control_points;
+                    updated.weights = curve.weights.iter().map(|id| store.get(*id)).collect();
+                    updated.fit_points.clear();
+                    updated.begin_tangent = Vector3::ZERO;
+                    updated.end_tangent = Vector3::ZERO;
+                    updated.flags.rational = updated
+                        .weights
+                        .windows(2)
+                        .any(|pair| (pair[0] - pair[1]).abs() > 1.0e-12);
+                    updated.flags.closed = curve.periodic;
+                    updated.flags.periodic = curve.periodic;
+                    results.push((handle, EntityType::Spline(updated)));
+                }
+            }
             _ => {}
         }
     }
@@ -1525,10 +2064,10 @@ fn solve_scope(
 impl Scene {
     /// Rejects constraints the 2D kernel bridge cannot represent before they
     /// are persisted or reported as applied.
-    pub(crate) fn validate_sketch_constraint(
+    pub(crate) fn validate_parametric_constraint(
         &self,
         kind: ConstraintKind,
-        refs: &[SketchRef],
+        refs: &[ParametricRef],
         driving_param: Option<&super::named_parameters::DrivingValue>,
     ) -> Result<(), &'static str> {
         if !refs_share_supported_plane(&self.document, refs) {
@@ -1580,12 +2119,17 @@ impl Scene {
             }
             value => value.cloned(),
         };
-        let candidate = SketchConstraint {
+        let candidate = ParametricConstraint {
             id: 0,
             kind,
             refs: refs.to_vec(),
             driving_param: validation_target,
             enabled: true,
+            native_origin: None,
+            rigid_points: Vec::new(),
+            distance_direction_type: 0,
+            distance_direction: None,
+            angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
         };
         let mut system = System::new();
         let mut cache = HashMap::new();
@@ -1607,7 +2151,7 @@ impl Scene {
     /// the resulting `(Handle, ChangeKind::Modified)` entries the same way
     /// `refresh_associative_dimensions`/`_hatches` do, for `bump_entities`
     /// to fold into its own `changes` vec.
-    pub(crate) fn refresh_sketch_constraints(
+    pub(crate) fn refresh_parametric_constraints(
         &mut self,
         changes: &[(Handle, ChangeKind)],
     ) -> Vec<(Handle, ChangeKind)> {
@@ -1619,7 +2163,7 @@ impl Scene {
         //
         // Recorded into the *same* undo transaction as the entity removal
         // that caused it (audit finding: ERASE undo silently lost constraint
-        // state, since `sketch_constraints` lives outside `document`/
+        // state, since `parametric_constraints` lives outside `document`/
         // `document.objects` and neither of those directories ever saw this
         // mutation) — one undo press now restores both the entity and its
         // constraints together.
@@ -1627,24 +2171,24 @@ impl Scene {
             if *kind != ChangeKind::Removed {
                 continue;
             }
-            for i in 0..self.sketch_constraints.len() {
-                if self.sketch_constraints[i]
-                    .constraints_touching(*handle)
-                    .next()
-                    .is_some()
+            for i in 0..self.parametric_constraints.len() {
+                if self.parametric_constraints[i]
+                    .constraints
+                    .iter()
+                    .any(|constraint| constraint.refs.iter().any(|r| r.entity == *handle))
                 {
-                    let scope = self.sketch_constraints[i].scope;
-                    let before = self.sketch_constraints[i].clone();
-                    self.record_undo_sketch_constraints_before(scope, before);
-                    self.sketch_constraints[i].remove_all_touching(*handle);
+                    let scope = self.parametric_constraints[i].scope;
+                    let before = self.parametric_constraints[i].clone();
+                    self.record_undo_parametric_constraints_before(scope, before);
+                    self.parametric_constraints[i].remove_all_touching(*handle);
                 }
             }
         }
 
         let mut result = Vec::new();
-        for i in 0..self.sketch_constraints.len() {
+        for i in 0..self.parametric_constraints.len() {
             let touched = changes.iter().any(|(handle, _)| {
-                self.sketch_constraints[i]
+                self.parametric_constraints[i]
                     .constraints_touching(*handle)
                     .next()
                     .is_some()
@@ -1655,12 +2199,12 @@ impl Scene {
             let Some((solved, dof, conflicts)) = solve_scope(
                 &self.document,
                 &self.named_parameters,
-                &self.sketch_constraints[i],
+                &self.parametric_constraints[i],
             ) else {
                 continue;
             };
-            self.sketch_constraints[i].dof = Some(dof);
-            self.sketch_constraints[i].conflicts = conflicts;
+            self.parametric_constraints[i].dof = Some(dof);
+            self.parametric_constraints[i].conflicts = conflicts;
             for (handle, new_entity) in solved {
                 if let Some(before) = self.document.get_entity_arc(handle) {
                     self.record_undo_before(handle, Some(before));
@@ -1677,15 +2221,15 @@ impl Scene {
     /// Re-solves touched scopes during a grip drag without mutating the
     /// document or recording undo. The caller owns preview write-back and the
     /// final gesture history entry.
-    pub(crate) fn solve_sketch_constraints_preview(
+    pub(crate) fn solve_parametric_constraints_preview(
         &self,
         touched: &[Handle],
     ) -> Vec<(Handle, EntityType)> {
-        if self.sketch_constraints.is_empty() || touched.is_empty() {
+        if self.parametric_constraints.is_empty() || touched.is_empty() {
             return Vec::new();
         }
         let mut result = Vec::new();
-        for set in &self.sketch_constraints {
+        for set in &self.parametric_constraints {
             let is_touched = touched
                 .iter()
                 .any(|handle| set.constraints_touching(*handle).next().is_some());
@@ -1706,8 +2250,8 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::super::named_parameters::DrivingValue;
-    use super::super::sketch_constraints::{
-        ConstraintKind, SketchConstraintSet, SketchRef, SketchScope,
+    use super::super::parametric_constraints::{
+        ConstraintKind, ParametricConstraintSet, ParametricRef, ParametricScope,
     };
     use super::Scene;
     use acadrust::entities::EntityType;
@@ -1720,9 +2264,9 @@ mod tests {
             acadrust::entities::Circle::from_center_radius(Vector3::ZERO, 2.0),
         ));
         assert!(scene
-            .validate_sketch_constraint(
+            .validate_parametric_constraint(
                 ConstraintKind::Horizontal,
-                &[SketchRef::whole(circle)],
+                &[ParametricRef::whole(circle)],
                 None
             )
             .is_err());
@@ -1736,9 +2280,9 @@ mod tests {
             Vector3::new(1.0, 0.0, 1.0),
         )));
         assert!(scene
-            .validate_sketch_constraint(
+            .validate_parametric_constraint(
                 ConstraintKind::Parallel,
-                &[SketchRef::whole(lower), SketchRef::whole(upper)],
+                &[ParametricRef::whole(lower), ParametricRef::whole(upper)],
                 None,
             )
             .is_err());
@@ -1751,23 +2295,23 @@ mod tests {
             Vector3::new(0.0, 0.0, 0.0),
             Vector3::new(1.0, 0.0, 0.0),
         )));
-        let refs = [SketchRef::point(line, 0), SketchRef::point(line, 1)];
+        let refs = [ParametricRef::point(line, 0), ParametricRef::point(line, 1)];
         assert!(scene
-            .validate_sketch_constraint(
+            .validate_parametric_constraint(
                 ConstraintKind::Distance,
                 &refs,
                 Some(&DrivingValue::Literal(-1.0)),
             )
             .is_err());
         assert!(scene
-            .validate_sketch_constraint(
+            .validate_parametric_constraint(
                 ConstraintKind::DistanceX,
                 &refs,
                 Some(&DrivingValue::Literal(-1.0)),
             )
             .is_ok());
         assert!(scene
-            .validate_sketch_constraint(
+            .validate_parametric_constraint(
                 ConstraintKind::DistanceX,
                 &refs,
                 Some(&DrivingValue::Literal(f64::NAN)),
@@ -1775,9 +2319,47 @@ mod tests {
             .is_err());
     }
 
+    #[test]
+    fn ray_and_construction_line_constraints_solve_through_the_kernel() {
+        let mut scene = Scene::new();
+        let ray = scene.add_entity(EntityType::Ray(acadrust::entities::Ray::new(
+            Vector3::ZERO,
+            Vector3::new(1.0, 1.0, 0.0),
+        )));
+        let xline = scene.add_entity(EntityType::XLine(acadrust::entities::XLine::new(
+            Vector3::new(5.0, 5.0, 0.0),
+            Vector3::new(1.0, 1.0, 0.0),
+        )));
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        set.add(
+            ConstraintKind::Horizontal,
+            vec![ParametricRef::whole(ray)],
+            None,
+        );
+        set.add(
+            ConstraintKind::Vertical,
+            vec![ParametricRef::whole(xline)],
+            None,
+        );
+
+        scene.refresh_parametric_constraints(&[
+            (ray, super::ChangeKind::Modified),
+            (xline, super::ChangeKind::Modified),
+        ]);
+
+        let Some(EntityType::Ray(ray)) = scene.document.get_entity(ray) else {
+            panic!("expected ray")
+        };
+        assert!(ray.direction.y.abs() < 1e-7);
+        let Some(EntityType::XLine(xline)) = scene.document.get_entity(xline) else {
+            panic!("expected construction line")
+        };
+        assert!(xline.direction.x.abs() < 1e-7);
+    }
+
     // The bulk of this stage's coverage (Horizontal/Parallel/Distance/
     // Coincident solving, unrelated edits not triggering a resolve) lives
-    // in `tests/sketch_constraints_solve.rs`, which only needs `pub` API.
+    // in `tests/parametric_constraints_solve.rs`, which only needs `pub` API.
     // This one test needs `record_undo_before`/`take_undo_recording`
     // (`pub(crate)`), so it stays internal.
     #[test]
@@ -1792,13 +2374,13 @@ mod tests {
             Vector3::new(10.0, 5.0, 0.0),
         )));
 
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         set.add(
             ConstraintKind::Parallel,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
-        scene.sketch_constraints.push(set);
+        scene.parametric_constraints.push(set);
 
         scene.begin_undo_recording();
         // A real command (Move, grip-drag commit, ...) records its own
@@ -1813,7 +2395,7 @@ mod tests {
             .take_undo_recording()
             .expect("an undo recording should still be open");
 
-        let (entities, _objects, _sketch_constraints, _named_parameters) =
+        let (entities, _objects, _parametric_constraints, _named_parameters) =
             recording.into_recorded_images();
         let touched: std::collections::HashSet<_> = entities.iter().map(|(h, _)| *h).collect();
         assert!(
@@ -1840,15 +2422,15 @@ mod tests {
             Vector3::new(20.0, 5.0, 0.0),
         )));
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Coincident,
-                vec![SketchRef::point(a, 1), SketchRef::point(b, 0)],
+                vec![ParametricRef::point(a, 1), ParametricRef::point(b, 0)],
                 None,
             );
         assert_eq!(
             scene
-                .sketch_constraint_set(SketchScope::ModelSpace)
+                .parametric_constraint_set(ParametricScope::ModelSpace)
                 .unwrap()
                 .constraints
                 .len(),
@@ -1861,7 +2443,7 @@ mod tests {
         // Ensure the test exercises restoration rather than a no-op.
         assert_eq!(
             scene
-                .sketch_constraint_set(SketchScope::ModelSpace)
+                .parametric_constraint_set(ParametricScope::ModelSpace)
                 .map_or(0, |s| s.constraints.len()),
             0,
             "the constraint touching the erased line should be gone from the live set"
@@ -1870,15 +2452,15 @@ mod tests {
         let recording = scene
             .take_undo_recording()
             .expect("an undo recording should still be open");
-        let (_entities, _objects, sketch_constraints, _named_parameters) =
+        let (_entities, _objects, parametric_constraints, _named_parameters) =
             recording.into_recorded_images();
         assert_eq!(
-            sketch_constraints.len(),
+            parametric_constraints.len(),
             1,
             "the touched scope's before-image must be captured"
         );
-        let (scope, before) = &sketch_constraints[0];
-        assert_eq!(*scope, SketchScope::ModelSpace);
+        let (scope, before) = &parametric_constraints[0];
+        assert_eq!(*scope, ParametricScope::ModelSpace);
         assert_eq!(
             before.constraints.len(),
             1,
@@ -1887,15 +2469,15 @@ mod tests {
         assert_eq!(before.constraints[0].kind, ConstraintKind::Coincident);
         assert_eq!(
             before.constraints[0].refs,
-            vec![SketchRef::point(a, 1), SketchRef::point(b, 0)]
+            vec![ParametricRef::point(a, 1), ParametricRef::point(b, 0)]
         );
 
         // What `apply_delta_state` does with this on undo: install the
         // before-image back as the live scope state.
-        *scene.sketch_constraint_set_mut(*scope) = before.clone();
+        *scene.parametric_constraint_set_mut(*scope) = before.clone();
         assert_eq!(
             scene
-                .sketch_constraint_set(SketchScope::ModelSpace)
+                .parametric_constraint_set(ParametricScope::ModelSpace)
                 .unwrap()
                 .constraints
                 .len(),
@@ -1904,7 +2486,7 @@ mod tests {
         );
     }
 
-    /// `solve_sketch_constraints_preview` reports the constrained
+    /// `solve_parametric_constraints_preview` reports the constrained
     /// neighbor's solved position without writing anything into the
     /// document itself — the grip-drag caller owns applying it.
     #[test]
@@ -1918,13 +2500,13 @@ mod tests {
             Vector3::new(0.0, 5.0, 0.0),
             Vector3::new(10.0, 5.0, 0.0),
         )));
-        let mut set = SketchConstraintSet::new(SketchScope::ModelSpace);
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
         set.add(
             ConstraintKind::Parallel,
-            vec![SketchRef::whole(a), SketchRef::whole(b)],
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
             None,
         );
-        scene.sketch_constraints.push(set);
+        scene.parametric_constraints.push(set);
 
         // Simulate a live grip drag: mutate `a` directly (as `apply_grip`
         // would each frame), without going through `bump_entities` at all.
@@ -1933,7 +2515,7 @@ mod tests {
         }
         let b_before = scene.document.get_entity(b).cloned();
 
-        let solved = scene.solve_sketch_constraints_preview(&[a]);
+        let solved = scene.solve_parametric_constraints_preview(&[a]);
 
         assert_eq!(
             scene.document.get_entity(b),
@@ -1970,6 +2552,132 @@ mod tests {
     }
 
     #[test]
+    fn rigid_set_preserves_relative_geometry_after_one_member_moves() {
+        let mut scene = Scene::new();
+        let a = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        )));
+        let b = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::new(0.0, 5.0, 0.0),
+            Vector3::new(10.0, 5.0, 0.0),
+        )));
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
+        set.add(
+            ConstraintKind::RigidSet,
+            vec![ParametricRef::whole(a), ParametricRef::whole(b)],
+            None,
+        );
+        set.constraints[0].rigid_points = vec![
+            (ParametricRef::point(a, 0), Vector3::new(0.0, 0.0, 0.0)),
+            (ParametricRef::point(a, 1), Vector3::new(10.0, 0.0, 0.0)),
+            (ParametricRef::point(b, 0), Vector3::new(0.0, 5.0, 0.0)),
+            (ParametricRef::point(b, 1), Vector3::new(10.0, 5.0, 0.0)),
+        ];
+        scene.parametric_constraints.push(set);
+
+        if let Some(EntityType::Line(line)) = scene.document.get_entity_mut(b) {
+            line.start.y += 10.0;
+            line.end.y += 10.0;
+        }
+        scene.bump_entities(&[(b, super::ChangeKind::Modified)]);
+
+        let endpoints = |handle| {
+            let EntityType::Line(line) = scene.document.get_entity(handle).unwrap() else {
+                panic!("expected a line")
+            };
+            (line.start, line.end)
+        };
+        let (a0, a1) = endpoints(a);
+        let (b0, b1) = endpoints(b);
+        let distance = |first: Vector3, second: Vector3| {
+            let delta = second - first;
+            (delta.x * delta.x + delta.y * delta.y).sqrt()
+        };
+        assert!((distance(a0, a1) - 10.0).abs() < 1.0e-6);
+        assert!((distance(b0, b1) - 10.0).abs() < 1.0e-6);
+        assert!((distance(a0, b0) - 5.0).abs() < 1.0e-6);
+        assert!((distance(a1, b1) - 5.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn implicit_midpoint_recomputes_with_its_parent_line() {
+        let mut scene = Scene::new();
+        let carrier = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        )));
+        let anchor = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::new(7.0, 3.0, 0.0),
+            Vector3::new(7.0, 8.0, 0.0),
+        )));
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        set.add(
+            ConstraintKind::Fixed,
+            vec![ParametricRef::whole(anchor)],
+            None,
+        );
+        set.add(
+            ConstraintKind::Coincident,
+            vec![
+                ParametricRef::point(carrier, -2),
+                ParametricRef::point(anchor, 0),
+            ],
+            None,
+        );
+
+        scene.bump_entities(&[(carrier, super::ChangeKind::Modified)]);
+
+        let EntityType::Line(line) = scene.document.get_entity(carrier).unwrap() else {
+            panic!("expected line");
+        };
+        let midpoint = (line.start + line.end) * 0.5;
+        assert!((midpoint - Vector3::new(7.0, 3.0, 0.0)).length() < 1.0e-7);
+    }
+
+    #[test]
+    fn spline_endpoint_participates_in_the_kernel_constraint_system() {
+        let mut scene = Scene::new();
+        let spline = scene.add_entity(EntityType::Spline(
+            acadrust::entities::Spline::from_control_points(
+                3,
+                vec![
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::new(2.0, 1.0, 0.0),
+                    Vector3::new(4.0, 1.0, 0.0),
+                    Vector3::new(6.0, 0.0, 0.0),
+                ],
+            ),
+        ));
+        let anchor = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::new(9.0, 4.0, 0.0),
+            Vector3::new(9.0, 7.0, 0.0),
+        )));
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        set.add(
+            ConstraintKind::Fixed,
+            vec![ParametricRef::whole(anchor)],
+            None,
+        );
+        set.add(
+            ConstraintKind::Coincident,
+            vec![
+                ParametricRef::point(spline, 1),
+                ParametricRef::point(anchor, 0),
+            ],
+            None,
+        );
+
+        scene.bump_entities(&[(anchor, super::ChangeKind::Modified)]);
+
+        let EntityType::Spline(spline) = scene.document.get_entity(spline).unwrap() else {
+            panic!("expected spline");
+        };
+        let end = spline.control_points.last().copied().unwrap();
+        assert!((end - Vector3::new(9.0, 4.0, 0.0)).length() < 1.0e-7);
+    }
+
+    #[test]
     fn smooth_constraint_recomputes_the_spline_after_its_target_moves() {
         let mut scene = Scene::new();
         let target = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
@@ -1987,10 +2695,13 @@ mod tests {
         spline.knots = cadkernel::space::clamped_uniform_knots(3, 4);
         let spline = scene.add_entity(EntityType::Spline(spline));
         scene
-            .sketch_constraint_set_mut(SketchScope::ModelSpace)
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
             .add(
                 ConstraintKind::Smooth,
-                vec![SketchRef::point(spline, 0), SketchRef::point(target, 0)],
+                vec![
+                    ParametricRef::point(spline, 0),
+                    ParametricRef::point(target, 0),
+                ],
                 None,
             );
 

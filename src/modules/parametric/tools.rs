@@ -64,9 +64,7 @@ pub mod equal {
         ToolDef {
             id: "ECONSTRAINT",
             label: "Equal",
-            icon: IconKind::Svg(include_bytes!(
-                "../../../assets/icons/constrain/equal.svg"
-            )),
+            icon: IconKind::Svg(include_bytes!("../../../assets/icons/constrain/equal.svg")),
             event: ModuleEvent::Command("ECONSTRAINT".to_string()),
         }
     }
@@ -105,7 +103,7 @@ pub mod concentric {
 /// "the line passes through the circle's center" (a circle's radius is
 /// always normal to its own tangent), so it's built from the same
 /// `PointOnLine` primitive `PointOnCurve` already uses for a point-on-line
-/// case (`sketch_solve.rs`). Distinct from `Perpendicular`, which only
+/// case (`parametric_solve.rs`). Distinct from `Perpendicular`, which only
 /// covers line-to-line.
 pub mod normal {
     use super::*;
@@ -113,9 +111,7 @@ pub mod normal {
         ToolDef {
             id: "NRCONSTRAINT",
             label: "Normal",
-            icon: IconKind::Svg(include_bytes!(
-                "../../../assets/icons/constrain/normal.svg"
-            )),
+            icon: IconKind::Svg(include_bytes!("../../../assets/icons/constrain/normal.svg")),
             event: ModuleEvent::Command("NRCONSTRAINT".to_string()),
         }
     }
@@ -141,9 +137,7 @@ pub mod fixed {
         ToolDef {
             id: "FXCONSTRAINT",
             label: "Fixed",
-            icon: IconKind::Svg(include_bytes!(
-                "../../../assets/icons/constrain/fixed.svg"
-            )),
+            icon: IconKind::Svg(include_bytes!("../../../assets/icons/constrain/fixed.svg")),
             event: ModuleEvent::Command("FXCONSTRAINT".to_string()),
         }
     }

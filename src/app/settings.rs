@@ -283,10 +283,6 @@ pub struct UserSettings {
     /// When true (default), the app (re)registers itself as a .dwg/.dxf/.bak
     /// handler on every launch. Toggle with the FILEASSOC command.
     pub file_assoc_enabled: bool,
-    /// When true, saving also writes sketch constraints as native drawing
-    /// objects alongside the application's own persistence record.
-    #[serde(default)]
-    pub write_dwg_native_constraints: bool,
     /// When true (default), a sketch constraint's viewport pill shows its
     /// glyph plus a driven value or named-parameter name. When false, every
     /// pill shows just the bare glyph, so the value/name text doesn't cover
@@ -418,7 +414,6 @@ impl Default for UserSettings {
             textfill: true,
             backup_on_save: true,
             file_assoc_enabled: true,
-            write_dwg_native_constraints: false,
             show_constraint_values: true,
             savetime_min: 10,
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),

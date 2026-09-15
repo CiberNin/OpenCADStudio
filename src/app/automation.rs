@@ -18,7 +18,7 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::OpenCADStudio;
 
@@ -318,7 +318,9 @@ impl OpenCADStudio {
                         self.tabs[i].scene.clear();
                         self.tabs[i].scene.document = doc;
                         self.tabs[i].scene.load_named_parameters_from_document();
-                        self.tabs[i].scene.load_sketch_constraints_from_document();
+                        self.tabs[i]
+                            .scene
+                            .load_parametric_constraints_from_document();
                         self.tabs[i].scene.material_base_dir = path_buf.parent().map(PathBuf::from);
                         crate::app::style_ops::ensure_standard_styles(
                             &mut self.tabs[i].scene.document,
@@ -1399,7 +1401,8 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         let stale = acadrust::Handle::from(9999);
         app.tabs[app.active_tab].scene.solid_models.insert(
-            stale, cadkernel::brep::make::cuboid([0.0; 3], [1.0; 3]).unwrap(),
+            stale,
+            cadkernel::brep::make::cuboid([0.0; 3], [1.0; 3]).unwrap(),
         );
         let path = std::env::temp_dir().join(format!(
             "ocs_automation_finalize_test_{}.dxf",
@@ -1415,7 +1418,8 @@ mod tests {
         let mut corrupt = acadrust::entities::Circle::new();
         corrupt.center = acadrust::types::Vector3::new(1.0, 1.0, 0.0);
         corrupt.radius = 0.0; // io::is_entity_corrupt rejects a zero-radius circle
-        doc.add_entity(acadrust::EntityType::Circle(corrupt)).unwrap();
+        doc.add_entity(acadrust::EntityType::Circle(corrupt))
+            .unwrap();
         let bytes = crate::io::save_to_bytes(&doc, "dxf", doc.version)
             .expect("save a document containing a corrupt entity");
         std::fs::write(&path, bytes).unwrap();
@@ -1423,19 +1427,29 @@ mod tests {
         let p = path.to_string_lossy().replace('\\', "\\\\");
         let result = app.automation_op(&format!(r#"{{"op":"open","path":"{p}"}}"#));
         assert_eq!(result["ok"], true, "{}", result["error"]);
-        assert_eq!(result["total"], 1, "the corrupt circle must not survive the open");
-        assert_eq!(result["purged"], 1, "the purge count must be reported, matching the UI open path's diagnostics");
+        assert_eq!(
+            result["total"], 1,
+            "the corrupt circle must not survive the open"
+        );
+        assert_eq!(
+            result["purged"], 1,
+            "the purge count must be reported, matching the UI open path's diagnostics"
+        );
 
         let i = app.active_tab;
         assert!(!app.tabs[i].scene.solid_models.contains_key(&stale));
-        assert_eq!(app.tabs[i].scene.material_base_dir.as_deref(), path.parent());
+        assert_eq!(
+            app.tabs[i].scene.material_base_dir.as_deref(),
+            path.parent()
+        );
         assert!(
             app.tabs[i].scene.document.source_path.is_some(),
             "automation open must run the same finalization as a path-based open, which sets source_path (load_bytes alone never does)"
         );
 
         app.tabs[i].scene.solid_models.insert(
-            stale, cadkernel::brep::make::cuboid([0.0; 3], [1.0; 3]).unwrap(),
+            stale,
+            cadkernel::brep::make::cuboid([0.0; 3], [1.0; 3]).unwrap(),
         );
         assert_eq!(app.automation_op(r#"{"op":"new"}"#)["ok"], true);
         assert!(app.tabs[i].scene.solid_models.is_empty());
@@ -1523,26 +1537,41 @@ mod tests {
         // Start LINE
         let _ = app.update(Message::CommandInput("LINE".to_string()));
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("LINE"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
 
         // Type M2P
         let _ = app.update(Message::CommandInput("M2P".to_string()));
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("MTP"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("MTP")
+        );
         assert!(app.tabs[0].suspended_cmd.is_some());
-        assert_eq!(app.tabs[0].suspended_cmd.as_ref().map(|c| c.name()), Some("LINE"));
+        assert_eq!(
+            app.tabs[0].suspended_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
 
         // Point 1: 0,0
         let _ = app.update(Message::CommandInput("0,0".to_string()));
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("MTP"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("MTP")
+        );
 
         // Point 2: 10,20
         let _ = app.update(Message::CommandInput("10,20".to_string()));
         let _ = app.update(Message::CommandSubmit);
 
         // MTP should have finished and restored LINE, with midpoint (5, 10, 0)
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("LINE"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
         assert!(app.tabs[0].suspended_cmd.is_none());
         assert_eq!(app.last_point, Some(glam::DVec3::new(5.0, 10.0, 0.0)));
 
@@ -1561,7 +1590,10 @@ mod tests {
         let _ = app.update(Message::CommandSubmit);
         let _ = app.update(Message::SnapOverrideMtp);
 
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("MTP"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("MTP")
+        );
         assert_eq!(
             app.tabs[0].suspended_cmd.as_ref().map(|c| c.name()),
             Some("LINE")
@@ -1577,17 +1609,26 @@ mod tests {
         // Start LINE
         let _ = app.update(Message::CommandInput("LINE".to_string()));
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("LINE"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
 
         // Type MTP
         let _ = app.update(Message::CommandInput("MTP".to_string()));
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("MTP"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("MTP")
+        );
 
         // Escape during MTP
         let _ = app.update(Message::CommandEscape);
         // Parent LINE must be restored, not cancelled!
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("LINE"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
         assert!(app.tabs[0].suspended_cmd.is_none());
 
         // Escape again cancels LINE
@@ -1605,7 +1646,10 @@ mod tests {
         // Start LINE
         let _ = app.update(Message::CommandInput("LINE".to_string()));
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("LINE"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
 
         // Simulate typing 'm', '2', 'p' character by character
         let _ = app.update(Message::CommandAppendChar("m".to_string()));
@@ -1620,6 +1664,9 @@ mod tests {
 
         // Submit triggers MTP
         let _ = app.update(Message::CommandSubmit);
-        assert_eq!(app.tabs[0].active_cmd.as_ref().map(|c| c.name()), Some("MTP"));
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("MTP")
+        );
     }
 }
