@@ -13,7 +13,7 @@ use cadkernel_constraints::constraints::circle_arc::{C2LDistance, P2CDistance, T
 use cadkernel_constraints::constraints::conic::{
     EqualMajorAxesConic, PointOnEllipse, TangentEllipseLine,
 };
-use cadkernel_constraints::constraints::curve_generic::CurveValue;
+use cadkernel_constraints::constraints::curve_generic::{BoundedArcValue, CurveValue};
 use cadkernel_constraints::constraints::point_line::{
     CenterOfGravity, Difference, Equal, EqualLineLength, MidpointOnLine, P2PDistance,
     Parallel as ParallelConstraint, Perpendicular as PerpendicularConstraint, PointOnLine,
@@ -25,6 +25,8 @@ use cadkernel_constraints::geo::{
     Line as GLine, Point as GPoint,
 };
 use cadkernel_constraints::solvers::dogleg::solve_dl;
+use cadkernel_constraints::solvers::lm::solve_lm;
+use cadkernel_constraints::solvers::SolveStatus;
 use cadkernel_constraints::system::System;
 
 use super::named_parameters::ParameterTable;
@@ -364,7 +366,10 @@ fn register_entity(
             );
             let rad = sys.add_param(a.radius, false);
             let start_angle = sys.add_param(a.start_angle, false);
-            let end_angle = sys.add_param(a.end_angle, false);
+            let end_angle = sys.add_param(
+                a.start_angle + (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU),
+                false,
+            );
             let start_seed = a.start_point();
             let end_seed = a.end_point();
             let start = GPoint::new(
@@ -855,6 +860,15 @@ fn build_constraint(
         resolve_constraint_point(document, sys, cache, r)
     };
 
+    let point_on_bounded_arc = |sys: &mut System, point: GPoint, arc: GArc| {
+        let initial = BoundedArcValue::initial_parameter(sys.store(), point, arc);
+        let parameter = sys.add_param(initial, false);
+        vec![
+            Rc::new(BoundedArcValue::new(point, point.x, arc, parameter)) as Rc<dyn Constraint>,
+            Rc::new(BoundedArcValue::new(point, point.y, arc, parameter)) as Rc<dyn Constraint>,
+        ]
+    };
+
     // `Coincident`/`Concentric`/`CenterPoint` all solve identically — two
     // points (an endpoint, a circle's center via the existing `-3` marker,
     // or a plain point) held equal on both axes. Only the DWG-native class
@@ -1025,14 +1039,7 @@ fn build_constraint(
                     let zero = sys.add_param(0.0, true);
                     vec![Rc::new(P2CDistance::new(circ, p, zero))]
                 }
-                // Same "distance to the underlying circle is zero" relation
-                // as the `Circle` arm — doesn't restrict the point to
-                // within the arc's own sweep, matching that same
-                // pre-existing simplification for `Circle`.
-                EntityGeom::Arc(a) => {
-                    let zero = sys.add_param(0.0, true);
-                    vec![Rc::new(P2CDistance::new(a.circle, p, zero))]
-                }
+                EntityGeom::Arc(a) => point_on_bounded_arc(sys, p, a),
                 EntityGeom::Ellipse(ellipse) => {
                     vec![Rc::new(PointOnEllipse::new(p, ellipse))]
                 }
@@ -1070,14 +1077,8 @@ fn build_constraint(
                                 vec![Rc::new(PointOnLine::new(p, line)) as Rc<dyn Constraint>]
                             })
                             .or_else(|| {
-                                geom.arc_segment(index).map(|segment| {
-                                    let zero = sys.add_param(0.0, true);
-                                    vec![Rc::new(P2CDistance::new(
-                                        segment.arc.circle,
-                                        p,
-                                        zero,
-                                    )) as Rc<dyn Constraint>]
-                                })
+                                geom.arc_segment(index)
+                                    .map(|segment| point_on_bounded_arc(sys, p, segment.arc))
                             })
                     })
                     .unwrap_or_default(),
@@ -1907,33 +1908,6 @@ fn solve_scope(
         }
     }
 
-    // A point explicitly edited by a grip, STRETCH, or Properties is the
-    // driver's target for this solve. Pin its current coordinates for this
-    // solve only so constrained neighbours respond while the chosen point
-    // stays at the exact cursor or typed coordinate.
-    for reference in driven_refs {
-        if !set
-            .constraints
-            .iter()
-            .any(|constraint| constraint.refs.iter().any(|r| r.entity == reference.entity))
-        {
-            continue;
-        }
-        let Some(point) =
-            resolve_constraint_point(document, &mut sys, &mut cache, *reference)
-        else {
-            continue;
-        };
-        let (x, y) = {
-            let store = sys.store();
-            (store.get(point.x), store.get(point.y))
-        };
-        let target_x = sys.add_param(x, true);
-        let target_y = sys.add_param(y, true);
-        sys.add_constraint(Rc::new(Equal::new(point.x, target_x, 1.0)));
-        sys.add_constraint(Rc::new(Equal::new(point.y, target_y, 1.0)));
-    }
-
     // Ellipse rules (same motivation as arc rules, different mechanism):
     // `cadkernel_constraints::geo::Ellipse` stores `focus1` as an absolute point, not an
     // offset from `center`. If some constraint (e.g. Concentric) pulls only
@@ -2030,7 +2004,9 @@ fn solve_scope(
 
     let partitions = sys.partition();
     for sub in &partitions {
-        solve_dl(sub, sys.store_mut());
+        if solve_dl(sub, sys.store_mut()) == SolveStatus::Failed {
+            solve_lm(sub, sys.store_mut());
+        }
     }
     // `System::partition` only includes parameters referenced by a
     // constraint, so an otherwise registered but unconstrained coordinate (e.g. a

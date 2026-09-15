@@ -3599,11 +3599,15 @@ impl OpenCADStudio {
                 // snapshot — the create already pushed one, so the whole object
                 // reverts as a unit.
                 if let Some(old) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                    let old_handle = old.as_entity().handle();
-                    let layer = old.as_entity().layer().to_string();
+                    // The initial live commit assigns the handle, owning block,
+                    // current layer and common display properties.  Geometry
+                    // refreshes must retain all of that identity; replacing only
+                    // the handle and layer reset owner_handle to NULL and made
+                    // the completed entity unavailable to scoped operations such
+                    // as parametric constraints.
+                    let common = old.common().clone();
                     let mut new = entity;
-                    new.as_entity_mut().set_handle(old_handle);
-                    new.as_entity_mut().set_layer(layer);
+                    *new.common_mut() = common;
                     *old = new;
                     self.tabs[i]
                         .scene
@@ -8016,6 +8020,43 @@ mod command_replacement_tests {
         assert_eq!(allocated.len(), 1);
         assert_ne!(allocated[0], handle);
         assert!(app.tabs[tab].scene.document.get_entity(handle).is_none());
+    }
+
+    #[test]
+    fn live_geometry_updates_keep_document_identity_and_display_properties() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let tab = app.active_tab;
+        let handle = app.tabs[tab]
+            .scene
+            .add_entity(acadrust::EntityType::Line(Line::from_points(
+                Vector3::ZERO,
+                Vector3::new(1.0, 0.0, 0.0),
+            )));
+        let expected = {
+            let entity = app.tabs[tab].scene.document.get_entity_mut(handle).unwrap();
+            entity.common_mut().layer = "LIVE".to_string();
+            entity.common_mut().invisible = true;
+            entity.common_mut().linetype_scale = 2.5;
+            entity.common().clone()
+        };
+
+        let _ = app.apply_cmd_result(CmdResult::UpdateLiveEntity {
+            handle,
+            entity: acadrust::EntityType::Line(Line::from_points(
+                Vector3::ZERO,
+                Vector3::new(4.0, 0.0, 0.0),
+            )),
+            finish: false,
+        });
+
+        let updated = app.tabs[tab].scene.document.get_entity(handle).unwrap();
+        assert_eq!(updated.common().handle, expected.handle);
+        assert_eq!(updated.common().owner_handle, expected.owner_handle);
+        assert_eq!(updated.common().layer, expected.layer);
+        assert_eq!(updated.common().invisible, expected.invisible);
+        assert_eq!(updated.common().linetype_scale, expected.linetype_scale);
+        assert!(matches!(updated, acadrust::EntityType::Line(line) if line.end.x == 4.0));
     }
 }
 

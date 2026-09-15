@@ -1866,10 +1866,9 @@ pub enum CmdResult {
     /// as a single unit. The command stays active. Used by PLINE so the partial
     /// polyline is a real, snappable entity while later vertices are placed.
     CommitLiveEntity(EntityType),
-    /// Replace the geometry of the live entity `handle` in place — preserving
-    /// its layer — without pushing a new undo snapshot. When `finish` is true
-    /// the command also exits (the entity is already committed, so no separate
-    /// commit is needed).
+    /// Replace the geometry of the live entity `handle` in place while
+    /// preserving its document identity and common display properties. No new
+    /// undo snapshot is pushed. When `finish` is true the command also exits.
     UpdateLiveEntity {
         handle: Handle,
         entity: EntityType,

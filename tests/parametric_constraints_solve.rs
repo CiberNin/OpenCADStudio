@@ -1197,10 +1197,10 @@ fn an_arcs_endpoint_stays_consistent_with_its_center_radius_and_angle_after_solv
 }
 
 #[test]
-fn point_on_curve_constraint_pulls_a_point_onto_an_arcs_underlying_circle() {
+fn point_on_curve_constraint_keeps_a_point_within_an_arcs_sweep() {
     let mut scene = Scene::new();
     let arc = add_arc(&mut scene, 0.0, 0.0, 5.0, 0.0, std::f64::consts::PI);
-    let marker = add_line(&mut scene, 20.0, 20.0, 21.0, 20.0);
+    let marker = add_line(&mut scene, 0.0, -20.0, 1.0, -20.0);
 
     scene
         .parametric_constraint_set_mut(ParametricScope::ModelSpace)
@@ -1211,12 +1211,73 @@ fn point_on_curve_constraint_pulls_a_point_onto_an_arcs_underlying_circle() {
         );
     scene.bump_entities(&[(marker, ChangeKind::Modified)]);
 
-    let (center, radius) = arc_geom(&scene, arc);
+    let (center, radius, start_angle, end_angle) =
+        match scene.document.get_entity(arc).expect("entity exists") {
+            EntityType::Arc(arc) => (arc.center, arc.radius, arc.start_angle, arc.end_angle),
+            other => panic!("expected an Arc, got {other:?}"),
+        };
     let (p, _) = line_endpoints(&scene, marker);
     let dist = ((p.x - center.x).powi(2) + (p.y - center.y).powi(2)).sqrt();
     assert!(
         (dist - radius).abs() < 1e-6,
-        "point should land exactly on the arc's circle: dist={dist} radius={radius}"
+        "point should land exactly on the arc: dist={dist} radius={radius}"
+    );
+    assert!(
+        cadkernel::geom2d::angle_within_arc(
+            (p.y - center.y).atan2(p.x - center.x),
+            start_angle,
+            end_angle,
+        ),
+        "point must stay within the solved arc sweep: {p:?}"
+    );
+}
+
+#[test]
+fn point_on_curve_constraint_keeps_a_point_within_a_polyline_arc_segment() {
+    let mut source = acadrust::entities::LwPolyline::new();
+    source.add_point_with_bulge(acadrust::types::Vector2::new(0.0, 0.0), 1.0);
+    source.add_point(acadrust::types::Vector2::new(10.0, 0.0));
+    let mut scene = Scene::new();
+    let polyline = scene.add_entity(EntityType::LwPolyline(source));
+    let marker = add_line(&mut scene, 5.0, 20.0, 6.0, 20.0);
+
+    scene
+        .parametric_constraint_set_mut(ParametricScope::ModelSpace)
+        .add(
+            ConstraintKind::PointOnCurve,
+            vec![
+                ParametricRef::point(marker, 0),
+                ParametricRef::segment(polyline, 0),
+            ],
+            None,
+        );
+    scene.bump_entities(&[(marker, ChangeKind::Modified)]);
+
+    let (point, _) = line_endpoints(&scene, marker);
+    let EntityType::LwPolyline(polyline) = scene.document.get_entity(polyline).unwrap() else {
+        panic!("expected a lightweight polyline");
+    };
+    let arc = cadkernel::geom2d::BulgeArc::from_bulge(
+        [
+            polyline.vertices[0].location.x,
+            polyline.vertices[0].location.y,
+        ],
+        [
+            polyline.vertices[1].location.x,
+            polyline.vertices[1].location.y,
+        ],
+        polyline.vertices[0].bulge,
+    )
+    .unwrap();
+    let distance = (point.x - arc.center[0]).hypot(point.y - arc.center[1]);
+    assert!((distance - arc.radius).abs() < 1e-6);
+    assert!(
+        cadkernel::geom2d::angle_within_arc(
+            (point.y - arc.center[1]).atan2(point.x - arc.center[0]),
+            arc.start_angle,
+            arc.start_angle + arc.sweep,
+        ),
+        "point must stay within the solved polyline arc segment: {point:?}"
     );
 }
 
