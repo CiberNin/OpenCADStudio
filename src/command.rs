@@ -2254,6 +2254,14 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// Definition points acquired so far, in the command's working space.
+    /// Used to retain references only for accepted measuring inputs.
+    fn dimension_acquired_points(&self) -> Vec<DVec3> { Vec::new() }
+
+    /// The next point places annotation rather than acquiring geometry.
+    fn dimension_placement_pending(&self) -> bool { false }
+
+
     fn needs_entity_pick(&self) -> bool {
         false
     }

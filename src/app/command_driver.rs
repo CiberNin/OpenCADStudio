@@ -388,7 +388,9 @@ impl OpenCADStudio {
             // accepted-snap list must stay index-parallel with the points the
             // command collects (PR1). Interactive picks record themselves in
             // the click handler and never reach here.
-            self.record_accepted_snap(None, None, *point);
+            if !self.record_accepted_snap(i, None, None, *point) {
+                return Task::none();
+            }
         }
         if default_start {
             let StepInput::Point(point) = &input else {
@@ -402,6 +404,7 @@ impl OpenCADStudio {
             self.push_ucs_to_cmd(i);
         }
         if let StepInput::EntityPick(handle, point) = &input {
+            if !self.dimension_acquisition_allowed(i, None) { return Task::none(); }
             let solid_pick = matches!(
                 self.tabs[i].scene.document.get_entity(*handle),
                 Some(
@@ -474,6 +477,7 @@ impl OpenCADStudio {
         }
         let ctrl = self.ctrl_down;
         let shift = self.shift_down;
+        let picked_handle = if let StepInput::EntityPick(h, _) = &input { Some(*h) } else { None };
         let result: Option<CmdResult> = {
             let Some(cmd) = self.tabs[i].active_cmd.as_mut() else {
                 return Task::none();
@@ -492,6 +496,10 @@ impl OpenCADStudio {
                 StepInput::Escape => Some(cmd.on_escape()),
             }
         };
+        if let Some(handle) = picked_handle {
+            self.record_dimension_entity_points(i, None, handle, Vec::new());
+        }
+        self.sync_dimension_snaps(i);
         match result {
             Some(r) => self.apply_cmd_result(r),
             None => Task::none(),
@@ -2357,7 +2365,12 @@ impl OpenCADStudio {
                 // A dimension placed on the sheet but measuring model geometry
                 // through a viewport carries the compensation as a negative
                 // DIMLFAC override.
-                self.apply_viewport_dimension_measurement(i, &mut entity);
+                if !preserve_base_style {
+                    crate::scene::creation_style::apply_current_creation_styles(&self.tabs[i].scene.document, &mut entity);
+                }
+                if !self.apply_viewport_dimension_measurement(i, &mut entity) {
+                    return Task::none();
+                }
                 // ...and is deliberately *not* associated in paper space: its
                 // definition points are projected paper coordinates, so a
                 // paper-space association would bind it to geometry that is

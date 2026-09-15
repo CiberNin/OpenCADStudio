@@ -1,262 +1,162 @@
-//! Viewport-aware dimension measurement (PR2).
-//!
-//! A dimension created in a paper-space layout while measuring geometry seen
-//! through a content viewport must *place* itself in paper coordinates but
-//! *report* the model measurement. Because a viewport frame is a similarity
-//! (uniform scale plus in-plane twist), the model measurement of any linear,
-//! aligned or radial span is exactly the raw paper measurement times the
-//! viewport compensation `1 / scale` -- projecting the model span onto the
-//! rotated paper axis and compensating is the same number. So no geometry is
-//! rewritten: the compensation is persisted once, as a negative DIMLFAC
-//! override on the dimension (see
-//! [`MeasurementScale::viewport_dimlfac_override`]), and applied once, by the
-//! linear formatter.
-//!
-//! Angular dimensions are never compensated -- a similarity preserves angles.
-//!
-//! ## Where the snaps come from
-//! The per-point [`AcceptedSnap`] list is PR1's
-//! ([`OpenCADStudio::accepted_snaps`]): the click handler records the real
-//! snap for every interactive pick, and `apply_step_input` records a free
-//! snap for typed / dynamic-input / headless points. There is exactly one
-//! source of truth. Two things are layered on top here:
-//!
-//! * the explicit object-pick path ([`Scene::dimension_pick_through_viewport`])
-//!   is not a point step at all, so it records its own snaps
-//!   ([`OpenCADStudio::record_dimension_viewport_pick`]);
-//! * a *typed* coordinate carries no snap, so PR1 records it as a free point
-//!   with no viewport. [`OpenCADStudio::measure_snap`] re-attaches the
-//!   content viewport under such a point, which is what makes
-//!   `DIMLINEAR` + typed coordinates inside a 1:10 viewport measure the model.
-//!   It is deliberately limited to snaps that are free *and* source-less, so a
-//!   genuine paper-sheet snap that happens to sit over a viewport is never
-//!   reinterpreted.
+//! Paper-space dimension acquisition and measurement. Only acquired geometry
+//! carries viewport compensation; free and typed sheet coordinates stay on the sheet.
 
-use acadrust::entities::Dimension;
-use acadrust::types::Handle;
-use acadrust::xdata::XDataValue;
-use acadrust::EntityType;
-use glam::DVec3;
-
+use super::OpenCADStudio;
 use crate::command::DimensionAssociationSource;
 use crate::entities::dim_override;
 use crate::scene::viewport_ref::{AcceptedSnap, MeasurementScale, SnapSourceRef, ViewportFrame};
+use acadrust::entities::Dimension;
+use acadrust::types::Handle;
+use acadrust::EntityType;
+use glam::DVec3;
 
-use super::OpenCADStudio;
-
-/// How a pending dimension should be measured.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DimensionMeasureSpace {
-    /// Plain measurement in the space the definition points live in.
     Direct,
-    /// Every measuring point came through one viewport; compensate by its
-    /// scale.
     Viewport(ViewportFrame),
-    /// The points came from different viewports, or from a viewport and the
-    /// bare sheet. Falls back to `Direct` with a warning — never a silently
-    /// wrong number.
     Mixed,
 }
 
 impl OpenCADStudio {
-    /// Record the accepted snaps produced by the explicit object-pick path (a
-    /// dimension "select object" pick resolved through a content viewport).
-    ///
-    /// An object pick is not a point step, so PR1's click handler never sees
-    /// it. One pick supplies *both* extension origins, so it is recorded
-    /// twice: that keeps the list index-parallel with the definition points
-    /// the command derives from the entity, and lets the "every measuring
-    /// point came through one viewport" classification see a complete set.
-    pub(crate) fn record_dimension_viewport_pick(
+    pub(crate) fn finish_command_click(&mut self, i: usize) {
+        let mut selection = self.tabs[i].scene.selection.borrow_mut();
+        selection.left_down = false;
+        selection.left_press_pos = None;
+        selection.left_press_time = None;
+        selection.left_dragging = false;
+    }
+
+    #[allow(dead_code)] // Consumed by the dependent association change.
+    pub(crate) fn dimension_measuring_snaps(&self, _i: usize) -> Vec<AcceptedSnap> {
+        self.accepted_snaps().to_vec()
+    }
+
+    pub(crate) fn dimension_measure_space(&self, i: usize) -> DimensionMeasureSpace {
+        let scene = &self.tabs[i].scene;
+        if scene.current_layout == "Model" || scene.active_viewport.is_some() {
+            return DimensionMeasureSpace::Direct;
+        }
+        let mut frame: Option<ViewportFrame> = None;
+        let mut direct = false;
+        for snap in self.accepted_snaps() {
+            match snap.frame {
+                Some(f) => match frame {
+                    None => frame = Some(f),
+                    Some(previous) if previous.viewport == f.viewport => {}
+                    Some(_) => return DimensionMeasureSpace::Mixed,
+                },
+                None => direct = true,
+            }
+        }
+        match (frame, direct) {
+            (None, _) => DimensionMeasureSpace::Direct,
+            (Some(f), false) => DimensionMeasureSpace::Viewport(f),
+            _ => DimensionMeasureSpace::Mixed,
+        }
+    }
+
+    /// Reject an incompatible measuring input before it advances the command.
+    pub(crate) fn dimension_acquisition_allowed(
         &mut self,
-        frame: ViewportFrame,
-        paper_point: DVec3,
-        model_point: DVec3,
+        i: usize,
+        viewport: Option<Handle>,
+    ) -> bool {
+        if !self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .is_some_and(|c| c.measures_through_viewports())
+        {
+            return true;
+        }
+        if self.accepted_snaps().iter().any(|s| s.viewport != viewport) {
+            self.command_line.push_error(crate::t!("Pick geometry from the same viewport, or use paper-space points for the whole dimension.").as_ref());
+            return false;
+        }
+        true
+    }
+
+    /// A command can reject a degenerate point without advancing its step.
+    pub(crate) fn sync_dimension_snaps(&mut self, i: usize) {
+        if let Some(cmd) = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .filter(|c| c.measures_through_viewports())
+        {
+            self.accepted_snaps
+                .truncate(cmd.dimension_acquired_points().len());
+        }
+    }
+
+    /// Record each definition point actually acquired by an object pick.
+    /// Arcs may supply three angular slots, lines two, and radial picks one.
+    pub(crate) fn record_dimension_entity_points(
+        &mut self,
+        i: usize,
+        frame: Option<ViewportFrame>,
         entity: Handle,
         block_path: Vec<Handle>,
     ) {
-        for _ in 0..2 {
+        let Some(cmd) = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .filter(|c| c.measures_through_viewports())
+        else {
+            return;
+        };
+        let points = cmd.dimension_acquired_points();
+        for paper_point in points.into_iter().skip(self.accepted_snaps.len()) {
             self.push_accepted_snap(AcceptedSnap {
                 paper_point,
-                model_point,
-                viewport: Some(frame.viewport),
-                frame: Some(frame),
+                model_point: frame.map_or(paper_point, |f| f.paper_to_model(paper_point)),
+                viewport: frame.map(|f| f.viewport),
+                frame,
                 source: Some(SnapSourceRef {
                     source: DimensionAssociationSource::inferred(entity),
                     block_path: block_path.clone(),
-                    // An object pick acquires the whole curve, not one
-                    // feature; the per-slot feature point is derived from the
-                    // committed dimension's own definition points.
-                    snap_type: crate::snap::SnapType::Nearest,
+                    snap_type: crate::snap::SnapType::ObjectPick,
+                    intersection: None,
                 }),
             });
         }
     }
 
-    /// The accepted snap for the `idx`-th collected point of the active
-    /// command, with the typed-coordinate viewport fallback applied.
-    ///
-    /// Reads PR1's list -- there is no second store.
-    #[allow(dead_code)]
-    pub(crate) fn accepted_snap_for_point(&self, i: usize, idx: usize) -> Option<AcceptedSnap> {
-        self.accepted_snaps().get(idx).map(|snap| self.measure_snap(i, snap))
-    }
-
-    /// One accepted snap as *measurement* sees it.
-    ///
-    /// Identical to the recorded snap except that a point which carries no
-    /// snap at all (a typed coordinate, a dynamic-input point, a headless
-    /// script point) and lands inside a content viewport is re-attached to
-    /// that viewport, so typing `100,50` inside a 1:10 viewport measures the
-    /// model just like clicking there would. A snap that landed on real
-    /// paper-sheet geometry keeps `viewport: None` and is never reinterpreted.
-    pub(crate) fn measure_snap(&self, i: usize, snap: &AcceptedSnap) -> AcceptedSnap {
-        if snap.frame.is_some() || snap.source.is_some() {
-            return snap.clone();
-        }
-        let scene = &self.tabs[i].scene;
-        if scene.current_layout == "Model" || scene.active_viewport.is_some() {
-            return snap.clone();
-        }
-        match scene.viewport_frame_at_paper_point(snap.paper_point) {
-            Some(frame) => AcceptedSnap {
-                paper_point: snap.paper_point,
-                model_point: frame.paper_to_model(snap.paper_point),
-                viewport: Some(frame.viewport),
-                frame: Some(frame),
-                source: None,
-            },
-            None => snap.clone(),
-        }
-    }
-
-    /// The accepted snaps that say what the pending dimension *measures*, in
-    /// collection order.
-    ///
-    /// The final collected point of every dimension command in scope is the
-    /// dimension-line / text placement click, which says nothing about what is
-    /// being measured -- it routinely lands on bare sheet even for a viewport
-    /// measurement, and inside a viewport rectangle even for a plain paper
-    /// one. It is dropped here, which is also why association inference is
-    /// guarded on this set rather than on every recorded snap.
-    pub(crate) fn dimension_measuring_snaps(&self, i: usize) -> Vec<AcceptedSnap> {
-        let all = self.accepted_snaps();
-        let measuring = match all.len() {
-            0 | 1 => all,
-            n => &all[..n - 1],
-        };
-        measuring.iter().map(|snap| self.measure_snap(i, snap)).collect()
-    }
-
-    /// Classify how the pending dimension should be measured from the snaps
-    /// recorded for it.
-    pub(crate) fn dimension_measure_space(&self, i: usize) -> DimensionMeasureSpace {
-        let scene = &self.tabs[i].scene;
-        // Only a dimension being created *on the sheet* can measure through a
-        // viewport. Inside MSPACE the command already works in model space.
-        if scene.current_layout == "Model" || scene.active_viewport.is_some() {
-            return DimensionMeasureSpace::Direct;
-        }
-        let measuring = self.dimension_measuring_snaps(i);
-        let measuring = measuring.as_slice();
-        if measuring.is_empty() {
-            return DimensionMeasureSpace::Direct;
-        }
-        let mut frame: Option<ViewportFrame> = None;
-        let mut any_free = false;
-        for snap in measuring {
-            match snap.frame {
-                Some(f) => match frame {
-                    None => frame = Some(f),
-                    Some(existing) if existing.viewport == f.viewport => {}
-                    Some(_) => return DimensionMeasureSpace::Mixed,
-                },
-                None => any_free = true,
-            }
-        }
-        match (frame, any_free) {
-            (None, _) => DimensionMeasureSpace::Direct,
-            (Some(f), false) => DimensionMeasureSpace::Viewport(f),
-            // One origin through a viewport and the other on the sheet: the
-            // two points are not in a common measurable space.
-            (Some(_), true) => DimensionMeasureSpace::Mixed,
-        }
-    }
-
-    /// Apply viewport compensation to a dimension about to be committed.
-    ///
-    /// Whether the dimension may also take a paper-space association is a
-    /// separate question with the same answer source:
-    /// [`OpenCADStudio::dimension_association_allowed`].
     pub(crate) fn apply_viewport_dimension_measurement(
         &mut self,
         i: usize,
         entity: &mut EntityType,
-    ) {
+    ) -> bool {
         let EntityType::Dimension(dimension) = entity else {
-            return;
+            return true;
         };
-        let is_angular = matches!(
+        let angular = matches!(
             dimension,
             Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)
         );
         let frame = match self.dimension_measure_space(i) {
-            DimensionMeasureSpace::Direct => return,
+            DimensionMeasureSpace::Direct => return true,
             DimensionMeasureSpace::Mixed => {
-                self.command_line.push_warning(
-                    crate::t!(
-                        "Mixed-space measurement is not supported: the extension origins come from different viewports, or from a viewport and the sheet. Measuring in paper space instead (no viewport scale compensation)."
-                    )
-                    .as_ref(),
-                );
-                return;
+                self.command_line.push_error(crate::t!("Pick geometry from the same viewport, or use paper-space points for the whole dimension.").as_ref());
+                return false;
             }
-            DimensionMeasureSpace::Viewport(frame) => frame,
+            DimensionMeasureSpace::Viewport(f) => f,
         };
-
-        // A similarity preserves angles, so an angular dimension reads the
-        // model angle already and needs no override.
-        if is_angular {
-            return;
+        if angular {
+            return true;
         }
-
-        let compensation = frame.paper_to_model_length_factor();
-        let style_dimlfac = self.pending_dimension_style_dimlfac(i, entity);
-        if let Some(value) =
-            MeasurementScale::viewport_dimlfac_override(style_dimlfac, compensation)
-        {
-            // The negative DIMLFAC convention is resolved from the dimension's
-            // owner block, and the commit path (or, with DIMASSOC = 0, the
-            // explode path) reads the entity before `add_entity_to_layout`
-            // assigns one. Stamping the layout block here — the same handle
-            // the add would set — keeps the entity self-describing, so the
-            // text is compensated whichever path consumes it.
-            let layout_block = self.tabs[i].scene.current_layout_block_handle_pub();
-            if layout_block.is_valid() {
-                entity.common_mut().owner_handle = layout_block;
-            }
-            dim_override::set_on_entity(
-                entity,
-                dim_override::DIMLFAC,
-                Some(XDataValue::Real(value)),
-            );
+        let dimlfac = self.pending_dimension_style_dimlfac(i, entity);
+        let scale = MeasurementScale {
+            user_lfac: MeasurementScale::user_lfac_for_space(dimlfac, true),
+            viewport_compensation: frame.paper_to_model_length_factor(),
+        };
+        if !scale.paper_factor().is_finite() || scale.paper_factor() <= 0.0 {
+            return false;
         }
+        // Owner is needed even by DIMASSOC=0's explode path, before insertion.
+        entity.common_mut().owner_handle = self.tabs[i].scene.current_layout_block_handle_pub();
+        scale.write_to_entity(entity);
+        true
     }
 
-    /// Explicit "select object" pick for a dimension command, resolved through
-    /// a paper-space content viewport.
-    ///
-    /// Paper-space hit testing only sees sheet entities, so a click on model
-    /// geometry displayed inside a viewport finds nothing. This maps the
-    /// cursor into model space through the viewport frame, hit-tests the
-    /// viewport's resident model wires (descending into block instances and
-    /// baking the instance transform), then hands the command a copy of the
-    /// picked entity projected onto the sheet. The commands therefore keep
-    /// working entirely in paper coordinates, and the measurement is
-    /// compensated at commit time like any other viewport measurement.
-    ///
-    /// Returns `None` when the click is not inside a content viewport or hits
-    /// nothing, so the caller falls back to the ordinary paper-space pick.
     pub(crate) fn try_dimension_viewport_entity_pick(
         &mut self,
         i: usize,
@@ -266,42 +166,38 @@ impl OpenCADStudio {
         let pick = self.tabs[i]
             .scene
             .dimension_pick_through_viewport(paper, aperture_paper)?;
-        self.record_dimension_viewport_pick(
-            pick.frame,
-            pick.paper_point,
-            pick.model_point,
-            pick.entity_handle,
-            pick.block_path.clone(),
-        );
+        if !self.dimension_acquisition_allowed(i, Some(pick.frame.viewport)) {
+            return Some(crate::command::CmdResult::NeedPoint);
+        }
         let command = self.tabs[i].active_cmd.as_mut()?;
         command.inject_picked_entity(pick.paper_entity);
-        Some(command.on_entity_pick(pick.entity_handle, pick.paper_point))
+        let result = command.on_entity_pick(pick.entity_handle, pick.paper_point);
+        self.record_dimension_entity_points(
+            i,
+            Some(pick.frame),
+            pick.entity_handle,
+            pick.block_path,
+        );
+        Some(result)
     }
 
-    /// The DIMLFAC the pending dimension would inherit *without* a viewport
-    /// override: its own existing override if it has one, otherwise its named
-    /// dimension style's value.
     fn pending_dimension_style_dimlfac(&self, i: usize, entity: &EntityType) -> f64 {
         let EntityType::Dimension(dimension) = entity else {
             return 1.0;
         };
-        if let Some(value) = dim_override::real(
+        dim_override::real(
             &dimension.base().common.extended_data,
             dim_override::DIMLFAC,
-        ) {
-            return value;
-        }
-        let name = dimension.base().style_name.as_str();
-        self.tabs[i]
-            .scene
-            .document
-            .dim_styles
-            .iter()
-            .find(|style| {
-                style.name.eq_ignore_ascii_case(name)
-                    || (name.trim().is_empty() && style.name.eq_ignore_ascii_case("Standard"))
-            })
-            .map(|style| style.dimlfac)
-            .unwrap_or(1.0)
+        )
+        .or_else(|| {
+            self.tabs[i]
+                .scene
+                .document
+                .dim_styles
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(&dimension.base().style_name))
+                .map(|s| s.dimlfac)
+        })
+        .unwrap_or(1.0)
     }
 }

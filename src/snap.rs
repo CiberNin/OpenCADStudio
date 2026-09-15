@@ -97,6 +97,10 @@ pub struct SnapResult {
     /// INSERT handle; the block path is resolved later by
     /// [`crate::scene::viewport_ref::SnapSourceRef::block_path`]. (PR1)
     pub source: Option<DimensionAssociationSource>,
+    /// Second real object at an intersection, when both objects are known.
+    pub secondary_source: Option<DimensionAssociationSource>,
+    /// Original model point when `world` has been projected onto a sheet.
+    pub model_point: Option<glam::DVec3>,
 }
 
 impl SnapResult {
@@ -984,6 +988,8 @@ impl Snapper {
             extension_dir: None,
                         viewport: None,
                         source: None,
+                        secondary_source: None,
+                        model_point: None,
         })
     }
 
@@ -1119,6 +1125,8 @@ impl Snapper {
                         extension_dir: None,
                         viewport: None,
                         source: None,
+                        secondary_source: None,
+                        model_point: None,
                     });
                     best_rank = snap_tier(SnapType::Grid);
                     best_sub = snap_priority(SnapType::Grid);
@@ -1216,7 +1224,7 @@ impl Snapper {
 
         let mut try_pt = |world: glam::DVec3,
                           snap_type: SnapType,
-                          src: Option<DimensionAssociationSource>| {
+                          src: Option<DimensionAssociationSource>, secondary: Option<DimensionAssociationSource>| {
             let screen = world_to_screen(world, view_rot, eye, bounds);
             if !in_bounds(screen) {
                 return;
@@ -1245,6 +1253,8 @@ impl Snapper {
                     extension_dir: None,
                         viewport: None,
                         source: src,
+                        secondary_source: secondary,
+                        model_point: None,
                 });
             }
         };
@@ -1262,7 +1272,7 @@ impl Snapper {
                 SnapHint::Endpoint => SnapType::Endpoint,
             };
             if self.is_on(snap_type) {
-                try_pt(world, snap_type, src);
+                try_pt(world, snap_type, src, None);
             }
         };
         if let Some(points) = wires.snap_points() {
@@ -1298,8 +1308,7 @@ impl Snapper {
                     try_pt(
                         DVec3::from_array(point),
                         SnapType::Endpoint,
-                        wire_source(wire),
-                    );
+                        wire_source(wire), None);
                 }
                 // Tessellated open curves have no key-vertex set. Their only
                 // endpoints are first/last, so testing candidate wires remains
@@ -1313,14 +1322,13 @@ impl Snapper {
                         continue;
                     }
                     if !wire.points.is_empty() {
-                        try_pt(wp_f64(wire, 0), SnapType::Endpoint, wire_source(wire));
+                        try_pt(wp_f64(wire, 0), SnapType::Endpoint, wire_source(wire), None);
                     }
                     if wire.points.len() > 1 {
                         try_pt(
                             wp_f64(wire, wire.points.len() - 1),
                             SnapType::Endpoint,
-                            wire_source(wire),
-                        );
+                            wire_source(wire), None);
                     }
                 }
             } else {
@@ -1328,7 +1336,7 @@ impl Snapper {
                     let src = wire_source(wire);
                     if !wire.key_vertices.is_empty() {
                         for &point in &wire.key_vertices {
-                            try_pt(DVec3::from_array(point), SnapType::Endpoint, src);
+                            try_pt(DVec3::from_array(point), SnapType::Endpoint, src, None);
                         }
                     } else {
                         let closed = wire
@@ -1337,14 +1345,13 @@ impl Snapper {
                             .any(|(_, hint)| matches!(hint, SnapHint::Quadrant));
                         if !closed {
                             if !wire.points.is_empty() {
-                                try_pt(wp_f64(wire, 0), SnapType::Endpoint, src);
+                                try_pt(wp_f64(wire, 0), SnapType::Endpoint, src, None);
                             }
                             if wire.points.len() > 1 {
                                 try_pt(
                                     wp_f64(wire, wire.points.len() - 1),
                                     SnapType::Endpoint,
-                                    src,
-                                );
+                                    src, None);
                             }
                         }
                     }
@@ -1371,7 +1378,7 @@ impl Snapper {
                     let a = DVec3::from_array(a);
                     let b = DVec3::from_array(b);
                     if a.distance_squared(b) > 1e-12 {
-                        try_pt((a + b) * 0.5, SnapType::Midpoint, wire_source(wire));
+                        try_pt((a + b) * 0.5, SnapType::Midpoint, wire_source(wire), None);
                     }
                 }
             } else {
@@ -1381,7 +1388,7 @@ impl Snapper {
                         let a = DVec3::from_array(segment[0]);
                         let b = DVec3::from_array(segment[1]);
                         if a.distance_squared(b) > 1e-12 {
-                            try_pt((a + b) * 0.5, SnapType::Midpoint, src);
+                            try_pt((a + b) * 0.5, SnapType::Midpoint, src, None);
                         }
                     }
                 }
@@ -1395,8 +1402,7 @@ impl Snapper {
                     try_pt(
                         nearest_on_segment(cursor_world, seg.a, seg.b),
                         SnapType::Nearest,
-                        wires.source_wire(seg.wire).and_then(wire_source),
-                    );
+                        wires.source_wire(seg.wire).and_then(wire_source), None);
                 }
             } else {
                 for wire in in_range_wires.iter() {
@@ -1404,7 +1410,7 @@ impl Snapper {
                     for i in 0..wire.points.len().saturating_sub(1) {
                         let p =
                             nearest_on_segment(cursor_world, wp_f64(wire, i), wp_f64(wire, i + 1));
-                        try_pt(p, SnapType::Nearest, src);
+                        try_pt(p, SnapType::Nearest, src, None);
                     }
                 }
             }
@@ -1420,8 +1426,7 @@ impl Snapper {
                             try_pt(
                                 foot,
                                 SnapType::Perpendicular,
-                                wires.source_wire(seg.wire).and_then(wire_source),
-                            );
+                                wires.source_wire(seg.wire).and_then(wire_source), None);
                         }
                     }
                 } else {
@@ -1429,7 +1434,7 @@ impl Snapper {
                         let src = wire_source(wire);
                         for i in 0..wire.points.len().saturating_sub(1) {
                             if let Some(foot) = perp_foot(q, wp_f64(wire, i), wp_f64(wire, i + 1)) {
-                                try_pt(foot, SnapType::Perpendicular, src);
+                                try_pt(foot, SnapType::Perpendicular, src, None);
                             }
                         }
                     }
@@ -1450,8 +1455,7 @@ impl Snapper {
                             try_pt(
                                 point,
                                 SnapType::Intersection,
-                                wires.source_wire(segment.wire).and_then(wire_source),
-                            );
+                                wires.source_wire(segment.wire).and_then(wire_source), None);
                         }
                     }
                 }
@@ -1466,7 +1470,7 @@ impl Snapper {
                             wp_f64(wire, index + 1),
                         ) {
                             if (point - origin).length_squared() > 1e-18 {
-                                try_pt(point, SnapType::Intersection, src);
+                                try_pt(point, SnapType::Intersection, src, None);
                             }
                         }
                     }
@@ -1552,7 +1556,7 @@ impl Snapper {
                             // first. PR3 resolves the true pair.
                             let src = wire_source(wire_i);
                             for point in points {
-                                try_pt(point, SnapType::Intersection, src);
+                                try_pt(point, SnapType::Intersection, src, wire_source(wire_j));
                             }
                             resolved_pairs.insert(pair_key(wire_i, wire_j));
                         }
@@ -1586,8 +1590,7 @@ impl Snapper {
                                 try_pt(
                                     pt,
                                     SnapType::Intersection,
-                                    wires.source_wire(a.wire).and_then(wire_source),
-                                );
+                                    wires.source_wire(a.wire).and_then(wire_source), wires.source_wire(b.wire).and_then(wire_source));
                                 if exact_cursor {
                                     break 'intersection_sweep;
                                 }
@@ -1609,7 +1612,7 @@ impl Snapper {
                         if let Some(pts) = exact_curve_intersections(wire_i, wire_j) {
                             let src = wire_source(wire_i);
                             for pt in pts {
-                                try_pt(pt, SnapType::Intersection, src);
+                                try_pt(pt, SnapType::Intersection, src, wire_source(wire_j));
                             }
                             continue;
                         }
@@ -1633,7 +1636,7 @@ impl Snapper {
                                     continue;
                                 }
                                 if let Some(pt) = seg_intersect_3d(a0, a1, b0, b1) {
-                                    try_pt(pt, SnapType::Intersection, wire_source(wire_i));
+                                    try_pt(pt, SnapType::Intersection, wire_source(wire_i), wire_source(wire_j));
                                 }
                             }
                         }
@@ -1659,7 +1662,7 @@ impl Snapper {
                         bounds,
                         self.osnap_radius_px,
                     ) {
-                        try_pt(ext, SnapType::Extension, None);
+                        try_pt(ext, SnapType::Extension, None, None);
                     }
                 }
             }
@@ -1706,7 +1709,7 @@ impl Snapper {
                     // feet (which sit closer to the cursor on their own lines),
                     // or the cursor would snap to a line instead of the crossing.
                     let pt = glam::DVec3::new(a0.x + t1 * d1.x, a0.y + t1 * d1.y, a0.z);
-                    try_pt(pt, SnapType::Intersection, None);
+                    try_pt(pt, SnapType::Intersection, None, None);
                 }
             }
         }
@@ -1759,8 +1762,7 @@ impl Snapper {
                                 try_pt(
                                     segment_a.a + ta as f64 * (segment_a.b - segment_a.a),
                                     SnapType::ApparentIntersection,
-                                    wires.source_wire(segment_a.wire).and_then(wire_source),
-                                );
+                                    wires.source_wire(segment_a.wire).and_then(wire_source), wires.source_wire(segment_b.wire).and_then(wire_source));
                                 if dist2(apparent_screen, cursor_screen) <= f32::EPSILON {
                                     break 'apparent_sweep;
                                 }
@@ -1800,8 +1802,7 @@ impl Snapper {
                                     try_pt(
                                         wa0 + ta as f64 * (wa1 - wa0),
                                         SnapType::ApparentIntersection,
-                                        wire_source(wire_i),
-                                    );
+                                        wire_source(wire_i), wire_source(wire_j));
                                 }
                             }
                         }
@@ -2024,6 +2025,8 @@ impl Snapper {
                             extension_dir: None,
                         viewport: None,
                         source: wire_source(wire),
+                        secondary_source: None,
+                        model_point: None,
                         });
                     }
                 }
@@ -2088,6 +2091,8 @@ impl Snapper {
                         extension_dir: None,
                         viewport: None,
                         source: wire_source(wire),
+                        secondary_source: None,
+                        model_point: None,
                     });
                 }
             };

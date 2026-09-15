@@ -1,20 +1,4 @@
-//! Shared interfaces for paper-space snapping through layout viewports and
-//! for viewport-aware dimension measurement.
-//!
-//! Three PRs build on this module concurrently:
-//!  * PR1 (viewport snap) constructs [`ViewportFrame`] from the live viewport
-//!    camera and fills [`SnapSourceRef`] / [`AcceptedSnap`] when a snap is
-//!    accepted in paper space.
-//!  * PR2 (dimension measurement) consumes [`AcceptedSnap`] and uses
-//!    [`MeasurementScale`] to split the user's DIMLFAC from viewport
-//!    compensation so the compensation is applied exactly once.
-//!  * PR3 (associations) turns [`SnapSourceRef`] into persistent
-//!    `AssocDimensionReference` chains (dimension -> viewport -> block path ->
-//!    entity -> feature) and resolves them back.
-//!
-//! Anything here is a contract between those branches. Extend by adding
-//! fields/methods; do not rename or remove what exists without updating the
-//! sibling branches.
+//! Coordinates and feature identity shared by viewport acquisition and dimensions.
 
 use acadrust::types::Handle;
 use glam::{DMat3, DVec2, DVec3};
@@ -27,8 +11,7 @@ use crate::snap::SnapType;
 /// scale (paper units per model unit) and in-plane rotation (`twist`,
 /// radians, counter-clockwise, applied to model geometry before scaling).
 ///
-/// PR1 owns construction (`Scene::viewport_frame`); everyone else only reads
-/// it. All arithmetic is `f64`.
+/// Constructed by `Scene::viewport_frame`. All arithmetic is `f64`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewportFrame {
     /// Viewport entity handle.
@@ -105,6 +88,8 @@ pub struct SnapSourceRef {
     pub source: DimensionAssociationSource,
     pub block_path: Vec<Handle>,
     pub snap_type: SnapType,
+    /// The other entity/instance path for a true intersection.
+    pub intersection: Option<Box<SnapSourceRef>>,
 }
 
 /// A snap accepted by a point-input command, with enough information for
@@ -149,31 +134,29 @@ impl AcceptedSnap {
         self.viewport.is_some()
     }
 
-    /// Build an accepted snap from a [`crate::snap::SnapResult`].
-    ///
-    /// * `frame` `Some`: the snap ran against MODEL geometry through that
-    ///   viewport, so `snap.world` is a model point and the paper point is its
-    ///   projection onto the sheet.
-    /// * `frame` `None`: the snap ran in the current space directly, so paper
-    ///   and model point coincide.
-    ///
-    /// PR1 fills `source` from `SnapResult::source` (the owning entity handle
-    /// the snap engine attributed the feature to); `block_path` stays empty
-    /// until PR3 resolves block instance chains.
+    /// `snap.world` is always in the command's current space. A projected
+    /// viewport hit also retains its original model coordinate explicitly.
     pub fn from_snap(snap: &crate::snap::SnapResult, frame: Option<ViewportFrame>) -> Self {
-        let (paper_point, model_point) = match &frame {
-            Some(frame) => (frame.model_to_paper(snap.world), snap.world),
-            None => (snap.world, snap.world),
+        let frame = frame.filter(|frame| snap.viewport == Some(frame.viewport));
+        let source_ref = |source| SnapSourceRef {
+            source,
+            block_path: Vec::new(),
+            snap_type: snap.snap_type,
+            intersection: None,
         };
         Self {
-            paper_point,
-            model_point,
+            paper_point: snap.world,
+            model_point: frame.map_or(snap.world, |frame| {
+                snap.model_point
+                    .unwrap_or_else(|| frame.paper_to_model(snap.world))
+            }),
             viewport: frame.map(|f| f.viewport),
             frame,
             source: snap.source.map(|source| SnapSourceRef {
-                source,
-                block_path: Vec::new(),
-                snap_type: snap.snap_type,
+                intersection: snap
+                    .secondary_source
+                    .map(|source| Box::new(source_ref(source))),
+                ..source_ref(source)
             }),
         }
     }
@@ -222,6 +205,53 @@ pub struct MeasurementScale {
 }
 
 impl MeasurementScale {
+    /// OCS bookkeeping keeps user scaling separate from the changing viewport
+    /// scale. Standard DIMLFAC still carries the full factor for other readers.
+    pub const APP_ID: &'static str = "OCS_VIEWPORT_MEASUREMENT";
+
+    pub fn read(data: &acadrust::xdata::ExtendedData) -> Option<Self> {
+        use acadrust::xdata::XDataValue;
+        let record = data.get_record(Self::APP_ID)?;
+        let [XDataValue::Integer16(1), XDataValue::Real(user), XDataValue::Real(compensation)] =
+            record.values.as_slice()
+        else {
+            return None;
+        };
+        if !user.is_finite() || *user <= 0.0 || !compensation.is_finite() || *compensation <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            user_lfac: *user,
+            viewport_compensation: *compensation,
+        })
+    }
+
+    pub fn write_to_entity(self, entity: &mut acadrust::EntityType) {
+        use acadrust::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
+        crate::entities::dim_override::set_on_entity(
+            entity,
+            crate::entities::dim_override::DIMLFAC,
+            Some(XDataValue::Real(-self.paper_factor())),
+        );
+        let common = entity.common_mut();
+        let mut data = ExtendedData::new();
+        for record in common
+            .extended_data
+            .records()
+            .iter()
+            .filter(|r| r.application_name != Self::APP_ID)
+        {
+            data.add_record(record.clone());
+        }
+        let mut record = ExtendedDataRecord::new(Self::APP_ID);
+        record.add_value(XDataValue::Integer16(1));
+        record.add_value(XDataValue::Real(self.user_lfac));
+        record.add_value(XDataValue::Real(self.viewport_compensation));
+        data.add_record(record);
+        // Parsed records are authoritative after changing measurement data.
+        common.extended_data = data;
+    }
+
     pub const IDENTITY: Self = Self {
         user_lfac: 1.0,
         viewport_compensation: 1.0,
@@ -272,8 +302,7 @@ impl MeasurementScale {
     ///
     /// Rendering an *existing* dimension only knows whether the entity lives
     /// in a paper-space layout; the viewport compensation is already baked
-    /// into the persisted magnitude (see
-    /// [`MeasurementScale::viewport_dimlfac_override`]). This is the same rule
+    /// into the persisted magnitude. This is the same rule
     /// as [`MeasurementScale::from_dimlfac`] with `viewport.is_some()`
     /// replaced by `paper_space`.
     pub fn user_lfac_for_space(dimlfac: f64, paper_space: bool) -> f64 {
@@ -286,45 +315,6 @@ impl MeasurementScale {
         } else {
             1.0
         }
-    }
-
-    /// The persisted representation of viewport compensation, PR2's single
-    /// source of truth.
-    ///
-    /// A paper-space dimension that measures model geometry through a viewport
-    /// keeps its definition points in **paper** coordinates and carries a
-    /// **negative DIMLFAC override** whose magnitude is
-    /// `user_lfac * viewport_compensation`. Because a viewport frame is a
-    /// similarity (uniform scale + in-plane twist), the raw paper measurement
-    /// times that magnitude is exactly the model measurement times the user's
-    /// linear factor — so the compensation is applied exactly once, at
-    /// formatting time, and round-trips through DXF/DWG unchanged (AutoCAD
-    /// applies |DIMLFAC| to paper-space dimensions by the same rule).
-    ///
-    /// Returns `None` when no override is needed:
-    /// * the compensation is 1:1, or
-    /// * the drawing/style DIMLFAC is already negative with exactly this
-    ///   magnitude (the drawing-wide DIMLFAC is set for this purpose).
-    ///
-    /// `style_dimlfac` is the effective DIMLFAC the dimension would inherit
-    /// *without* an override.
-    pub fn viewport_dimlfac_override(style_dimlfac: f64, compensation: f64) -> Option<f64> {
-        if !compensation.is_finite() || compensation.abs() < 1e-12 {
-            return None;
-        }
-        if (compensation - 1.0).abs() < 1e-12 {
-            return None;
-        }
-        if style_dimlfac < 0.0
-            && ((-style_dimlfac) - compensation).abs() <= 1e-9 * compensation.abs().max(1.0)
-        {
-            return None;
-        }
-        // A positive style DIMLFAC is the user's own multiplier and must be
-        // preserved; a negative one of a *different* magnitude was meant for
-        // another viewport scale, so the user multiplier there is 1.0.
-        let user = if style_dimlfac > 0.0 { style_dimlfac } else { 1.0 };
-        Some(-(user * compensation))
     }
 }
 
@@ -391,30 +381,5 @@ mod tests {
                 MeasurementScale::from_dimlfac(lfac, None).user_lfac
             );
         }
-    }
-
-    #[test]
-    fn override_encodes_compensation_once() {
-        // 1:10 viewport, no user factor -> -10, and a 10-unit paper span then
-        // formats as 100.
-        let ovr = MeasurementScale::viewport_dimlfac_override(1.0, 10.0).unwrap();
-        assert!((ovr + 10.0).abs() < 1e-12);
-        let lfac = MeasurementScale::user_lfac_for_space(ovr, true);
-        assert!((10.0 * lfac - 100.0).abs() < 1e-9);
-        // Same dimension read back in model space must not scale.
-        assert_eq!(MeasurementScale::user_lfac_for_space(ovr, false), 1.0);
-    }
-
-    #[test]
-    fn override_preserves_user_multiplier_and_skips_redundant_cases() {
-        assert_eq!(MeasurementScale::viewport_dimlfac_override(1.0, 1.0), None);
-        // Drawing-wide negative DIMLFAC already carries this compensation.
-        assert_eq!(MeasurementScale::viewport_dimlfac_override(-10.0, 10.0), None);
-        // Positive user factor is folded in.
-        let ovr = MeasurementScale::viewport_dimlfac_override(25.4, 10.0).unwrap();
-        assert!((ovr + 254.0).abs() < 1e-9);
-        // Negative but for a different scale -> user multiplier is 1.0.
-        let ovr = MeasurementScale::viewport_dimlfac_override(-2.0, 10.0).unwrap();
-        assert!((ovr + 10.0).abs() < 1e-12);
     }
 }

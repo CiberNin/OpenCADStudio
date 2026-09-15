@@ -167,6 +167,17 @@ impl CadCommand for AlignedDimensionCommand {
         true
     }
 
+    fn dimension_acquired_points(&self) -> Vec<DVec3> {
+        match self.step {
+            Step::First => vec![], Step::Second(p) => vec![p],
+            Step::DimLine { p1, p2 } => vec![p1, p2],
+        }
+    }
+
+    fn dimension_placement_pending(&self) -> bool {
+        matches!(self.step, Step::DimLine { .. })
+    }
+
     fn input_kind(&self) -> InputKind {
         if self.awaiting_text {
             InputKind::FreeText

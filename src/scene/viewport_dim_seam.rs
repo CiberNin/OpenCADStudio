@@ -21,7 +21,9 @@ use super::*;
 use crate::command::EntityTransform;
 use crate::scene::viewport_ref::ViewportFrame;
 use acadrust::types::{Matrix4, Transform};
-use glam::{DVec2, DVec3};
+#[cfg(test)]
+use glam::DVec2;
+use glam::DVec3;
 
 /// A model entity resolved by clicking inside a paper-space content viewport.
 #[derive(Clone, Debug)]
@@ -44,36 +46,16 @@ pub struct ViewportDimPick {
 }
 
 impl Scene {
-
-    /// The smallest *on* content viewport of the current layout whose paper
-    /// rectangle contains `paper`. `None` on the Model tab, while editing
-    /// inside a viewport (MSPACE), or when the point is on bare sheet.
     pub fn content_viewport_at_paper_point(&self, paper: DVec3) -> Option<Handle> {
-        if self.current_layout == "Model" || self.active_viewport.is_some() {
-            return None;
-        }
-        let (_, _, handles) = self.paper_viewport_handles();
-        handles
-            .iter()
-            .filter_map(|handle| {
-                let Some(EntityType::Viewport(vp)) = self.document.get_entity(*handle) else {
-                    return None;
-                };
-                if !vp.status.is_on || vp.width <= 0.0 || vp.height <= 0.0 {
-                    return None;
-                }
-                let dx = (paper.x - vp.center.x).abs();
-                let dy = (paper.y - vp.center.y).abs();
-                (dx <= vp.width * 0.5 && dy <= vp.height * 0.5)
-                    .then(|| (*handle, vp.width * vp.height))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(handle, _)| handle)
+        self.viewport_frames_at_paper_point(paper)
+            .first()
+            .map(|f| f.viewport)
     }
 
-    /// [`Scene::content_viewport_at_paper_point`] resolved to a frame.
     pub fn viewport_frame_at_paper_point(&self, paper: DVec3) -> Option<ViewportFrame> {
-        self.viewport_frame(self.content_viewport_at_paper_point(paper)?)
+        self.viewport_frames_at_paper_point(paper)
+            .into_iter()
+            .next()
     }
 
     /// Resolve an explicit dimension object pick made on the sheet but landing
@@ -86,28 +68,42 @@ impl Scene {
         paper: DVec3,
         aperture_paper: f64,
     ) -> Option<ViewportDimPick> {
-        let frame = self.viewport_frame_at_paper_point(paper)?;
-        let model_point = frame.paper_to_model(paper);
-        let aperture_model =
-            (aperture_paper.max(0.0) * frame.paper_to_model_length_factor()).max(1e-9);
+        for frame in self.viewport_frames_at_paper_point(paper) {
+            let model_point = frame.paper_to_model(paper);
+            let aperture_model =
+                (aperture_paper.max(0.0) * frame.paper_to_model_length_factor()).max(1e-9);
 
-        let top = self.nearest_model_wire_handle(frame.viewport, model_point, aperture_model)?;
-        let (entity, block_path) = self.resolve_measurable_entity(top, model_point)?;
+            let Some(top) =
+                self.nearest_model_wire_handle(frame.viewport, model_point, aperture_model)
+            else {
+                continue;
+            };
+            let Some((entity, block_path)) =
+                self.resolve_measurable_entity(top, model_point, Some(frame.viewport))
+            else {
+                continue;
+            };
 
-        let mut paper_entity = entity;
-        crate::scene::view::dispatch::apply_transform(
-            &mut paper_entity,
-            &EntityTransform::Affine(viewport_model_to_paper_transform(&frame)),
-        );
-        let entity_handle = paper_entity.as_entity().handle();
-        Some(ViewportDimPick {
-            frame,
-            entity_handle: if entity_handle.is_valid() { entity_handle } else { top },
-            block_path,
-            paper_entity,
-            paper_point: paper,
-            model_point,
-        })
+            let mut paper_entity = entity;
+            crate::scene::view::dispatch::apply_transform(
+                &mut paper_entity,
+                &EntityTransform::Affine(viewport_model_to_paper_transform(&frame)),
+            );
+            let entity_handle = paper_entity.as_entity().handle();
+            return Some(ViewportDimPick {
+                frame,
+                entity_handle: if entity_handle.is_valid() {
+                    entity_handle
+                } else {
+                    top
+                },
+                block_path,
+                paper_entity,
+                paper_point: paper,
+                model_point,
+            });
+        }
+        None
     }
 
     /// Nearest resident model wire of `viewport` to `model_point`, within
@@ -119,7 +115,23 @@ impl Scene {
         model_point: DVec3,
         aperture: f64,
     ) -> Option<Handle> {
-        let wires = self.model_wires_for_viewport_arc(viewport, 0.0);
+        let camera = self.camera_for_viewport(viewport)?;
+        let bounds = iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        };
+        let radius_px =
+            (aperture / (2.0 * camera.ortho_size() as f64) * bounds.height as f64) as f32;
+        let wires = self.interaction_pick_candidates_near(
+            self.model_wires_for_viewport_arc(viewport, 0.0),
+            model_point,
+            camera.view_proj_rte(bounds),
+            camera.eye(),
+            bounds,
+            radius_px.max(1.0),
+        );
         let mut best: Option<(f64, Handle)> = None;
         for wire in wires.iter() {
             if !wire.display_visible {
@@ -133,8 +145,17 @@ impl Scene {
                 .as_ref()
                 .map(|inst| DVec3::from_array(inst.translation))
                 .unwrap_or(DVec3::ZERO);
-            let distance = wire_polyline_distance(wire, offset, model_point);
-            if let Some(distance) = distance {
+            let distance = wire_polyline_nearest(wire, offset, model_point);
+            if let Some((distance, nearest)) = distance {
+                let Some(frame) = self.viewport_frame(viewport) else {
+                    continue;
+                };
+                if !self.viewport_displays_paper_point(
+                    viewport,
+                    frame.model_to_paper(nearest).truncate(),
+                ) {
+                    continue;
+                }
                 if distance <= aperture && best.as_ref().is_none_or(|(d, _)| distance < *d) {
                     best = Some((distance, handle));
                 }
@@ -146,10 +167,11 @@ impl Scene {
     /// Turn a picked handle into a measurable planar entity in model (WCS)
     /// coordinates, descending through block instances and baking the
     /// instance transform into the returned clone.
-    fn resolve_measurable_entity(
+    pub(crate) fn resolve_measurable_entity(
         &self,
         handle: Handle,
         model_point: DVec3,
+        viewport: Option<Handle>,
     ) -> Option<(EntityType, Vec<Handle>)> {
         let entity = self.document.get_entity(handle)?;
         match entity {
@@ -161,6 +183,7 @@ impl Scene {
                     model_point,
                     &mut path,
                     0,
+                    viewport,
                 )?;
                 Some((found.0, found.1))
             }
@@ -180,6 +203,7 @@ impl Scene {
         model_point: DVec3,
         path: &mut Vec<Handle>,
         depth: usize,
+        viewport: Option<Handle>,
     ) -> Option<(EntityType, Vec<Handle>)> {
         const MAX_DEPTH: usize = 8;
         if depth > MAX_DEPTH {
@@ -199,6 +223,14 @@ impl Scene {
             let Some(child_entity) = self.document.get_entity(child) else {
                 continue;
             };
+            let common = child_entity.common();
+            let layer = self.document.layers.get(&common.layer);
+            let frozen = viewport.and_then(|h| self.document.get_entity(h)).is_some_and(|entity| {
+                matches!(entity, EntityType::Viewport(vp) if layer.is_some_and(|l| vp.frozen_layers.contains(&l.handle)))
+            });
+            if common.invisible || layer.is_some_and(|l| l.flags.off || l.flags.frozen) || frozen {
+                continue;
+            }
             if matches!(child_entity, EntityType::Insert(_)) {
                 let mut nested = Vec::new();
                 if let Some((entity, mut nested_path)) = self.descend_block_instance(
@@ -207,6 +239,7 @@ impl Scene {
                     model_point,
                     &mut nested,
                     depth + 1,
+                    viewport,
                 ) {
                     if let Some(distance) = planar_pick_distance(&entity, model_point) {
                         if best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
@@ -216,6 +249,22 @@ impl Scene {
                         }
                     }
                 }
+                continue;
+            }
+            // A nonuniform block transform turns circular geometry into an
+            // ellipse. The entity transform API retains the circle type, so
+            // decline this object pick instead of manufacturing a radius.
+            let curved = matches!(child_entity, EntityType::Circle(_) | EntityType::Arc(_))
+                || matches!(child_entity, EntityType::LwPolyline(p) if p.vertices.iter().any(|v| v.bulge != 0.0));
+            let m = &combined.matrix.m;
+            let x = DVec3::new(m[0][0], m[1][0], m[2][0]);
+            let y = DVec3::new(m[0][1], m[1][1], m[2][1]);
+            let magnitude = x.length_squared().max(y.length_squared());
+            if curved
+                && (magnitude < 1e-24
+                    || (x.length_squared() - y.length_squared()).abs() > magnitude * 1e-10
+                    || x.dot(y).abs() > magnitude * 1e-10)
+            {
                 continue;
             }
             let mut placed = child_entity.clone();
@@ -259,11 +308,11 @@ pub fn viewport_model_to_paper_transform(frame: &ViewportFrame) -> Transform {
 
 /// Distance from `point` to a wire's polyline, in XY. `None` when the wire has
 /// no usable segment.
-fn wire_polyline_distance(
+fn wire_polyline_nearest(
     wire: &crate::scene::WireModel,
     offset: DVec3,
     point: DVec3,
-) -> Option<f64> {
+) -> Option<(f64, DVec3)> {
     let count = wire.points.len();
     if count == 0 {
         return None;
@@ -278,6 +327,7 @@ fn wire_polyline_distance(
         ) + offset
     };
     let mut best = f64::INFINITY;
+    let mut best_point = DVec3::ZERO;
     let mut previous: Option<DVec3> = None;
     for i in 0..count {
         let current = at(i);
@@ -285,77 +335,41 @@ fn wire_polyline_distance(
             previous = None;
             continue;
         }
-        match previous {
-            Some(start) => best = best.min(segment_distance_xy(start, current, point)),
-            None => best = best.min((current.truncate() - point.truncate()).length()),
+        let nearest = previous.map_or(current, |start| {
+            let delta = current - start;
+            let len2 = delta.truncate().length_squared();
+            let t = if len2 > 1e-24 {
+                ((point - start).truncate().dot(delta.truncate()) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            start + delta * t
+        });
+        let distance = (nearest - point).truncate().length();
+        if distance < best {
+            best = distance;
+            best_point = nearest;
         }
         previous = Some(current);
     }
-    best.is_finite().then_some(best)
-}
-
-fn segment_distance_xy(a: DVec3, b: DVec3, p: DVec3) -> f64 {
-    let ab = b.truncate() - a.truncate();
-    let ap = p.truncate() - a.truncate();
-    let len2 = ab.length_squared();
-    if len2 < 1e-24 {
-        return ap.length();
-    }
-    let t = (ap.dot(ab) / len2).clamp(0.0, 1.0);
-    (ap - ab * t).length()
+    best.is_finite().then_some((best, best_point))
 }
 
 /// Distance from `point` to the planar geometry object-pick dimensioning
 /// supports. `None` for entity types that cannot be dimensioned by picking.
 pub fn planar_pick_distance(entity: &EntityType, point: DVec3) -> Option<f64> {
-    let p = point.truncate();
-    match entity {
-        EntityType::Line(line) => Some(segment_distance_xy(
-            DVec3::new(line.start.x, line.start.y, line.start.z),
-            DVec3::new(line.end.x, line.end.y, line.end.z),
-            point,
-        )),
-        EntityType::Circle(circle) => {
-            let c = DVec2::new(circle.center.x, circle.center.y);
-            Some(((p - c).length() - circle.radius).abs())
-        }
-        EntityType::Arc(arc) => {
-            let c = DVec2::new(arc.center.x, arc.center.y);
-            Some(((p - c).length() - arc.radius).abs())
-        }
-        EntityType::LwPolyline(polyline) => polyline_distance(
-            polyline
-                .vertices
-                .iter()
-                .map(|v| DVec3::new(v.location.x, v.location.y, polyline.elevation)),
-            polyline.is_closed,
-            point,
-        ),
-        EntityType::Polyline2D(polyline) => polyline_distance(
-            polyline
-                .vertices
-                .iter()
-                .map(|v| DVec3::new(v.location.x, v.location.y, polyline.elevation)),
-            polyline.is_closed(),
-            point,
-        ),
-        _ => None,
-    }
-}
-
-fn polyline_distance(
-    points: impl IntoIterator<Item = DVec3>,
-    closed: bool,
-    point: DVec3,
-) -> Option<f64> {
-    let points: Vec<DVec3> = points.into_iter().collect();
-    if points.len() < 2 {
+    let planar = crate::entities::curve::entity_curve(entity)?;
+    let normal = DVec3::from_array(planar.plane.normal()?);
+    if normal.cross(DVec3::Z).length_squared() > 1e-12 {
         return None;
     }
-    let count = if closed { points.len() } else { points.len() - 1 };
-    (0..count)
-        .map(|i| segment_distance_xy(points[i], points[(i + 1) % points.len()], point))
-        .reduce(f64::min)
+    let uv = planar.plane.project(point.to_array())?;
+    let nearest = cadkernel::geom2d::closest_point(&planar.curve, uv);
+    Some(
+        (DVec3::from_array(planar.plane.point_at(nearest.point)) - point)
+            .truncate()
+            .length(),
+    )
 }
 
 #[cfg(test)]

@@ -1638,25 +1638,11 @@ pub(crate) fn dimension_in_paper_space(dimension: &Dimension, document: &CadDocu
     if !owner.is_valid() {
         return false;
     }
-    let model_block = document
-        .block_records
-        .get("*Model_Space")
-        .map(|record| record.handle)
-        .filter(|handle| handle.is_valid())
-        .or_else(|| {
-            document.objects.values().find_map(|object| match object {
-                acadrust::objects::ObjectType::Layout(layout)
-                    if layout.name == "Model" && !layout.block_record.is_null() =>
-                {
-                    Some(layout.block_record)
-                }
-                _ => None,
-            })
-        });
-    match model_block {
-        Some(model) => owner != model,
-        None => false,
-    }
+    document.objects.values().any(|object| matches!(object,
+        acadrust::objects::ObjectType::Layout(layout)
+            if layout.name != "Model" && layout.block_record == owner
+    ))
+
 }
 
 /// The value a dimension's text reports for its measurement: the raw

@@ -11,6 +11,8 @@ mod annotation_data;
 mod command_driver;
 pub(crate) mod commands;
 pub(crate) mod dim_viewport;
+#[cfg(test)]
+mod viewport_dimension_tests;
 mod document;
 mod drafting_settings;
 pub(crate) mod expr_eval;

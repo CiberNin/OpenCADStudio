@@ -2374,6 +2374,8 @@ impl OpenCADStudio {
                         extension_dir: None,
                         viewport: None,
                         source: None,
+                        secondary_source: None,
+                        model_point: None,
                     });
                     if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
                         cmd.set_acquisition_hint(Some(pick.label));
@@ -3853,29 +3855,7 @@ impl OpenCADStudio {
                 command.set_ctrl(self.ctrl_down);
                 command.set_shift(self.shift_down);
             }
-            // PR2: a dimension "select object" pick that lands inside a paper
-            // content viewport is resolved against the model geometry that
-            // viewport displays. Paper hit testing only sees sheet entities,
-            // so this runs first and falls through when it finds nothing.
-            let dimension_viewport_pick = if self.tabs[i].active_cmd.as_ref().is_some_and(
-                |command| command.needs_entity_pick() && command.measures_through_viewports(),
-            ) {
-                let aperture_paper = {
-                    let camera = self.tabs[i].scene.camera.borrow();
-                    let per_px = if bounds.height > 0.0 {
-                        camera.ortho_size() as f64 * 2.0 / bounds.height as f64
-                    } else {
-                        0.0
-                    };
-                    crate::ui::overlay::pick_box_aperture_px(self.pick_box) as f64 * per_px
-                };
-                self.try_dimension_viewport_entity_pick(i, pick_wcs, aperture_paper)
-            } else {
-                None
-            };
-            let result = if let Some(result) = dimension_viewport_pick {
-                Some(result)
-            } else if self.tabs[i]
+            let result = if self.tabs[i]
                 .active_cmd
                 .as_ref()
                 .map(|c| c.needs_structure_point_pick())
@@ -4065,6 +4045,7 @@ impl OpenCADStudio {
                         }
                     }
 
+                    if !self.dimension_acquisition_allowed(i, None) { self.finish_command_click(i); return Task::none(); }
                     let shift = self.shift_down;
                     let result = self.tabs[i].active_cmd.as_mut().map(|c| {
                         // Shift-swap state for TRIM/EXTEND (#336).
@@ -4072,6 +4053,7 @@ impl OpenCADStudio {
                         c.set_entity_pick_direction(entity_pick_direction);
                         c.on_entity_pick(handle, entity_pick_point)
                     });
+                    self.record_dimension_entity_points(i, None, handle, Vec::new());
                     // HATCHEDIT: after pick, inject hatch model data into the command.
                     if self.tabs[i]
                         .active_cmd
@@ -4142,11 +4124,24 @@ impl OpenCADStudio {
                         }
                     }
                     result
+                } else if let Some(result) = {
+                    let dimension = self.tabs[i].active_cmd.as_ref().is_some_and(|c| c.measures_through_viewports());
+                    if dimension {
+                        let per_px = self.tabs[i].scene.camera.borrow().ortho_size() as f64 * 2.0 / (bounds.height as f64).max(1.0);
+                        self.try_dimension_viewport_entity_pick(i, pick_wcs, crate::ui::overlay::pick_box_aperture_px(self.pick_box) as f64 * per_px)
+                    } else { None }
+                } {
+                    Some(result)
                 } else if self.tabs[i]
                     .active_cmd
                     .as_ref()
                     .is_some_and(|command| command.entity_pick_accepts_points())
                 {
+                    let pending = self.pending_click_snap.take();
+                    if !self.record_accepted_snap(i, pending.map(|(hit, _)| hit), pending.and_then(|(_, frame)| frame), pick_wcs) {
+                        self.finish_command_click(i);
+                        return Task::none();
+                    }
                     self.refresh_command_point_pick_context(i);
                     self.tabs[i]
                         .active_cmd
@@ -4215,17 +4210,18 @@ impl OpenCADStudio {
                         self.tabs[i].dyn_active = 0;
                     }
                 }
-                self.last_point = Some(world_pt);
                 // Record what this point step accepted, alongside the point
                 // itself (PR1): paper point, model point, viewport, frame and
                 // geometry identity. Commands that don't care keep consuming
                 // `world_pt` exactly as before.
                 let pending = self.pending_click_snap.take();
-                self.record_accepted_snap(
+                if !self.record_accepted_snap(
+                    i,
                     pending.map(|(hit, _)| hit),
                     pending.and_then(|(_, frame)| frame),
                     world_pt,
-                );
+                ) { self.finish_command_click(i); return Task::none(); }
+                self.last_point = Some(world_pt);
                 // The one-shot snap override is spent by this pick —
                 // restore the running osnap configuration (#337).
                 self.snapper.clear_override();
@@ -4260,6 +4256,7 @@ impl OpenCADStudio {
                 }
             };
 
+            self.sync_dimension_snaps(i);
             if let Some(r) = result {
                 let task = self.apply_cmd_result(r);
                 let mut sel = self.tabs[i].scene.selection.borrow_mut();
