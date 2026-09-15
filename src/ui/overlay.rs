@@ -36,6 +36,22 @@ fn constraint_glyph_size(label: &str) -> Size {
     Size::new(w, h)
 }
 
+fn draw_tangent_constraint_glyph(
+    frame: &mut canvas::Frame,
+    center: Point,
+    color: Color,
+) {
+    let radius = 4.5;
+    let circle_center = Point::new(center.x - 0.3, center.y + 2.75);
+    let diagonal = radius * std::f32::consts::FRAC_1_SQRT_2;
+    let contact = Point::new(circle_center.x - diagonal, circle_center.y - diagonal);
+    let tangent_end = Point::new(contact.x + 8.0, contact.y - 8.0);
+    let stroke = canvas::Stroke::default().with_color(color).with_width(1.35);
+
+    frame.stroke(&canvas::Path::circle(circle_center, radius), stroke.clone());
+    frame.stroke(&canvas::Path::line(contact, tangent_end), stroke);
+}
+
 fn constraint_glyph_box(
     anchor: Point,
     outward: [f32; 2],
@@ -1790,19 +1806,24 @@ impl canvas::Program<Message> for SelectionCanvas {
                         canvas::Stroke::default().with_color(selected_ring).with_width(2.0),
                     );
                 }
-                frame.fill_text(canvas::Text {
-                    content: label.clone(),
-                    position: Point::new(
-                        top_left.x + size.width * 0.5,
-                        top_left.y + size.height * 0.5,
-                    ),
-                    color: fg,
-                    size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
-                    align_x: iced::alignment::Horizontal::Center.into(),
-                    align_y: iced::alignment::Vertical::Center,
-                    shaping: iced::advanced::text::Shaping::Advanced,
-                    ..Default::default()
-                });
+                let glyph_center = Point::new(
+                    top_left.x + size.width * 0.5,
+                    top_left.y + size.height * 0.5,
+                );
+                if label == "T" {
+                    draw_tangent_constraint_glyph(frame, glyph_center, fg);
+                } else {
+                    frame.fill_text(canvas::Text {
+                        content: label.clone(),
+                        position: glyph_center,
+                        color: fg,
+                        size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
+                        align_x: iced::alignment::Horizontal::Center.into(),
+                        align_y: iced::alignment::Vertical::Center,
+                        shaping: iced::advanced::text::Shaping::Advanced,
+                        ..Default::default()
+                    });
+                }
             }
             if let Some(index) = hovered {
                 let red = Color::from_rgb(1.0, 0.0, 0.0);
