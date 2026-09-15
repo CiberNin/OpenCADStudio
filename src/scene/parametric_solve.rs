@@ -13,7 +13,7 @@ use cadkernel_constraints::constraints::circle_arc::{C2LDistance, P2CDistance, T
 use cadkernel_constraints::constraints::conic::{
     EqualMajorAxesConic, PointOnEllipse, TangentEllipseLine,
 };
-use cadkernel_constraints::constraints::curve_generic::CurveValue;
+use cadkernel_constraints::constraints::curve_generic::{BoundedArcValue, CurveValue};
 use cadkernel_constraints::constraints::point_line::{
     CenterOfGravity, Difference, Equal, EqualLineLength, MidpointOnLine, P2PDistance,
     Parallel as ParallelConstraint, Perpendicular as PerpendicularConstraint, PointOnLine,
@@ -364,7 +364,11 @@ fn register_entity(
             );
             let rad = sys.add_param(a.radius, false);
             let start_angle = sys.add_param(a.start_angle, false);
-            let end_angle = sys.add_param(a.end_angle, false);
+            let end_angle = sys.add_param(
+                a.start_angle
+                    + (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU),
+                false,
+            );
             let start_seed = a.start_point();
             let end_seed = a.end_point();
             let start = GPoint::new(
@@ -855,6 +859,35 @@ fn build_constraint(
         resolve_constraint_point(document, sys, cache, r)
     };
 
+    let point_on_bounded_arc = |sys: &mut System, point: GPoint, arc: GArc| {
+        let normalized = {
+            let store = sys.store();
+            let point_angle =
+                (store.get(point.y) - store.get(arc.circle.center.y)).atan2(
+                    store.get(point.x) - store.get(arc.circle.center.x),
+                );
+            let start = store.get(arc.start_angle);
+            let end = store.get(arc.end_angle);
+            let sweep = end - start;
+            if sweep.abs() <= 1e-12 {
+                0.0
+            } else {
+                let midpoint = (start + end) * 0.5;
+                let unwrapped = point_angle
+                    + ((midpoint - point_angle) / std::f64::consts::TAU).round()
+                        * std::f64::consts::TAU;
+                ((unwrapped - start) / sweep).clamp(0.0, 1.0)
+            }
+        };
+        let parameter = sys.add_param(normalized.sqrt().asin(), false);
+        vec![
+            Rc::new(BoundedArcValue::new(point, point.x, arc, parameter))
+                as Rc<dyn Constraint>,
+            Rc::new(BoundedArcValue::new(point, point.y, arc, parameter))
+                as Rc<dyn Constraint>,
+        ]
+    };
+
     // `Coincident`/`Concentric`/`CenterPoint` all solve identically — two
     // points (an endpoint, a circle's center via the existing `-3` marker,
     // or a plain point) held equal on both axes. Only the DWG-native class
@@ -1025,14 +1058,7 @@ fn build_constraint(
                     let zero = sys.add_param(0.0, true);
                     vec![Rc::new(P2CDistance::new(circ, p, zero))]
                 }
-                // Same "distance to the underlying circle is zero" relation
-                // as the `Circle` arm — doesn't restrict the point to
-                // within the arc's own sweep, matching that same
-                // pre-existing simplification for `Circle`.
-                EntityGeom::Arc(a) => {
-                    let zero = sys.add_param(0.0, true);
-                    vec![Rc::new(P2CDistance::new(a.circle, p, zero))]
-                }
+                EntityGeom::Arc(a) => point_on_bounded_arc(sys, p, a),
                 EntityGeom::Ellipse(ellipse) => {
                     vec![Rc::new(PointOnEllipse::new(p, ellipse))]
                 }
@@ -1070,14 +1096,8 @@ fn build_constraint(
                                 vec![Rc::new(PointOnLine::new(p, line)) as Rc<dyn Constraint>]
                             })
                             .or_else(|| {
-                                geom.arc_segment(index).map(|segment| {
-                                    let zero = sys.add_param(0.0, true);
-                                    vec![Rc::new(P2CDistance::new(
-                                        segment.arc.circle,
-                                        p,
-                                        zero,
-                                    )) as Rc<dyn Constraint>]
-                                })
+                                geom.arc_segment(index)
+                                    .map(|segment| point_on_bounded_arc(sys, p, segment.arc))
                             })
                     })
                     .unwrap_or_default(),
