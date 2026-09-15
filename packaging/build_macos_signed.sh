@@ -112,13 +112,23 @@ codesign --verify --strict --verbose=2 "$APP"
 echo "==> dmg"
 DMG="$DIST/OpenCADStudio-v$VERSION-macos-arm64.dmg"
 rm -f "$DMG"
+
+# Stage the app next to the install-location shortcut (#769).
+STAGING="$DIST/dmg-staging"
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+cp -R "$APP" "$STAGING/"
+ln -s /Applications "$STAGING/Applications"
+
 for i in 1 2 3 4 5; do
-    if hdiutil create -volname "Open CAD Studio" -srcfolder "$APP" -ov -format UDZO "$DMG"; then
+    if hdiutil create -volname "Open CAD Studio" -srcfolder "$STAGING" -ov -format UDZO "$DMG"; then
         break
     fi
+    rm -f "$DMG"
     echo "hdiutil failed (attempt $i), retrying..." >&2
     sleep 3
 done
+rm -rf "$STAGING"
 [ -f "$DMG" ] || { echo "hdiutil failed permanently" >&2; exit 1; }
 
 if [ -n "${NOTARY_PROFILE:-}" ] && [ "$DEVELOPER_ID" != "-" ]; then

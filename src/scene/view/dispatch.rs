@@ -80,6 +80,25 @@ pub fn properties_sectioned(
     } else {
         sections.extend(groups);
     }
+    if let Some(thickness) = entity_thickness(entity) {
+        let already_present = sections.iter().flat_map(|section| &section.props).any(|property| {
+            property.field == "thickness"
+                || property.field == "sl_thickness"
+                || property.label == crate::t!("Thickness").as_ref()
+        });
+        if !already_present {
+            if let Some(geometry) = sections
+                .iter_mut()
+                .find(|section| section.title == crate::t!("Geometry").as_ref())
+            {
+                geometry.props.push(crate::entities::common::edit_prop(
+                    crate::t!("Thickness").as_ref(),
+                    "thickness",
+                    thickness,
+                ));
+            }
+        }
+    }
     sections
 }
 
@@ -252,9 +271,8 @@ pub fn set_entity_xdata(
 }
 
 /// The extrusion thickness (DXF 39) of the entities that carry one, or `None`
-/// for entity types that have none. Thickness is a per-entity field but is
-/// surfaced in the General group (as in a standard properties palette), so
-/// this bridges the two.
+/// for entity types that have none. The Properties panel uses this to append
+/// the shared field to each entity's Geometry group.
 pub fn entity_thickness(entity: &EntityType) -> Option<f64> {
     Some(match entity {
         EntityType::Arc(e) => e.thickness,
@@ -381,4 +399,27 @@ pub fn grip_menu_point_value(
 
 pub fn apply_transform(entity: &mut EntityType, t: &EntityTransform) {
     EntityTypeOps::apply_transform(entity, t);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acadrust::types::Vector3;
+
+    #[test]
+    fn line_thickness_follows_the_entity_geometry_rows() {
+        let mut line = acadrust::entities::Line::from_points(Vector3::ZERO, Vector3::UNIT_X);
+        line.thickness = 2.5;
+        let sections = properties_sectioned(Handle::NULL, &EntityType::Line(line), &[]);
+
+        assert!(!sections[0]
+            .props
+            .iter()
+            .any(|property| property.field == "thickness"));
+        let geometry = sections
+            .iter()
+            .find(|section| section.props.iter().any(|property| property.field == "start_x"))
+            .unwrap();
+        assert_eq!(geometry.props.last().unwrap().field, "thickness");
+    }
 }

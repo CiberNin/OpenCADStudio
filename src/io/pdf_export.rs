@@ -13,6 +13,7 @@ use crate::scene::model::hatch_model::HatchModel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::scene::model::hatch_model::HatchPattern;
 use crate::scene::WireModel;
+use crate::scene::model::image_model::ImageModel;
 #[cfg(not(target_arch = "wasm32"))]
 use printpdf::{
     BlendMode, BuiltinFont, Color, ExtendedGraphicsState, ExtendedGraphicsStateId, Line,
@@ -37,25 +38,18 @@ impl std::ops::Deref for PlotWire {
     }
 }
 
+/// Decoded image geometry plus inherited block/viewport clip boundaries.
+#[derive(Clone, Debug)]
+pub struct PlotImage {
+    pub image: ImageModel,
+    pub clips: Vec<Vec<[f64; 2]>>,
+}
+
 // The web build has no `printpdf` (it pulls a wasm-incompatible `memchr` via
 // lopdf → nom_locate) and no filesystem, so PDF export is native-only; the web
 // build gets these stubs so the call sites still compile.
 #[cfg(target_arch = "wasm32")]
-pub fn export_pdf(
-    _wires: &[PlotWire],
-    _hatches: &[HatchModel],
-    _wipeouts: &[HatchModel],
-    _paper_w: f64,
-    _paper_h: f64,
-    _offset_x: f64,
-    _offset_y: f64,
-    _rotation_deg: i32,
-    _scale: f32,
-    _clip: Option<(f32, f32, f32, f32)>,
-    _path: &Path,
-    _plot_style: Option<&PlotStyleTable>,
-    _options: PdfPlotOptions,
-) -> Result<(), String> {
+pub fn export_pdf(_page: &PdfPageInput, _path: &Path) -> Result<(), String> {
     Err("PDF export is not available in the web version.".into())
 }
 
@@ -94,7 +88,6 @@ pub struct PdfPlotOptions {
     pub transparency: bool,
     pub stamp: bool,
     pub merge_lines: bool,
-    pub group_splits: PlotGroupSplits,
 }
 
 /// End indexes of the first paper/model render group in each flat input list.
@@ -103,16 +96,26 @@ pub struct PlotGroupSplits {
     pub wires: usize,
     pub hatches: usize,
     pub wipeouts: usize,
+    pub images: usize,
 }
 
-/// Owned render data for one page in a multi-page PDF.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub struct PdfPageInput {
+#[derive(Default)]
+pub struct PlotContent {
     pub wires: std::sync::Arc<Vec<PlotWire>>,
     pub hatches: Vec<HatchModel>,
     pub wipeouts: Vec<HatchModel>,
+    pub images: Vec<PlotImage>,
+    pub group_splits: PlotGroupSplits,
+}
+
+/// Owned geometry and settings for one PDF page.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub struct PdfPageInput {
+    pub content: PlotContent,
+    /// Page dimensions in mm, after any 90/270-degree rotation.
     pub paper_w: f64,
     pub paper_h: f64,
+    /// Absolute-world offsets stay f64 to preserve local detail at UTM coordinates.
     pub offset_x: f64,
     pub offset_y: f64,
     pub rotation_deg: i32,
@@ -130,50 +133,16 @@ impl Default for PdfPlotOptions {
             transparency: false,
             stamp: false,
             merge_lines: false,
-            group_splits: PlotGroupSplits::default(),
         }
     }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────
 
-/// Export `wires` to a PDF file.
-///
-/// - `paper_w` / `paper_h`: page dimensions in mm (already swapped for 90°/270° by caller).
-/// - `offset_x` / `offset_y`: added to every wire coordinate so the drawing
-///   origin maps to the bottom-left corner of the page.
-/// - `rotation_deg`: 0 | 90 | 180 | 270 — rotates the entire drawing on the page.
+/// Export one page to a PDF file.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_pdf(
-    wires: &[PlotWire],
-    hatches: &[HatchModel],
-    wipeouts: &[HatchModel],
-    paper_w: f64,
-    paper_h: f64,
-    offset_x: f64,
-    offset_y: f64,
-    rotation_deg: i32,
-    scale: f32,
-    clip: Option<(f32, f32, f32, f32)>,
-    path: &Path,
-    plot_style: Option<&PlotStyleTable>,
-    options: PdfPlotOptions,
-) -> Result<(), String> {
-    let bytes = build_pdf(
-        wires,
-        hatches,
-        wipeouts,
-        paper_w as f32,
-        paper_h as f32,
-        offset_x,
-        offset_y,
-        rotation_deg,
-        scale,
-        clip,
-        plot_style,
-        options,
-    );
-    write_pdf_atomically(path, &bytes)
+pub fn export_pdf(page: &PdfPageInput, path: &Path) -> Result<(), String> {
+    export_pdf_pages(std::slice::from_ref(page), path, None)
 }
 
 /// Export several independently sized pages into one PDF file.
@@ -186,7 +155,7 @@ pub fn export_pdf_pages(
     if pages.is_empty() {
         return Err("No pages were selected.".into());
     }
-    let bytes = build_pdf_pages(pages, plot_style);
+    let bytes = build_pdf_pages(pages, plot_style)?;
     write_pdf_atomically(path, &bytes)
 }
 
@@ -203,6 +172,202 @@ fn write_pdf_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
         return Err(format!("Failed to replace PDF file: {error}"));
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn image_clip(ops: &mut Vec<Op>, rings: Vec<Vec<[f32; 2]>>) {
+    ops.push(Op::DrawPolygon {
+        polygon: Polygon {
+            rings: rings
+                .into_iter()
+                .map(|ring| PolygonRing {
+                    points: ring
+                        .into_iter()
+                        .map(|[x, y]| LinePoint {
+                            p: Point { x: Pt(x), y: Pt(y) },
+                            bezier: false,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            mode: PaintMode::Clip,
+            winding_order: WindingOrder::EvenOdd,
+        },
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_image(
+    doc: &mut PdfDocument,
+    resources: &mut std::collections::HashMap<(usize, u32, u32), printpdf::XObjectId>,
+    ops: &mut Vec<Op>,
+    plot: &PlotImage,
+    ox: f64,
+    oy: f64,
+    options: PdfPlotOptions,
+) -> Result<(), String> {
+    let image = &plot.image;
+    let expected_byte_count = (image.width as usize)
+        .checked_mul(image.height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if image.width == 0 || image.height == 0 || expected_byte_count != Some(image.pixels.len()) {
+        return Err("Cannot plot bitmap: dimensions do not match its RGBA pixels.".into());
+    }
+    if image.verts.len() < 3 || image.verts.len() % 3 != 0 {
+        return Err("Cannot plot bitmap: incomplete triangle geometry.".into());
+    }
+    if options.transparency && image.opacity <= 0.0 {
+        return Ok(());
+    }
+    let to_page = |high: [f32; 3], low: [f32; 3]| {
+        [
+            ((high[0] as f64 + low[0] as f64 + ox) * MM_TO_PT as f64) as f32,
+            ((high[1] as f64 + low[1] as f64 + oy) * MM_TO_PT as f64) as f32,
+        ]
+    };
+    let corners: [[f32; 2]; 4] =
+        std::array::from_fn(|i| to_page(image.corners[i], image.corners_low[i]));
+    if !corners.iter().flatten().all(|v| v.is_finite())
+        || !image.verts.iter().all(|v| {
+            to_page(v.pos, v.pos_low)
+                .iter()
+                .chain(&v.uv)
+                .all(|c| c.is_finite())
+        })
+        || !plot
+            .clips
+            .iter()
+            .all(|ring| ring.len() >= 3 && ring.iter().flatten().all(|v| v.is_finite()))
+        || !image.opacity.is_finite()
+    {
+        return Err("Cannot plot bitmap: invalid coordinates, clip boundary, or opacity.".into());
+    }
+    let key = (
+        std::sync::Arc::as_ptr(&image.pixels) as usize,
+        image.width,
+        image.height,
+    );
+    let id = resources
+        .entry(key)
+        .or_insert_with(|| {
+            let id = printpdf::XObjectId::new();
+            // add_image clones its argument; the public map accepts owned pixels.
+            doc.resources.xobjects.map.insert(
+                id.clone(),
+                printpdf::XObject::Image(printpdf::RawImage {
+                    pixels: printpdf::RawImageData::U8(image.pixels.as_ref().clone()),
+                    width: image.width as usize,
+                    height: image.height as usize,
+                    data_format: printpdf::RawImageFormat::RGBA8,
+                    tag: Vec::new(),
+                }),
+            );
+            id
+        })
+        .clone();
+    ops.push(Op::SaveGraphicsState);
+    if options.transparency && image.opacity < 1.0 {
+        // printpdf 0.9.1 swaps the serialized CA/ca keys. Set both inside
+        // this image's saved state so the nonstroking alpha is correct.
+        let alpha = image.opacity.clamp(0.0, 1.0);
+        let gs = doc.add_graphics_state(
+            ExtendedGraphicsState::default()
+                .with_current_fill_alpha(alpha)
+                .with_current_stroke_alpha(alpha),
+        );
+        ops.push(Op::LoadGraphicsState { gs });
+    }
+    for clip in &plot.clips {
+        image_clip(
+            ops,
+            vec![clip
+                .iter()
+                .map(|p| {
+                    [
+                        ((p[0] + ox) * MM_TO_PT as f64) as f32,
+                        ((p[1] + oy) * MM_TO_PT as f64) as f32,
+                    ]
+                })
+                .collect()],
+        );
+    }
+    let draw = |ops: &mut Vec<Op>, matrix: [f32; 6]| {
+        ops.push(Op::SetTransformationMatrix {
+            matrix: printpdf::CurTransMat::Raw(matrix),
+        });
+        ops.push(Op::UseXobject {
+            id: id.clone(),
+            // Cancel printpdf's pixel-size transform: matrix maps the PDF
+            // image's unit square directly onto the CAD quad in page points.
+            transform: printpdf::XObjectTransform {
+                dpi: Some(72.0),
+                scale_x: Some(1.0 / image.width as f32),
+                scale_y: Some(1.0 / image.height as f32),
+                ..Default::default()
+            },
+        });
+    };
+    let u = [corners[1][0] - corners[0][0], corners[1][1] - corners[0][1]];
+    let v = [corners[3][0] - corners[0][0], corners[3][1] - corners[0][1]];
+    let affine = (0..2).all(|axis| {
+        (corners[2][axis] - corners[0][axis] - u[axis] - v[axis]).abs()
+            <= 1e-5 * (u[axis].abs() + v[axis].abs()).max(1.0)
+    });
+    if affine {
+        // A single draw preserves intrinsic IMAGE clipping without overlapping image draws.
+        image_clip(
+            ops,
+            image
+                .verts
+                .chunks_exact(3)
+                .map(|tri| {
+                    tri.iter()
+                        .map(|vertex| to_page(vertex.pos, vertex.pos_low))
+                        .collect()
+                })
+                .collect(),
+        );
+        draw(ops, [u[0], u[1], v[0], v[1], corners[0][0], corners[0][1]]);
+    } else {
+        // PDF transforms are affine; perspective sampling is approximate.
+        for triangle in image.verts.chunks_exact(3) {
+            let page = std::array::from_fn(|i| to_page(triangle[i].pos, triangle[i].pos_low));
+            let uv = std::array::from_fn(|i| [triangle[i].uv[0], 1.0 - triangle[i].uv[1]]);
+            let matrix = image_triangle_matrix(page, uv)
+                .filter(|matrix| matrix.iter().all(|v| v.is_finite()))
+                .ok_or("Cannot plot bitmap: degenerate texture mapping.")?;
+            ops.push(Op::SaveGraphicsState);
+            image_clip(ops, vec![page.to_vec()]);
+            draw(ops, matrix);
+            ops.push(Op::RestoreGraphicsState);
+        }
+    }
+    ops.push(Op::RestoreGraphicsState);
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn image_triangle_matrix(p: [[f32; 2]; 3], uv: [[f32; 2]; 3]) -> Option<[f32; 6]> {
+    let u = [uv[1][0] - uv[0][0], uv[1][1] - uv[0][1]];
+    let v = [uv[2][0] - uv[0][0], uv[2][1] - uv[0][1]];
+    let determinant = u[0] * v[1] - v[0] * u[1];
+    if determinant.abs() < 1e-12 {
+        return None;
+    }
+    let axes: [[f32; 2]; 2] = std::array::from_fn(|i| {
+        [
+            ((p[1][i] - p[0][i]) * v[1] - (p[2][i] - p[0][i]) * u[1]) / determinant,
+            (u[0] * (p[2][i] - p[0][i]) - v[0] * (p[1][i] - p[0][i])) / determinant,
+        ]
+    });
+    Some([
+        axes[0][0],
+        axes[1][0],
+        axes[0][1],
+        axes[1][1],
+        p[0][0] - axes[0][0] * uv[0][0] - axes[0][1] * uv[0][1],
+        p[0][1] - axes[1][0] * uv[0][0] - axes[1][1] * uv[0][1],
+    ])
 }
 
 /// Show a parented PDF save-file dialog and return the chosen path.
@@ -230,83 +395,32 @@ pub fn pick_pdf_path_owned(
 // ── PDF builder ───────────────────────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
-fn build_pdf(
-    wires: &[PlotWire],
-    hatches: &[HatchModel],
-    wipeouts: &[HatchModel],
-    paper_w: f32,
-    paper_h: f32,
-    // Absolute-world offsets, kept in f64: at UTM the drawing sits at ~5e5/4.5e6
-    // where an f32 has ~0.03 m / ~0.5 m of resolution, so an f32 offset is itself
-    // already quantised before it can cancel the coordinate it is meant to cancel.
-    ox: f64,
-    oy: f64,
-    rotation_deg: i32,
-    scale: f32,
-    clip: Option<(f32, f32, f32, f32)>,
-    plot_style: Option<&PlotStyleTable>,
-    options: PdfPlotOptions,
-) -> Vec<u8> {
+fn build_pdf_pages(pages: &[PdfPageInput], plot_style: Option<&PlotStyleTable>) -> Result<Vec<u8>, String> {
     let mut doc = PdfDocument::new("Open CAD Studio Export");
-    append_pdf_page(
-        &mut doc,
-        wires,
-        hatches,
-        wipeouts,
-        paper_w,
-        paper_h,
-        ox,
-        oy,
-        rotation_deg,
-        scale,
-        clip,
-        plot_style,
-        options,
-    );
-    let mut warnings = Vec::new();
-    doc.save(&PdfSaveOptions::default(), &mut warnings)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn build_pdf_pages(pages: &[PdfPageInput], plot_style: Option<&PlotStyleTable>) -> Vec<u8> {
-    let mut doc = PdfDocument::new("Open CAD Studio Export");
-    for page in pages {
-        append_pdf_page(
-            &mut doc,
-            &page.wires,
-            &page.hatches,
-            &page.wipeouts,
-            page.paper_w as f32,
-            page.paper_h as f32,
-            page.offset_x,
-            page.offset_y,
-            page.rotation_deg,
-            page.scale,
-            page.clip,
-            page.plot_style.as_ref().or(plot_style),
-            page.options,
-        );
+    // Borrowing all pages keeps their pixel Arcs alive until this cache is dropped.
+    // Allocation addresses cannot be reused by another source during this export.
+    let mut image_resources = std::collections::HashMap::new();
+    for (index, page) in pages.iter().enumerate() {
+        append_pdf_page(&mut doc, &mut image_resources, page, plot_style)
+            .map_err(|error| format!("Page {}: {error}", index + 1))?;
     }
     let mut warnings = Vec::new();
-    doc.save(&PdfSaveOptions::default(), &mut warnings)
+    Ok(doc.save(&PdfSaveOptions::default(), &mut warnings))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn append_pdf_page(
     doc: &mut PdfDocument,
-    wires: &[PlotWire],
-    hatches: &[HatchModel],
-    wipeouts: &[HatchModel],
-    paper_w: f32,
-    paper_h: f32,
-    ox: f64,
-    oy: f64,
-    rotation_deg: i32,
-    scale: f32,
-    clip: Option<(f32, f32, f32, f32)>,
-    plot_style: Option<&PlotStyleTable>,
-    options: PdfPlotOptions,
-) {
+    image_resources: &mut std::collections::HashMap<(usize, u32, u32), printpdf::XObjectId>,
+    page: &PdfPageInput,
+    fallback_plot_style: Option<&PlotStyleTable>,
+) -> Result<(), String> {
+    let PlotContent { wires, hatches, wipeouts, images, group_splits } = &page.content;
+    let (paper_w, paper_h) = (page.paper_w as f32, page.paper_h as f32);
+    let (ox, oy) = (page.offset_x, page.offset_y);
+    let (rotation_deg, scale, clip) = (page.rotation_deg, page.scale, page.clip);
+    let plot_style = page.plot_style.as_ref().or(fallback_plot_style);
+    let options = page.options;
     let mut ops: Vec<Op> = Vec::new();
 
     // White page background.
@@ -411,23 +525,26 @@ fn append_pdf_page(
 
 
     let (first_wires, second_wires) =
-        wires.split_at(options.group_splits.wires.min(wires.len()));
+        wires.split_at(group_splits.wires.min(wires.len()));
     let (first_hatches, second_hatches) =
-        hatches.split_at(options.group_splits.hatches.min(hatches.len()));
+        hatches.split_at(group_splits.hatches.min(hatches.len()));
     let (first_wipeouts, second_wipeouts) =
-        wipeouts.split_at(options.group_splits.wipeouts.min(wipeouts.len()));
-    for (wires, hatches, wipeouts) in [
-        (first_wires, first_hatches, first_wipeouts),
-        (second_wires, second_hatches, second_wipeouts),
+        wipeouts.split_at(group_splits.wipeouts.min(wipeouts.len()));
+    let (first_images, second_images) =
+        images.split_at(group_splits.images.min(images.len()));
+    for (wires, hatches, wipeouts, images) in [
+        (first_wires, first_hatches, first_wipeouts, first_images),
+        (second_wires, second_hatches, second_wipeouts, second_images),
     ] {
     enum DrawItem<'a> {
         WireFill(&'a PlotWire),
         Hatch(&'a HatchModel),
+        Image(&'a PlotImage),
         Wire(&'a PlotWire),
         Text(&'a PlotWire),
     }
 
-    let mut draw_items = Vec::with_capacity(wires.len() * 2 + hatches.len() + wipeouts.len());
+    let mut draw_items = Vec::with_capacity(wires.len() * 2 + hatches.len() + wipeouts.len() + images.len());
     let mut sequence = 0usize;
     for wire in wires {
         if !wire.fill_tris.is_empty() {
@@ -443,6 +560,10 @@ fn append_pdf_page(
     }
     for hatch in wipeouts.iter().chain(hatches.iter()) {
         draw_items.push((hatch.draw_depth, 1u8, sequence, DrawItem::Hatch(hatch)));
+        sequence += 1;
+    }
+    for image in images {
+        draw_items.push((image.image.draw_depth, 1u8, sequence, DrawItem::Image(image)));
         sequence += 1;
     }
     draw_items.sort_by(|a, b| {
@@ -506,6 +627,10 @@ fn append_pdf_page(
                 last_color = None;
                 last_lw = None;
                 last_dash = None;
+                continue;
+            }
+            DrawItem::Image(image) => {
+                emit_image(doc, image_resources, &mut ops, image, ox, oy, options)?;
                 continue;
             }
             DrawItem::Wire(wire) => wire,
@@ -722,6 +847,7 @@ fn append_pdf_page(
 
     let page = PdfPage::new(Mm(paper_w), Mm(paper_h), ops);
     doc.pages.push(page);
+    Ok(())
 }
 
 /// Build a PDF dash array (in points) from a WireModel linetype pattern.
@@ -1517,6 +1643,21 @@ fn emit_text(
 mod tests {
     use super::*;
 
+    fn test_page(wires: Vec<PlotWire>) -> PdfPageInput {
+        PdfPageInput {
+            content: PlotContent { wires: std::sync::Arc::new(wires), ..Default::default() },
+            paper_w: 210.0,
+            paper_h: 297.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            rotation_deg: 0,
+            scale: 1.0,
+            clip: None,
+            options: PdfPlotOptions::default(),
+            plot_style: None,
+        }
+    }
+
     #[test]
     fn atomic_write_replaces_an_existing_pdf() {
         let path = std::env::temp_dir().join(format!(
@@ -1546,20 +1687,10 @@ mod tests {
             ),
             draw_depth: 0.0,
         };
-        let bytes = build_pdf(
-            &[w],
-            &[],
-            &[],
-            210.0,
-            297.0,
-            0.0,
-            0.0,
-            0,
-            2.0,
-            Some((10.0, 10.0, 100.0, 100.0)),
-            None,
-            PdfPlotOptions::default(),
-        );
+        let mut page = test_page(vec![w]);
+        page.scale = 2.0;
+        page.clip = Some((10.0, 10.0, 100.0, 100.0));
+        let bytes = build_pdf_pages(&[page], None).unwrap();
         // A valid PDF is produced (starts with the PDF header) and is non-trivial.
         assert!(bytes.starts_with(b"%PDF"), "not a PDF");
         assert!(bytes.len() > 200, "suspiciously small: {}", bytes.len());
@@ -1594,34 +1725,8 @@ mod tests {
         let mut blank = wire.clone();
         blank.wire.text_verts.clear();
 
-        let with_text = build_pdf(
-            &[wire],
-            &[],
-            &[],
-            210.0,
-            297.0,
-            0.0,
-            0.0,
-            0,
-            1.0,
-            None,
-            None,
-            PdfPlotOptions::default(),
-        );
-        let no_text = build_pdf(
-            &[blank],
-            &[],
-            &[],
-            210.0,
-            297.0,
-            0.0,
-            0.0,
-            0,
-            1.0,
-            None,
-            None,
-            PdfPlotOptions::default(),
-        );
+        let with_text = build_pdf_pages(&[test_page(vec![wire])], None).unwrap();
+        let no_text = build_pdf_pages(&[test_page(vec![blank])], None).unwrap();
         assert!(with_text.starts_with(b"%PDF"));
         assert!(
             with_text.len() > no_text.len(),

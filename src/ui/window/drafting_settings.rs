@@ -111,19 +111,44 @@ pub fn view_window<'a>(
     };
 
     // ── Tab Bar ──────────────────────────────────────────────────────────
+    // Real tab strip: a single non-wrapping row of tab-shaped buttons with a
+    // divider underneath, matching the style-manager editor shell. The row
+    // never wraps — it clips on overflow so "Selection Cycling" can't spill
+    // onto a second row.
     let tab_button = |tab: DraftingSettingsTab, label: Cow<'a, str>| {
         let is_active = state.active_tab == tab;
-        button(text(label).size(11.5))
+        button(text(label).size(11))
             .on_press(Message::DraftingSettingsTabChanged(tab))
-            .style(if is_active {
-                button::primary
-            } else {
-                button::secondary
+            .style(move |theme: &Theme, status| {
+                let palette = theme.palette();
+                let pair = match (is_active, status) {
+                    (true, _) => palette.primary.strong,
+                    (
+                        false,
+                        button::Status::Hovered | button::Status::Pressed,
+                    ) => palette.background.strong,
+                    _ => palette.background.weak,
+                };
+                button::Style {
+                    background: Some(Background::Color(pair.color)),
+                    text_color: pair.text,
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        radius: iced::border::Radius {
+                            top_left: 4.0,
+                            top_right: 4.0,
+                            bottom_right: 0.0,
+                            bottom_left: 0.0,
+                        },
+                    },
+                    ..Default::default()
+                }
             })
-            .padding([5, 9])
+            .padding([4, 8])
     };
 
-    let tab_bar = row![
+    let tab_row = row![
         tab_button(DraftingSettingsTab::SnapAndGrid, crate::t!("Snap and Grid")),
         tab_button(DraftingSettingsTab::PolarTracking, crate::t!("Polar Tracking")),
         tab_button(DraftingSettingsTab::ObjectSnap, crate::t!("Object Snap")),
@@ -132,8 +157,21 @@ pub fn view_window<'a>(
         tab_button(DraftingSettingsTab::QuickProperties, crate::t!("Quick Properties")),
         tab_button(DraftingSettingsTab::SelectionCycling, crate::t!("Selection Cycling")),
     ]
-    .spacing(4)
-    .wrap();
+    .spacing(2)
+    .width(Fill)
+    .clip(true);
+
+    let tab_divider = container(Space::new().width(Fill).height(1))
+        .width(Fill)
+        .height(1)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.palette().background.neutral.color,
+            )),
+            ..Default::default()
+        });
+
+    let tab_bar = column![tab_row, tab_divider].spacing(0).width(Fill);
 
     // ── Tab 1: Snap and Grid ─────────────────────────────────────────────
     let snap_and_grid_view = {

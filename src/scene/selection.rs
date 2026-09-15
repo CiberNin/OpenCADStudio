@@ -72,6 +72,7 @@ impl Scene {
         if handles.is_empty() {
             return;
         }
+        self.selected_constraint = None;
         let expanded = self.expanded_with_leaders(handles);
         let mut changed = false;
         for handle in expanded {
@@ -111,6 +112,7 @@ impl Scene {
         expanded
     }
     pub fn select_entity(&mut self, handle: Handle, exclusive: bool) {
+        self.selected_constraint = None;
         let handles = self.handles_expanded_for_leader_annotations(&[handle]);
         let mut changed = false;
 
@@ -133,6 +135,7 @@ impl Scene {
     }
 
     pub fn deselect_all(&mut self) {
+        self.selected_constraint = None;
         if self.selected.is_empty() {
             return;
         }
@@ -215,6 +218,7 @@ impl Scene {
     /// only when its contents actually changed. History/file/command paths must
     /// use this instead of assigning `selected` directly.
     pub(crate) fn replace_selection(&mut self, selected: HashSet<Handle>) {
+        self.selected_constraint = None;
         let handles: Vec<Handle> = selected.iter().copied().collect();
         let selected: HashSet<Handle> = self
             .handles_expanded_for_leader_annotations(&handles)
@@ -750,7 +754,8 @@ impl Scene {
                                 | PropValue::FieldLwVaries { .. }
                                 | PropValue::EntityLink { .. }
                                 | PropValue::ParamRow { .. }
-                                | PropValue::ParamAddRow => continue,
+                                | PropValue::ParamAddRow
+                                | PropValue::ParamsVisibilityToggle(_) => continue,
                             }
                         };
                         out.push(choice(prop.field, prop.label, editor));
@@ -887,7 +892,8 @@ impl Scene {
                     | PropValue::FieldLwVaries { .. }
                     | PropValue::EntityLink { .. }
                     | PropValue::ParamRow { .. }
-                    | PropValue::ParamAddRow => return None,
+                    | PropValue::ParamAddRow
+                    | PropValue::ParamsVisibilityToggle(_) => return None,
                 })
             }
         }
@@ -1001,6 +1007,7 @@ impl Scene {
                 self.hover_highlight = None;
                 hover_changed = true;
             }
+            hover_changed |= self.constraint_hover_highlights.remove(&h);
             self.hatches.remove(&h);
             self.images.remove(&h);
             self.meshes.remove(&h);

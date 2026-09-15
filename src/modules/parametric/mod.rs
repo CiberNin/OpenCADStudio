@@ -4,11 +4,13 @@
 
 mod coincident;
 mod equal_distance;
+mod geom_constraint;
 mod point_on_entity;
 mod tools;
 mod value;
 pub use coincident::{coincident_tool, CoincidentConstraintCommand};
 pub use equal_distance::{equal_distance_tool, EqualDistanceConstraintCommand};
+pub use geom_constraint::GeomConstraintCommand;
 pub use point_on_entity::{
     center_point_tool, midpoint_tool, point_on_curve_tool, PointOnEntityConstraintCommand,
 };
@@ -128,7 +130,7 @@ impl CadModule for ParametricModule {
 
 inventory::submit!(crate::command::CommandRegistration {
     names: &[
-        "AUTOCONSTRAIN", "SMOOTHCONSTRAINT", "GCSHOW", "GCHIDE", "GCRESET",
+        "AUTOCONSTRAIN", "CONSTRAINTSETTINGS", "SMOOTHCONSTRAINT", "GCSHOW", "GCHIDE", "GCRESET",
         "GCSHOWALL", "GCHIDEALL", "DCSHOW", "DCHIDE", "DCSHOWALL", "DCHIDEALL",
         "DCCONVERT", "DELCONSTRAINT",
     ]

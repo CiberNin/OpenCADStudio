@@ -27,12 +27,29 @@ const CONSTRAINT_GLYPH_PAD_X: f32 = 7.0;
 const CONSTRAINT_GLYPH_PAD_Y: f32 = 4.0;
 const CONSTRAINT_GLYPH_GAP: f32 = 6.0;
 const CONSTRAINT_GLYPH_ROW_GAP: f32 = 4.0;
+const CONSTRAINT_HOVER_MARKER_RADIUS: f32 = 7.0;
 
 fn constraint_glyph_size(label: &str) -> Size {
     let w = label.chars().count() as f32 * CONSTRAINT_GLYPH_SIZE * 0.62
         + CONSTRAINT_GLYPH_PAD_X * 2.0;
     let h = CONSTRAINT_GLYPH_SIZE + CONSTRAINT_GLYPH_PAD_Y * 2.0;
     Size::new(w, h)
+}
+
+fn draw_tangent_constraint_glyph(
+    frame: &mut canvas::Frame,
+    center: Point,
+    color: Color,
+) {
+    let radius = 4.5;
+    let circle_center = Point::new(center.x - 0.3, center.y + 2.75);
+    let diagonal = radius * std::f32::consts::FRAC_1_SQRT_2;
+    let contact = Point::new(circle_center.x - diagonal, circle_center.y - diagonal);
+    let tangent_end = Point::new(contact.x + 8.0, contact.y - 8.0);
+    let stroke = canvas::Stroke::default().with_color(color).with_width(1.35);
+
+    frame.stroke(&canvas::Path::circle(circle_center, radius), stroke.clone());
+    frame.stroke(&canvas::Path::line(contact, tangent_end), stroke);
 }
 
 fn constraint_glyph_box(
@@ -92,6 +109,32 @@ fn constraint_glyph_offsets(glyphs: &[(Point, [f32; 2], String, bool)]) -> Vec<f
         }
     }
     offsets
+}
+
+/// Hit-tests screen point `p` against the same glyph-pill layout `draw`
+/// renders — reusing `constraint_glyph_offsets`/`constraint_glyph_box` so
+/// the clickable area can never drift from what's actually drawn, including
+/// the tangential fan-out applied when several glyphs share one anchor.
+/// Returns the index into `glyphs` of the topmost (last-drawn) match.
+/// `Scene::constraint_glyph_hit` maps the index back to a constraint id.
+pub(crate) fn constraint_glyph_hit_test(
+    glyphs: &[(Point, [f32; 2], String, bool)],
+    p: Point,
+) -> Option<usize> {
+    let offsets = constraint_glyph_offsets(glyphs);
+    glyphs
+        .iter()
+        .zip(offsets)
+        .enumerate()
+        .rev()
+        .find_map(|(index, ((anchor, outward, label, _), tangent_offset))| {
+            let (top_left, size) = constraint_glyph_box(*anchor, *outward, label, tangent_offset);
+            let within = p.x >= top_left.x
+                && p.x <= top_left.x + size.width
+                && p.y >= top_left.y
+                && p.y <= top_left.y + size.height;
+            within.then_some(index)
+        })
 }
 
 /// Convert CURSORSIZE to a screen-space arm length while keeping the original
@@ -723,7 +766,7 @@ pub fn selection_overlay<'a>(
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    constraint_glyphs: Vec<(Point, [f32; 2], String, bool)>,
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool, Vec<Point>)>,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -806,8 +849,10 @@ struct SelectionCanvas {
     crosshair_bg: [f32; 4],
     crosshair: CrosshairOptions,
     selection_visual: SelectionVisualOptions,
-    /// Constraint glyph anchor, outward screen direction, label, and conflict state.
-    constraint_glyphs: Vec<(Point, [f32; 2], String, bool)>,
+    /// Constraint glyph anchor, outward screen direction, label, conflict
+    /// state, whether the pill itself is the current click-to-select target,
+    /// and the points to mark while the pill is hovered.
+    constraint_glyphs: Vec<(Point, [f32; 2], String, bool, bool, Vec<Point>)>,
 }
 
 fn draw_grip_marker(
@@ -987,6 +1032,18 @@ impl canvas::Program<Message> for SelectionCanvas {
                 {
                     return mouse::Interaction::None;
                 }
+            }
+        }
+        if let Some(pos) = cursor.position_in(bounds) {
+            let glyphs: Vec<_> = self
+                .constraint_glyphs
+                .iter()
+                .map(|(anchor, outward, label, conflict, _, _)| {
+                    (*anchor, *outward, label.clone(), *conflict)
+                })
+                .collect();
+            if constraint_glyph_hit_test(&glyphs, pos).is_some() {
+                return mouse::Interaction::Pointer;
             }
         }
         // The resize cursor over a divider is supplied by the input pane_grid
@@ -1703,9 +1760,22 @@ impl canvas::Program<Message> for SelectionCanvas {
             frame.stroke(&b1, stroke.clone());
             frame.stroke(&b2, stroke);
         }
-        // Constraint glyphs are visual-only and have no hit testing.
+        // Hit testing shares this layout math with the scene projection.
         if !self.constraint_glyphs.is_empty() {
-            let offsets = constraint_glyph_offsets(&self.constraint_glyphs);
+            // `constraint_glyph_offsets` only needs the anchor/outward/label/
+            // conflict quadruple it was written against; project away the
+            // trailing display fields rather than widen its signature.
+            let glyphs_for_offsets: Vec<(Point, [f32; 2], String, bool)> = self
+                .constraint_glyphs
+                .iter()
+                .map(|(anchor, outward, label, is_conflicting, _, _)| {
+                    (*anchor, *outward, label.clone(), *is_conflicting)
+                })
+                .collect();
+            let offsets = constraint_glyph_offsets(&glyphs_for_offsets);
+            let hovered = cursor
+                .position_in(bounds)
+                .and_then(|point| constraint_glyph_hit_test(&glyphs_for_offsets, point));
             let normal_bg = theme.palette().primary.base.color;
             let normal_fg = theme.palette().primary.base.text;
             // A redundant or conflicting constraint gets the danger palette
@@ -1714,7 +1784,8 @@ impl canvas::Program<Message> for SelectionCanvas {
             // would show, surfaced right on the geometry.
             let conflict_bg = theme.palette().danger.base.color;
             let conflict_fg = theme.palette().danger.base.text;
-            for ((anchor, outward, label, is_conflicting), tangent_offset) in
+            let selected_ring = theme.palette().primary.strong.color;
+            for ((anchor, outward, label, is_conflicting, is_selected, _), tangent_offset) in
                 self.constraint_glyphs.iter().zip(offsets)
             {
                 if !anchor.x.is_finite() || !anchor.y.is_finite() {
@@ -1729,17 +1800,58 @@ impl canvas::Program<Message> for SelectionCanvas {
                     (size.height * 0.5).into(),
                 );
                 frame.fill(&pill, bg);
-                frame.fill_text(canvas::Text {
-                    content: label.clone(),
-                    position: Point::new(
-                        top_left.x + CONSTRAINT_GLYPH_PAD_X,
-                        top_left.y + CONSTRAINT_GLYPH_PAD_Y,
-                    ),
-                    color: fg,
-                    size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
-                    shaping: iced::advanced::text::Shaping::Advanced,
-                    ..Default::default()
-                });
+                if *is_selected {
+                    frame.stroke(
+                        &pill,
+                        canvas::Stroke::default().with_color(selected_ring).with_width(2.0),
+                    );
+                }
+                let glyph_center = Point::new(
+                    top_left.x + size.width * 0.5,
+                    top_left.y + size.height * 0.5,
+                );
+                if label == "T" {
+                    draw_tangent_constraint_glyph(&mut frame, glyph_center, fg);
+                } else {
+                    frame.fill_text(canvas::Text {
+                        content: label.clone(),
+                        position: glyph_center,
+                        color: fg,
+                        size: iced::Pixels(CONSTRAINT_GLYPH_SIZE),
+                        align_x: iced::alignment::Horizontal::Center.into(),
+                        align_y: iced::alignment::Vertical::Center,
+                        shaping: iced::advanced::text::Shaping::Advanced,
+                        ..Default::default()
+                    });
+                }
+            }
+            if let Some(index) = hovered {
+                let red = Color::from_rgb(1.0, 0.0, 0.0);
+                let stroke = canvas::Stroke::default().with_color(red).with_width(1.5);
+                for point in &self.constraint_glyphs[index].5 {
+                    let first = canvas::Path::line(
+                        Point::new(
+                            point.x - CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y - CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                        Point::new(
+                            point.x + CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y + CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                    );
+                    let second = canvas::Path::line(
+                        Point::new(
+                            point.x - CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y + CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                        Point::new(
+                            point.x + CONSTRAINT_HOVER_MARKER_RADIUS,
+                            point.y - CONSTRAINT_HOVER_MARKER_RADIUS,
+                        ),
+                    );
+                    frame.stroke(&first, stroke.clone());
+                    frame.stroke(&second, stroke.clone());
+                }
             }
         }
         // Small cross at each acquired tracking point.
@@ -3424,6 +3536,9 @@ mod constraint_glyph_tests {
         assert!(
             (anchor.y - (left.y + right_size.height) - CONSTRAINT_GLYPH_GAP).abs() < 1e-6
         );
+
+        let click = Point::new(left.x + left_size.width * 0.5, left.y + left_size.height * 0.5);
+        assert_eq!(constraint_glyph_hit_test(&glyphs, click), Some(0));
     }
 }
 

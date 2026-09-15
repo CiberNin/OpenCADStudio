@@ -25,10 +25,15 @@ pub enum HatchEditOperation {
         style: Option<acadrust::entities::HatchStyleType>,
         annotative: Option<bool>,
     },
-    RecreateBoundary { associate: bool, region: bool },
+    RecreateBoundary {
+        associate: bool,
+        region: bool,
+    },
     BeginAssociate,
     AssociatePaths(Vec<acadrust::entities::BoundaryPath>),
-    DrawOrderBoundary { above: bool },
+    DrawOrderBoundary {
+        above: bool,
+    },
     Separate,
     AddBoundaries(Vec<Handle>),
     RemoveBoundaries(Vec<Handle>),
@@ -102,8 +107,7 @@ impl WorkingPlane {
 
     pub fn angle(self, from: DVec3, to: DVec3) -> Option<f64> {
         let direction = self.vector_to_local(to - from);
-        (direction.x.hypot(direction.y) > f64::EPSILON)
-            .then(|| direction.y.atan2(direction.x))
+        (direction.x.hypot(direction.y) > f64::EPSILON).then(|| direction.y.atan2(direction.x))
     }
 
     pub fn to_world_transform(self) -> acadrust::types::Transform {
@@ -493,16 +497,18 @@ impl CadCommand for UserRegCommand {
 
     fn prompt(&self) -> String {
         match self.slot {
-            None => crate::t!("%{name}  which register?  [1-5]:", name = self.name)
-                .into_owned(),
-            Some(n) => crate::t!("%{name}%{slot}  new value:", name = self.name, slot = n)
-                .into_owned(),
+            None => crate::t!("%{name}  which register?  [1-5]:", name = self.name).into_owned(),
+            Some(n) => {
+                crate::t!("%{name}%{slot}  new value:", name = self.name, slot = n).into_owned()
+            }
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         match self.slot {
-            None => (1..=5).map(|n| CmdOption::new(&n.to_string(), &n.to_string())).collect(),
+            None => (1..=5)
+                .map(|n| CmdOption::new(&n.to_string(), &n.to_string()))
+                .collect(),
             Some(_) => Vec::new(),
         }
     }
@@ -593,9 +599,10 @@ fn match_cmd_option<'a>(
         return None;
     }
     // 1. Exact match on keyword or label (case-insensitive)
-    if let Some(opt) = options.iter().find(|(label, k, _)| {
-        k.eq_ignore_ascii_case(&up) || label.eq_ignore_ascii_case(t)
-    }) {
+    if let Some(opt) = options
+        .iter()
+        .find(|(label, k, _)| k.eq_ignore_ascii_case(&up) || label.eq_ignore_ascii_case(t))
+    {
         return Some(opt);
     }
     // 2. Unambiguous prefix match on keyword or label (e.g. "A" -> "ABOVE", "L" -> "LEFT")
@@ -650,8 +657,7 @@ impl CadCommand for KeywordCommand {
             // Consumed inputs that keep prompting return `Some(NeedPoint)` —
             // `None` would hand the same text to the command a second time.
             None => {
-                let Some((_, keyword, value_prompt)) = match_cmd_option(&self.options, t)
-                else {
+                let Some((_, keyword, value_prompt)) = match_cmd_option(&self.options, t) else {
                     // Unknown verb — keep prompting rather than dispatch garbage.
                     return Some(CmdResult::NeedPoint);
                 };
@@ -809,7 +815,7 @@ impl CadCommand for Mid2PointCommand {
                 WireModel::CYAN,
                 false,
             ));
-            // Midpoint marker (AutoCAD style triangle glyph)
+            // Midpoint marker (triangle glyph)
             let mid = (first + pt) * 0.5;
             let dist = (pt - first).length();
             let s = (dist * 0.02).clamp(0.5, 10.0);
@@ -833,7 +839,6 @@ impl CadCommand for Mid2PointCommand {
 inventory::submit!(CommandRegistration {
     names: &["MTP", "M2P"],
 });
-
 
 /// Generic interactive front-end for a keyword command that operates on the
 /// current selection (CHPROP, ADJUST, XDATA, UNDERLAY, DRAWORDER…). If nothing
@@ -942,8 +947,7 @@ impl CadCommand for SelectThenKeywordCommand {
                 }
             }
             None => {
-                let Some((_, keyword, value_prompt)) = match_cmd_option(&self.options, t)
-                else {
+                let Some((_, keyword, value_prompt)) = match_cmd_option(&self.options, t) else {
                     // Unknown verb — consumed, keep prompting (`None` would
                     // feed the same text to the command a second time).
                     return Some(CmdResult::NeedPoint);
@@ -1233,6 +1237,17 @@ pub enum ExtrudeExtent {
     Path(Handle),
 }
 
+/// One ordered selection used by the Coincident command.  A click can name
+/// either a constraint point on an entity or the entity's whole curve.  Typed
+/// coordinates have no entity handle and are resolved by the host after the
+/// command returns.
+#[derive(Clone, Copy, Debug)]
+pub struct CoincidentPick {
+    pub handle: Option<Handle>,
+    pub point: DVec3,
+    pub whole_curve: bool,
+}
+
 /// Construction options shared by SWEEP creation and its live preview.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SweepOptions {
@@ -1405,7 +1420,10 @@ pub enum CmdResult {
     /// Copy selected entities with a transform; command stays active for more copies.
     CopySelected(Vec<Handle>, EntityTransform),
     /// Store selected entities in the shared clipboard; command stays active.
-    CopyToClipboard { handles: Vec<Handle>, base: DVec3 },
+    CopyToClipboard {
+        handles: Vec<Handle>,
+        base: DVec3,
+    },
     /// Commit a hatch fill (stored in Scene::hatches, not the DXF document).
     CommitHatch(HatchModel),
     /// Commit a hatch with the selected hatch's entity colour and transparency.
@@ -1430,22 +1448,25 @@ pub enum CmdResult {
     /// Erase `handle` and replace with new entities; command stays active.
     ReplaceEntity(Handle, Vec<EntityType>),
     /// Update one entity in place, preserve its handle, and end the command.
-    UpdateEntityAndFinish { handle: Handle, entity: EntityType },
+    UpdateEntityAndFinish {
+        handle: Handle,
+        entity: EntityType,
+    },
     /// Replace / delete multiple entities and add new ones; command ends.
     /// Each pair: (handle_to_erase, replacement_entities) — empty vec = delete only.
     ReplaceMany(Vec<(Handle, Vec<EntityType>)>, Vec<EntityType>),
     /// Replace several entities as one undo step while keeping the command active.
     ReplaceManyContinue(Vec<(Handle, Vec<EntityType>)>),
     /// Add a persistent parametric constraint to the current scope's
-    /// `SketchConstraintSet` and trigger its
+    /// `ParametricConstraintSet` and trigger its
     /// first solve; end the command. Unlike `ReplaceMany`/`CommitEntity`,
     /// nothing here is geometry to add or replace directly — the host adds
     /// the constraint record, then re-solves through `Scene::bump_entities`'s
-    /// existing chain (`refresh_sketch_constraints`) the same way any later
+    /// existing chain (`refresh_parametric_constraints`) the same way any later
     /// edit to these entities will.
-    AddSketchConstraint {
-        kind: crate::scene::sketch_constraints::ConstraintKind,
-        refs: Vec<crate::scene::sketch_constraints::SketchRef>,
+    AddParametricConstraint {
+        kind: crate::scene::parametric_constraints::ConstraintKind,
+        refs: Vec<crate::scene::parametric_constraints::ParametricRef>,
         /// The typed target for a dimensional kind (Distance/Angle/Radius) —
         /// a literal number, or a named-parameter reference recognized by
         /// `DistanceConstraintCommand`/`AngleConstraintCommand::
@@ -1456,19 +1477,28 @@ pub enum CmdResult {
         /// Undo-history label, e.g. `"Horizontal constraint"`.
         label: &'static str,
     },
-    /// Adds a Coincident constraint between the sub-entity points nearest
-    /// the two picked positions. The host resolves the raw points because
-    /// `CadCommand` has no document access.
+    /// Opens the Auto Constrain settings dialog from the selection prompt.
+    OpenAutoConstrainSettings,
+    /// Adds an ordered Coincident relation.  Point/point selections create a
+    /// Coincident constraint; point/curve selections create the corresponding
+    /// point-on-curve relation while retaining Coincident command semantics.
     AddCoincidentConstraint {
-        point_a: DVec3,
-        point_b: DVec3,
+        first: CoincidentPick,
+        second: CoincidentPick,
+        /// Keep the first curve active and accept another point.
+        multiple: bool,
         label: &'static str,
+    },
+    /// Apply only Coincident relations that already exist geometrically in
+    /// the selected set.
+    AddAutoCoincidentConstraints {
+        handles: Vec<Handle>,
     },
     /// Add a persistent `CenterPoint`/`Midpoint`/`PointOnCurve` constraint
     /// (`crate::modules::parametric::point_on_entity`) between one
     /// picked point and `target`, a whole entity selected before the tool
     /// ran. Like `AddCoincidentConstraint`, the host resolves `point` via
-    /// `sketch_constraints::nearest_sketch_point` (a `CadCommand` has no
+    /// `parametric_constraints::nearest_parametric_point` (a `CadCommand` has no
     /// document access) and, for `CenterPoint` specifically, addresses
     /// `target` via its center marker rather than as a whole entity — see
     /// `ConstraintKind::CenterPoint`'s own doc comment for why it's the
@@ -1477,14 +1507,14 @@ pub enum CmdResult {
     AddPointOnEntityConstraint {
         point: DVec3,
         target: Handle,
-        kind: crate::scene::sketch_constraints::ConstraintKind,
+        kind: crate::scene::parametric_constraints::ConstraintKind,
         label: &'static str,
     },
     /// Add a persistent `EqualDistance` constraint
     /// (`crate::modules::parametric::equal_distance`): the distance
     /// between `points[0]`/`points[1]` equals the distance between
     /// `points[2]`/`points[3]`. The host resolves each point via
-    /// `sketch_constraints::nearest_sketch_point`, same reasoning as
+    /// `parametric_constraints::nearest_parametric_point`, same reasoning as
     /// `AddCoincidentConstraint`.
     AddEqualDistanceConstraint {
         points: [DVec3; 4],
@@ -1516,7 +1546,10 @@ pub enum CmdResult {
     /// it owns the document needed for the table-style lookup — honors
     /// content locks, and launches the cell editor, re-prompting the
     /// command when the pick misses a cell.
-    EditTableCell { handle: Handle, point: DVec3 },
+    EditTableCell {
+        handle: Handle,
+        point: DVec3,
+    },
     /// Cancel because the active drawing space changed. Cleanup is identical
     /// to `Cancel`, but the host reports the context change explicitly.
     CancelForSpaceChange,
@@ -1539,13 +1572,24 @@ pub enum CmdResult {
     /// `Relaunch` it does not touch the selection.
     Dispatch(String),
     /// Move `dest` entities to the layer of the `src` entity; end command.
-    MatchEntityLayer { dest: Vec<Handle>, src: Handle },
+    MatchEntityLayer {
+        dest: Vec<Handle>,
+        src: Handle,
+    },
     /// Copy all visual properties (layer/color/linetype/lineweight) from `src` to `dest`; end command.
-    MatchProperties { dest: Vec<Handle>, src: Handle },
+    MatchProperties {
+        dest: Vec<Handle>,
+        src: Handle,
+    },
     /// Create a named group from the given entity handles; end command.
-    CreateGroup { handles: Vec<Handle>, name: String },
+    CreateGroup {
+        handles: Vec<Handle>,
+        name: String,
+    },
     /// Dissolve all groups that contain any of the given handles; end command.
-    DeleteGroups { handles: Vec<Handle> },
+    DeleteGroups {
+        handles: Vec<Handle>,
+    },
     /// Freeze or thaw layers by name in the given viewport; command stays active.
     VpLayerUpdate {
         vp_handle: Handle,
@@ -1553,9 +1597,14 @@ pub enum CmdResult {
         thaw: Vec<String>,
     },
     /// Paste clipboard entities translated so their centroid lands at `base_pt`; end command.
-    PasteClipboard { base_pt: DVec3 },
+    PasteClipboard {
+        base_pt: DVec3,
+    },
     /// Zoom the model-space camera to fit the given corner points; end command.
-    ZoomToWindow { p1: DVec3, p2: DVec3 },
+    ZoomToWindow {
+        p1: DVec3,
+        p2: DVec3,
+    },
     /// Print a measurement result to the command line and end the command.
     Measurement(String),
     /// Print a measurement result and keep the command active.
@@ -1567,20 +1616,36 @@ pub enum CmdResult {
     /// Clear the current selection and keep the command active at its updated step.
     DeselectAndContinue,
     /// Break `handle` at points `p1` and `p2`; replace with computed fragments.
-    BreakEntity { handle: Handle, p1: DVec3, p2: DVec3 },
+    BreakEntity {
+        handle: Handle,
+        p1: DVec3,
+        p2: DVec3,
+    },
     /// Attempt to join the given entities into fewer merged entities.
     JoinEntities(Vec<Handle>),
     /// Join candidates into an explicitly selected source.
-    JoinToSource { source: Handle, handles: Vec<Handle> },
+    JoinToSource {
+        source: Handle,
+        handles: Vec<Handle>,
+    },
     /// Apply a polyline-edit operation to one entity; keep command active.
     PeditOp {
         handle: Handle,
         op: crate::modules::draw::modify::pedit::PeditOp,
     },
     /// Place Point entities at N equal intervals along the entity.
-    DivideEntity { handle: Handle, n: usize, marker: Option<CurveMarker> },
+    DivideEntity {
+        handle: Handle,
+        n: usize,
+        marker: Option<CurveMarker>,
+    },
     /// Place Point entities at `segment_length` intervals along the entity.
-    MeasureEntity { handle: Handle, segment_length: f64, pick_point: DVec3, marker: Option<CurveMarker> },
+    MeasureEntity {
+        handle: Handle,
+        segment_length: f64,
+        pick_point: DVec3,
+        marker: Option<CurveMarker>,
+    },
     /// Extend/trim a Line or Arc by the given mode; end command.
     LengthenEntity {
         handle: Handle,
@@ -1596,7 +1661,10 @@ pub enum CmdResult {
         scale: f64,
     },
     /// Set the plot window on the active layout's PlotSettings.
-    SetPlotWindow { p1: DVec3, p2: DVec3 },
+    SetPlotWindow {
+        p1: DVec3,
+        p2: DVec3,
+    },
     /// Create a paper-space viewport. `preserve_view` keeps an explicitly
     /// selected/defined view instead of applying the normal model-extents fit.
     MviewCreate {
@@ -1623,7 +1691,10 @@ pub enum CmdResult {
     /// Quick-print the bounding box of the given selected entities to a PDF.
     QuickPrint(Vec<Handle>),
     /// Replace the text content of a Text/MText entity in-place.
-    DdeditEntity { handle: Handle, new_text: String },
+    DdeditEntity {
+        handle: Handle,
+        new_text: String,
+    },
     /// Apply one DIMEDIT operation to every selected dimension.
     EditDimensions {
         handles: Vec<Handle>,
@@ -1631,7 +1702,9 @@ pub enum CmdResult {
     },
     /// Open the in-place editor (plain box or rich MText editor, per type) for
     /// a text-bearing entity picked by a command such as DDEDIT.
-    EditTextEntity { handle: Handle },
+    EditTextEntity {
+        handle: Handle,
+    },
     /// Open the in-place MText editor (formatting toolbar + multi-line text
     /// area with live viewport preview). `handle` is `Some` when editing an
     /// existing MText, `None` when creating a new one at `pos`.
@@ -1784,17 +1857,18 @@ pub enum CmdResult {
     /// INSERT landed on a block that has AttributeDefinitions.
     /// The host should look up the attdefs for `block_name` from the document
     /// and call `attreq_set_attdefs()` on the command, then loop on text input.
-    AttreqNeeded { block_name: String },
+    AttreqNeeded {
+        block_name: String,
+    },
     /// Add a command-owned "live" entity to the document mid-command and hand
     /// its assigned handle back to the active command via `set_live_handle()`.
     /// One undo snapshot is pushed here, so the whole in-progress object reverts
     /// as a single unit. The command stays active. Used by PLINE so the partial
     /// polyline is a real, snappable entity while later vertices are placed.
     CommitLiveEntity(EntityType),
-    /// Replace the geometry of the live entity `handle` in place — preserving
-    /// its layer — without pushing a new undo snapshot. When `finish` is true
-    /// the command also exits (the entity is already committed, so no separate
-    /// commit is needed).
+    /// Replace the geometry of the live entity `handle` in place while
+    /// preserving its document identity and common display properties. No new
+    /// undo snapshot is pushed. When `finish` is true the command also exits.
     UpdateLiveEntity {
         handle: Handle,
         entity: EntityType,
@@ -1808,7 +1882,9 @@ pub enum CmdResult {
     /// PLINE's Undo popping back below the two vertices an entity needs.
     RemoveLiveEntity(Handle),
     /// Suspends command execution, moves it to suspended_cmd, and opens the text editor for the given handle.
-    SuspendForTextEdit { handle: Handle },
+    SuspendForTextEdit {
+        handle: Handle,
+    },
     /// Requests a standard document-level undo while keeping the command active.
     UndoDocument,
     /// Sets the TEXTEDITMODE system variable and ends the command.
@@ -2048,7 +2124,6 @@ pub struct CurveMarker {
     pub plane: WorkingPlane,
 }
 
-
 /// Current screen projection and configured aperture for point-feature picking.
 #[derive(Clone, Copy)]
 pub struct PointPickContext {
@@ -2060,10 +2135,16 @@ pub struct PointPickContext {
 
 pub trait CadCommand: Send {
     /// Preserve source appearance for commands that extract existing entities.
-    fn preserve_commit_style(&self) -> bool { false }
-    fn nested_copy_bind_setting(&self) -> Option<bool> { None }
+    fn preserve_commit_style(&self) -> bool {
+        false
+    }
+    fn nested_copy_bind_setting(&self) -> Option<bool> {
+        None
+    }
     /// Symbol localization is committed together with the extracted entities.
-    fn nested_copy_symbol_names(&self) -> Option<&acadrust::nested_copy::NestedCopySymbolNames> { None }
+    fn nested_copy_symbol_names(&self) -> Option<&acadrust::nested_copy::NestedCopySymbolNames> {
+        None
+    }
     /// Keep the layer already carried by entities committed by this command
     /// instead of replacing it with the current drawing layer.
     fn preserve_commit_layer(&self) -> bool {
@@ -2131,7 +2212,9 @@ pub trait CadCommand: Send {
     fn on_point(&mut self, pt: DVec3) -> CmdResult;
 
     /// Opt in only while a point input selects an existing point feature.
-    fn wants_point_pick_context(&self) -> bool { false }
+    fn wants_point_pick_context(&self) -> bool {
+        false
+    }
 
     /// Refreshed for each point input so zoom and viewport changes are reflected.
     fn set_point_pick_context(&mut self, _context: Option<PointPickContext>) {}
@@ -2211,7 +2294,10 @@ pub trait CadCommand: Send {
     }
 
     fn on_deferred_entity_hover(
-        &mut self, _scene: &Scene, _handle: Option<Handle>, _point: DVec3,
+        &mut self,
+        _scene: &Scene,
+        _handle: Option<Handle>,
+        _point: DVec3,
     ) -> Vec<WireModel> {
         Vec::new()
     }
@@ -2425,7 +2511,9 @@ pub trait CadCommand: Send {
     }
 
     /// Exclude locked-layer entities from injected selection geometry.
-    fn selection_entities_exclude_locked(&self) -> bool { false }
+    fn selection_entities_exclude_locked(&self) -> bool {
+        false
+    }
 
     fn inject_selection_entities(&mut self, _entities: Vec<SelectionEntity>) {}
 
@@ -2433,9 +2521,7 @@ pub trait CadCommand: Send {
         None
     }
 
-    fn hatch_preview_models(
-        &self,
-    ) -> Option<Vec<crate::scene::model::hatch_model::HatchModel>> {
+    fn hatch_preview_models(&self) -> Option<Vec<crate::scene::model::hatch_model::HatchModel>> {
         None
     }
 
@@ -2622,6 +2708,8 @@ mod constraint_registry_tests {
         let names = all_registered_command_names();
         for id in [
             "CCONSTRAINT",
+            "GCCOINCIDENT",
+            "GEOMCONSTRAINT",
             "EDCONSTRAINT",
             "CPCONSTRAINT",
             "MPCONSTRAINT",
@@ -2640,7 +2728,10 @@ mod constraint_registry_tests {
             "DCONSTRAINT",
             "ACONSTRAINT",
         ] {
-            assert!(names.contains(&id), "{id} is missing from the command registry");
+            assert!(
+                names.contains(&id),
+                "{id} is missing from the command registry"
+            );
         }
     }
 }

@@ -4,8 +4,8 @@
 //!
 //! These commands don't solve anything themselves. A `CadCommand`'s `on_text_input` only
 //! gets `&mut self` — no document access — so it can't add a
-//! `SketchConstraint` to the scene directly; instead these commands hand the
-//! typed value back as `CmdResult::AddSketchConstraint`, and the host (which
+//! `ParametricConstraint` to the scene directly; instead these commands hand the
+//! typed value back as `CmdResult::AddParametricConstraint`, and the host (which
 //! does have `&mut Scene`) adds the record and solves it via the same
 //! `Scene::bump_entities` path any later edit to these entities will use too.
 //! `default_value` (what the prompt shows in `<...>`, and what a bare Enter
@@ -19,7 +19,7 @@ use glam::DVec3;
 use crate::command::{CadCommand, CmdResult, InputKind};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::named_parameters::DrivingValue;
-use crate::scene::sketch_constraints::{ConstraintKind, SketchRef};
+use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
 use crate::scene::Scene;
 
 /// Recognizes a typed prompt token as either a numeric literal or a
@@ -28,7 +28,7 @@ use crate::scene::Scene;
 /// ::new`, which already has `&Scene`) since `on_text_input` itself has no
 /// document access — the same constraint `default_value` already works
 /// around. Only *existence* is checked here; the actual value is resolved
-/// fresh at solve time (`sketch_solve::build_constraint`), consistent with
+/// fresh at solve time (`parametric_solve::build_constraint`), consistent with
 /// this project's "no incremental/cached resolution" approach throughout.
 fn parse_driving_value(text: &str, known_names: &[String]) -> Option<DrivingValue> {
     let text = text.trim();
@@ -64,17 +64,70 @@ pub mod dimensional_tools {
     use super::*;
 
     fn command(id: &'static str, label: &'static str, icon: &'static [u8]) -> ToolDef {
-        ToolDef { id, label, icon: IconKind::Svg(icon), event: ModuleEvent::Command(id.to_string()) }
+        ToolDef {
+            id,
+            label,
+            icon: IconKind::Svg(icon),
+            event: ModuleEvent::Command(id.to_string()),
+        }
     }
 
-    pub fn linear() -> ToolDef { command("DCLINEAR", "Linear", include_bytes!("../../../assets/icons/dim_linear.svg")) }
-    pub fn horizontal() -> ToolDef { command("DCHORIZONTAL", "Horizontal", include_bytes!("../../../assets/icons/constrain/distance_x.svg")) }
-    pub fn vertical() -> ToolDef { command("DCVERTICAL", "Vertical", include_bytes!("../../../assets/icons/constrain/distance_y.svg")) }
-    pub fn aligned() -> ToolDef { command("DCALIGNED", "Aligned", include_bytes!("../../../assets/icons/dim_aligned.svg")) }
-    pub fn angular() -> ToolDef { command("DCANGULAR", "Angular", include_bytes!("../../../assets/icons/dim_angular.svg")) }
-    pub fn radius() -> ToolDef { command("DCRADIUS", "Radius", include_bytes!("../../../assets/icons/dim_radius.svg")) }
-    pub fn diameter() -> ToolDef { command("DCDIAMETER", "Diameter", include_bytes!("../../../assets/icons/dim_diameter.svg")) }
-    pub fn convert() -> ToolDef { command("DCCONVERT", "Convert", include_bytes!("../../../assets/icons/constrain/convert.svg")) }
+    pub fn linear() -> ToolDef {
+        command(
+            "DCLINEAR",
+            "Linear",
+            include_bytes!("../../../assets/icons/dim_linear.svg"),
+        )
+    }
+    pub fn horizontal() -> ToolDef {
+        command(
+            "DCHORIZONTAL",
+            "Horizontal",
+            include_bytes!("../../../assets/icons/constrain/distance_x.svg"),
+        )
+    }
+    pub fn vertical() -> ToolDef {
+        command(
+            "DCVERTICAL",
+            "Vertical",
+            include_bytes!("../../../assets/icons/constrain/distance_y.svg"),
+        )
+    }
+    pub fn aligned() -> ToolDef {
+        command(
+            "DCALIGNED",
+            "Aligned",
+            include_bytes!("../../../assets/icons/dim_aligned.svg"),
+        )
+    }
+    pub fn angular() -> ToolDef {
+        command(
+            "DCANGULAR",
+            "Angular",
+            include_bytes!("../../../assets/icons/dim_angular.svg"),
+        )
+    }
+    pub fn radius() -> ToolDef {
+        command(
+            "DCRADIUS",
+            "Radius",
+            include_bytes!("../../../assets/icons/dim_radius.svg"),
+        )
+    }
+    pub fn diameter() -> ToolDef {
+        command(
+            "DCDIAMETER",
+            "Diameter",
+            include_bytes!("../../../assets/icons/dim_diameter.svg"),
+        )
+    }
+    pub fn convert() -> ToolDef {
+        command(
+            "DCCONVERT",
+            "Convert",
+            include_bytes!("../../../assets/icons/constrain/convert.svg"),
+        )
+    }
 }
 
 pub mod angle_tool {
@@ -83,9 +136,7 @@ pub mod angle_tool {
         ToolDef {
             id: "ACONSTRAINT",
             label: "Angle",
-            icon: IconKind::Svg(include_bytes!(
-                "../../../assets/icons/constrain/angle.svg"
-            )),
+            icon: IconKind::Svg(include_bytes!("../../../assets/icons/constrain/angle.svg")),
             event: ModuleEvent::Command("ACONSTRAINT".to_string()),
         }
     }
@@ -104,14 +155,10 @@ pub enum DistanceMode {
     X,
     Y,
     Diameter,
-    /// Arc length — only offered when `is_arc` (not a plain Circle, which
-    /// has no "arc length" distinct from its circumference).
-    ArcLength,
 }
 
 /// Constrains a single line's length (or its X/Y-only component) between
-/// its two endpoints, or a circle/arc's radius (or diameter, or — for an
-/// arc specifically — its swept arc length), to a typed target value.
+/// its two endpoints, or a circle/arc's radius or diameter, to a typed target value.
 pub struct DistanceConstraintCommand {
     command_name: &'static str,
     handle: Handle,
@@ -119,16 +166,10 @@ pub struct DistanceConstraintCommand {
     /// (Distance/DistanceX/DistanceY) — decided once at construction from
     /// the entity's type.
     is_circle: bool,
-    /// Whether `handle` is specifically an Arc (as opposed to a full
-    /// Circle) — gates the `[Arclength]` prompt option.
-    is_arc: bool,
     mode: DistanceMode,
     default_value: f64,
     default_x: f64,
     default_y: f64,
-    /// The entity's current arc length, for `ArcLength` mode's `<default>`
-    /// — meaningless (left at 0) unless `is_arc`.
-    default_arc_length: f64,
     /// Snapshot of `Scene::named_parameters`' names at construction time —
     /// see `parse_driving_value`'s doc comment for why a snapshot.
     known_param_names: Vec<String>,
@@ -147,17 +188,16 @@ impl DistanceConstraintCommand {
         requested_mode: DistanceMode,
     ) -> Option<Self> {
         let entity = scene.document.get_entity(handle)?;
-        let (is_circle, is_arc, default_value, default_x, default_y, default_arc_length) =
-            match entity {
-                EntityType::Line(l) => {
-                    let dx = l.end.x - l.start.x;
-                    let dy = l.end.y - l.start.y;
-                    (false, false, (dx * dx + dy * dy).sqrt(), dx, dy, 0.0)
-                }
-                EntityType::Circle(c) => (true, false, c.radius, 0.0, 0.0, 0.0),
-                EntityType::Arc(a) => (true, true, a.radius, 0.0, 0.0, a.arc_length()),
-                _ => return None,
-            };
+        let (is_circle, default_value, default_x, default_y) = match entity {
+            EntityType::Line(l) => {
+                let dx = l.end.x - l.start.x;
+                let dy = l.end.y - l.start.y;
+                (false, (dx * dx + dy * dy).sqrt(), dx, dy)
+            }
+            EntityType::Circle(c) => (true, c.radius, 0.0, 0.0),
+            EntityType::Arc(a) => (true, a.radius, 0.0, 0.0),
+            _ => return None,
+        };
         let known_param_names = scene
             .named_parameters()
             .iter()
@@ -165,7 +205,11 @@ impl DistanceConstraintCommand {
             .collect();
         let mode = match requested_mode {
             DistanceMode::Linear if !is_circle => {
-                if default_x.abs() >= default_y.abs() { DistanceMode::X } else { DistanceMode::Y }
+                if default_x.abs() >= default_y.abs() {
+                    DistanceMode::X
+                } else {
+                    DistanceMode::Y
+                }
             }
             DistanceMode::Aligned if !is_circle => DistanceMode::Aligned,
             DistanceMode::Radius if is_circle => DistanceMode::Radius,
@@ -178,12 +222,10 @@ impl DistanceConstraintCommand {
             command_name,
             handle,
             is_circle,
-            is_arc,
             mode,
             default_value,
             default_x,
             default_y,
-            default_arc_length,
             known_param_names,
         })
     }
@@ -198,46 +240,41 @@ impl DistanceConstraintCommand {
         let (kind, refs, label) = match (self.is_circle, self.mode) {
             (true, DistanceMode::Diameter) => (
                 ConstraintKind::Diameter,
-                vec![SketchRef::whole(self.handle)],
+                vec![ParametricRef::whole(self.handle)],
                 "Diameter constraint",
-            ),
-            (true, DistanceMode::ArcLength) if self.is_arc => (
-                ConstraintKind::ArcLength,
-                vec![SketchRef::whole(self.handle)],
-                "Arc length constraint",
             ),
             (true, DistanceMode::Auto | DistanceMode::Radius) => (
                 ConstraintKind::Radius,
-                vec![SketchRef::whole(self.handle)],
+                vec![ParametricRef::whole(self.handle)],
                 "Radius constraint",
             ),
             (false, DistanceMode::X) => (
                 ConstraintKind::DistanceX,
                 vec![
-                    SketchRef::point(self.handle, 0),
-                    SketchRef::point(self.handle, 1),
+                    ParametricRef::point(self.handle, 0),
+                    ParametricRef::point(self.handle, 1),
                 ],
                 "DistanceX constraint",
             ),
             (false, DistanceMode::Y) => (
                 ConstraintKind::DistanceY,
                 vec![
-                    SketchRef::point(self.handle, 0),
-                    SketchRef::point(self.handle, 1),
+                    ParametricRef::point(self.handle, 0),
+                    ParametricRef::point(self.handle, 1),
                 ],
                 "DistanceY constraint",
             ),
             (false, DistanceMode::Auto | DistanceMode::Aligned | DistanceMode::Linear) => (
                 ConstraintKind::Distance,
                 vec![
-                    SketchRef::point(self.handle, 0),
-                    SketchRef::point(self.handle, 1),
+                    ParametricRef::point(self.handle, 0),
+                    ParametricRef::point(self.handle, 1),
                 ],
                 "Distance constraint",
             ),
             _ => return None,
         };
-        Some(CmdResult::AddSketchConstraint {
+        Some(CmdResult::AddParametricConstraint {
             kind,
             refs,
             driving_param: Some(target),
@@ -256,16 +293,6 @@ impl CadCommand for DistanceConstraintCommand {
             (true, DistanceMode::Diameter) => format!(
                 "Specify diameter <{:.4}> or [Radius]: ",
                 self.default_value * 2.0
-            ),
-            (true, DistanceMode::ArcLength) if self.is_arc => {
-                format!(
-                    "Specify arc length <{:.4}> or [Radius]: ",
-                    self.default_arc_length
-                )
-            }
-            (true, DistanceMode::Auto | DistanceMode::Radius) if self.is_arc => format!(
-                "Specify distance <{:.4}> or [Diameter/Arclength]: ",
-                self.default_value
             ),
             (true, DistanceMode::Auto | DistanceMode::Radius) => format!(
                 "Specify distance <{:.4}> or [Diameter]: ",
@@ -292,16 +319,24 @@ impl CadCommand for DistanceConstraintCommand {
     fn on_enter(&mut self) -> CmdResult {
         let default = match self.mode {
             DistanceMode::Diameter => self.default_value * 2.0,
-            DistanceMode::ArcLength => self.default_arc_length,
             DistanceMode::X => self.default_x,
             DistanceMode::Y => self.default_y,
-            DistanceMode::Auto | DistanceMode::Aligned | DistanceMode::Linear | DistanceMode::Radius => self.default_value,
+            DistanceMode::Auto
+            | DistanceMode::Aligned
+            | DistanceMode::Linear
+            | DistanceMode::Radius => self.default_value,
         };
         self.build(DrivingValue::Literal(default))
             .unwrap_or(CmdResult::Cancel)
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        // An existing parameter name wins over a mode keyword with the same spelling.
+        if let Some(value @ DrivingValue::Named(_)) =
+            parse_driving_value(text, &self.known_param_names)
+        {
+            return self.build(value);
+        }
         // Mode-switch keywords re-prompt instead of building — consumed
         // inputs return `Some(NeedPoint)` so the driver doesn't re-offer
         // the same token a second time (matches e.g. `trim.rs`'s
@@ -312,10 +347,6 @@ impl CadCommand for DistanceConstraintCommand {
         match (self.is_circle, keyword.as_str()) {
             (true, "D" | "DIAMETER") => {
                 self.mode = DistanceMode::Diameter;
-                return Some(CmdResult::NeedPoint);
-            }
-            (true, "A" | "ARCLENGTH") if self.is_arc => {
-                self.mode = DistanceMode::ArcLength;
                 return Some(CmdResult::NeedPoint);
             }
             (true, "R" | "RADIUS") => {
@@ -390,11 +421,11 @@ impl AngleConstraintCommand {
         if matches!(&target, DrivingValue::Literal(value) if !value.is_finite()) {
             return None;
         }
-        Some(CmdResult::AddSketchConstraint {
+        Some(CmdResult::AddParametricConstraint {
             kind: ConstraintKind::Angle,
             refs: vec![
-                SketchRef::whole(self.fixed_handle),
-                SketchRef::whole(self.moving_handle),
+                ParametricRef::whole(self.fixed_handle),
+                ParametricRef::whole(self.moving_handle),
             ],
             driving_param: Some(target),
             label: "Angle constraint",
@@ -437,8 +468,15 @@ impl CadCommand for AngleConstraintCommand {
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration {
     names: &[
-        "DCONSTRAINT", "ACONSTRAINT", "DCLINEAR", "DCHORIZONTAL", "DCVERTICAL",
-        "DCALIGNED", "DCANGULAR", "DCRADIUS", "DCDIAMETER",
+        "DCONSTRAINT",
+        "ACONSTRAINT",
+        "DCLINEAR",
+        "DCHORIZONTAL",
+        "DCVERTICAL",
+        "DCALIGNED",
+        "DCANGULAR",
+        "DCRADIUS",
+        "DCDIAMETER",
     ]
 });
 
@@ -509,17 +547,6 @@ mod tests {
         ))
     }
 
-    fn add_arc(scene: &mut Scene) -> Handle {
-        scene.add_entity(EntityType::Arc(
-            acadrust::entities::Arc::from_center_radius_angles(
-                acadrust::types::Vector3::new(0.0, 0.0, 0.0),
-                3.0,
-                0.0,
-                std::f64::consts::FRAC_PI_2,
-            ),
-        ))
-    }
-
     #[test]
     fn x_keyword_switches_mode_and_then_builds_a_distance_x_constraint() {
         let mut scene = Scene::new();
@@ -537,7 +564,7 @@ mod tests {
         );
 
         match cmd.on_text_input("10") {
-            Some(CmdResult::AddSketchConstraint {
+            Some(CmdResult::AddParametricConstraint {
                 kind,
                 driving_param: Some(DrivingValue::Literal(v)),
                 ..
@@ -545,7 +572,7 @@ mod tests {
                 assert_eq!(kind, ConstraintKind::DistanceX);
                 assert_eq!(v, 10.0);
             }
-            _ => panic!("expected an AddSketchConstraint{{DistanceX}}, got a different result"),
+            _ => panic!("expected an AddParametricConstraint{{DistanceX}}, got a different result"),
         }
     }
 
@@ -558,7 +585,7 @@ mod tests {
         assert!(matches!(cmd.on_text_input("X"), Some(CmdResult::NeedPoint)));
         assert!(matches!(
             cmd.on_text_input("-3"),
-            Some(CmdResult::AddSketchConstraint {
+            Some(CmdResult::AddParametricConstraint {
                 kind: ConstraintKind::DistanceX,
                 driving_param: Some(DrivingValue::Literal(-3.0)),
                 ..
@@ -576,11 +603,29 @@ mod tests {
         assert!(cmd.prompt().contains("<8.0000>"));
         assert!(matches!(
             cmd.on_enter(),
-            CmdResult::AddSketchConstraint {
+            CmdResult::AddParametricConstraint {
                 kind: ConstraintKind::DistanceY,
                 driving_param: Some(DrivingValue::Literal(8.0)),
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn a_parameter_named_like_a_mode_keyword_remains_usable() {
+        let mut scene = Scene::new();
+        let circle = add_circle(&mut scene);
+        scene.named_parameters_mut().set("r", "5").unwrap();
+        let mut cmd =
+            DistanceConstraintCommand::new(&scene, circle).expect("Circle supports DCONSTRAINT");
+
+        assert!(matches!(
+            cmd.on_text_input("R"),
+            Some(CmdResult::AddParametricConstraint {
+                kind: ConstraintKind::Radius,
+                driving_param: Some(DrivingValue::Named(name)),
+                ..
+            }) if name == "r"
         ));
     }
 
@@ -609,7 +654,7 @@ mod tests {
         );
 
         match cmd.on_text_input("16") {
-            Some(CmdResult::AddSketchConstraint {
+            Some(CmdResult::AddParametricConstraint {
                 kind,
                 driving_param: Some(DrivingValue::Literal(v)),
                 ..
@@ -617,7 +662,7 @@ mod tests {
                 assert_eq!(kind, ConstraintKind::Diameter);
                 assert_eq!(v, 16.0);
             }
-            _ => panic!("expected an AddSketchConstraint{{Diameter}}"),
+            _ => panic!("expected an AddParametricConstraint{{Diameter}}"),
         }
     }
 
@@ -629,70 +674,10 @@ mod tests {
             DistanceConstraintCommand::new(&scene, circle).expect("Circle supports DCONSTRAINT");
 
         match cmd.on_text_input("5") {
-            Some(CmdResult::AddSketchConstraint { kind, .. }) => {
+            Some(CmdResult::AddParametricConstraint { kind, .. }) => {
                 assert_eq!(kind, ConstraintKind::Radius)
             }
-            _ => panic!("expected an AddSketchConstraint{{Radius}}"),
+            _ => panic!("expected an AddParametricConstraint{{Radius}}"),
         }
-    }
-
-    #[test]
-    fn a_keyword_switches_an_arcs_command_to_arc_length_mode() {
-        let mut scene = Scene::new();
-        let arc = add_arc(&mut scene);
-        let mut cmd =
-            DistanceConstraintCommand::new(&scene, arc).expect("Arc supports DCONSTRAINT");
-
-        assert!(matches!(cmd.on_text_input("A"), Some(CmdResult::NeedPoint)));
-        assert!(
-            cmd.prompt().contains("arc length"),
-            "prompt should reflect ArcLength mode: {}",
-            cmd.prompt()
-        );
-
-        match cmd.on_text_input("8") {
-            Some(CmdResult::AddSketchConstraint {
-                kind,
-                driving_param: Some(DrivingValue::Literal(v)),
-                ..
-            }) => {
-                assert_eq!(kind, ConstraintKind::ArcLength);
-                assert_eq!(v, 8.0);
-            }
-            _ => panic!("expected an AddSketchConstraint{{ArcLength}}"),
-        }
-    }
-
-    #[test]
-    fn arc_length_keyword_is_not_offered_for_a_plain_circle() {
-        let mut scene = Scene::new();
-        let circle = add_circle(&mut scene);
-        let mut cmd =
-            DistanceConstraintCommand::new(&scene, circle).expect("Circle supports DCONSTRAINT");
-
-        assert!(
-            !cmd.prompt().contains("Arclength"),
-            "a plain circle has no arc length option: {}",
-            cmd.prompt()
-        );
-        // "A" isn't a recognized keyword here and doesn't parse as a
-        // number or a named parameter either, so it's rejected outright.
-        assert!(cmd.on_text_input("A").is_none());
-    }
-
-    #[test]
-    fn arc_length_default_is_the_arcs_current_swept_length() {
-        let mut scene = Scene::new();
-        let arc = add_arc(&mut scene); // radius 3, 90° sweep -> length = 3 * pi/2
-        let mut cmd =
-            DistanceConstraintCommand::new(&scene, arc).expect("Arc supports DCONSTRAINT");
-        cmd.on_text_input("A");
-
-        let expected = 3.0 * std::f64::consts::FRAC_PI_2;
-        assert!(
-            cmd.prompt().contains(&format!("{expected:.4}")),
-            "prompt should default to the arc's current length: {}",
-            cmd.prompt()
-        );
     }
 }

@@ -37,6 +37,47 @@ pub(super) const TOOLS: &[Tool] = &[
         icon: include_bytes!("../../../assets/icons/modify_align.svg"),
         options: &[],
     },
+    // ALIGNLEFT/ALIGNHCENTER/ALIGNRIGHT/ALIGNTOP/ALIGNVCENTER/ALIGNBOTTOM:
+    // one-shot bounding-box alignment of the current selection — distinct
+    // from "ALIGN" above (point-picked 3D placement). No point prompts, so
+    // each is a plain one-click Tool rather than a dropdown submenu, matching
+    // this panel's existing flat-list convention.
+    Tool {
+        command: "ALIGNLEFT",
+        label: "Align Left",
+        icon: include_bytes!("../../../assets/icons/align_left.svg"),
+        options: &[],
+    },
+    Tool {
+        command: "ALIGNHCENTER",
+        label: "Align Horizontal Centers",
+        icon: include_bytes!("../../../assets/icons/align_hcenter.svg"),
+        options: &[],
+    },
+    Tool {
+        command: "ALIGNRIGHT",
+        label: "Align Right",
+        icon: include_bytes!("../../../assets/icons/align_right.svg"),
+        options: &[],
+    },
+    Tool {
+        command: "ALIGNTOP",
+        label: "Align Top",
+        icon: include_bytes!("../../../assets/icons/align_top.svg"),
+        options: &[],
+    },
+    Tool {
+        command: "ALIGNVCENTER",
+        label: "Align Vertical Centers",
+        icon: include_bytes!("../../../assets/icons/align_vcenter.svg"),
+        options: &[],
+    },
+    Tool {
+        command: "ALIGNBOTTOM",
+        label: "Align Bottom",
+        icon: include_bytes!("../../../assets/icons/align_bottom.svg"),
+        options: &[],
+    },
     Tool {
         command: "BREAK",
         label: "Break",
@@ -65,12 +106,6 @@ pub(super) const TOOLS: &[Tool] = &[
         command: "NCOPY",
         label: "Copy Nested Objects",
         icon: include_bytes!("../../../assets/icons/modify_ncopy.svg"),
-        options: &[],
-    },
-    Tool {
-        command: "OVERKILL",
-        label: "Delete Duplicate Objects",
-        icon: include_bytes!("../../../assets/icons/modify_overkill.svg"),
         options: &[],
     },
     Tool {
