@@ -783,6 +783,9 @@ impl OpenCADStudio {
             }
             return Task::none();
         }
+        // Keywords, distances and points fed here (option buttons, the
+        // context menu, scripts) join the Recent Input list like typed ones.
+        self.command_line.record_recent_input(token);
         let is_mtp = token.trim_start_matches('_').eq_ignore_ascii_case("MTP")
             || token.trim_start_matches('_').eq_ignore_ascii_case("M2P");
         if is_mtp {

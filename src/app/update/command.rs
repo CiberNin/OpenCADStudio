@@ -727,6 +727,16 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         crate::app::expr_eval::eval_to_string(&raw)
                     };
                     self.command_line.input.clear();
+                    // Remember the token for the context menu's Recent Input
+                    // list (prose steps excluded: a table cell or text body
+                    // is not a reusable value).
+                    let is_prose = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .is_some_and(|c| c.input_kind().is_free_text());
+                    if !is_prose {
+                        self.command_line.record_recent_input(&text);
+                    }
 
                     // Offer the typed text to the command's option handler
                     // first (keywords like PLINE's A/L/C, a radius, …). If it

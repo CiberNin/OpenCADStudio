@@ -481,6 +481,8 @@ impl OpenCADStudio {
             selection_cycling: self.selection_cycling,
             double_click_block_refedit: self.double_click_block_refedit,
             double_click_block_attedit: self.double_click_block_attedit,
+            right_click_mode: self.right_click_mode,
+            right_click_hold_ms: self.right_click_hold_ms,
             grip_object_limit: self.grip_object_limit,
             ncopy_bind: self.ncopy_bind,
             cursor_type: self.cursor_type,
@@ -556,6 +558,8 @@ impl OpenCADStudio {
         self.selection_cycling = s.selection_cycling;
         self.double_click_block_refedit = s.double_click_block_refedit;
         self.double_click_block_attedit = s.double_click_block_attedit;
+        self.right_click_mode = s.right_click_mode;
+        self.right_click_hold_ms = super::super::settings::clamp_right_click_hold_ms(s.right_click_hold_ms);
         self.grip_object_limit = s.grip_object_limit.clamp(0, 32767);
         self.ncopy_bind = s.ncopy_bind;
         self.cursor_type = s.cursor_type;

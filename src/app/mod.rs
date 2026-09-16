@@ -89,6 +89,17 @@ pub const HOVER_DWELL_MS: u128 = 500;
 /// threshold gates that extra redraw-avoidance behavior.
 pub const HOVER_DWELL_DENSE_WIRES: usize = 50_000;
 
+/// Keyboard navigation inside the open right-click context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextMenuNav {
+    Up,
+    Down,
+    /// Pick the highlighted row (or the default row when none is highlighted).
+    Enter,
+    /// Pick the next row whose mnemonic letter matches.
+    Mnemonic(char),
+}
+
 /// Open multi-functional-grip popup state.
 #[derive(Clone, Debug)]
 pub struct GripPopup {
@@ -518,6 +529,10 @@ pub(super) struct OpenCADStudio {
     double_click_block_refedit: bool,
     /// Open ATTEDIT when double-clicking a block with attributes.
     double_click_block_attedit: bool,
+    /// What a right-click in the drawing area does (SHORTCUTMENU).
+    right_click_mode: settings::RightClickMode,
+    /// Time-sensitive right-click hold threshold, ms (SHORTCUTMENUDURATION).
+    right_click_hold_ms: i32,
     /// Selected-object count past which grips stop being generated
     /// (GRIPOBJLIMIT, 0..=32767; 0 = no limit).
     grip_object_limit: i32,
@@ -2149,6 +2164,10 @@ pub enum Message {
     ZoomWheelReversedChanged(bool),
     /// Change how far one wheel notch zooms (ZOOMFACTOR, 3..=100).
     ZoomFactorChanged(i32),
+    /// Options → User Preferences: right-click behaviour (SHORTCUTMENU).
+    RightClickModeChanged(settings::RightClickMode),
+    /// Options → User Preferences: time-sensitive hold threshold, ms.
+    RightClickHoldMsChanged(i32),
     /// Toggle TEXTEDIT ending after one object (TEXTEDITMODE).
     TextEditModeChanged(bool),
     /// Toggle continued dimensions inheriting the base style (DIMCONTINUEMODE).
@@ -3277,9 +3296,15 @@ pub enum Message {
     TextInlineInput(String),
     /// Commit the editor: create or update the TEXT entity.
     TextInlineOk,
-    // ── Draw Order context menu ─────────────────────────────────────────
-    /// Toggle the Draw Order sub-items in the viewport context menu.
-    DrawOrderSubmenuToggle,
+    // ── Viewport right-click context menu ───────────────────────────────
+    /// A context-menu row was picked (mouse or keyboard). Closes the menu and
+    /// runs the row's action through the same message the equivalent typed
+    /// input / shortcut would have produced.
+    ContextMenuPick(crate::ui::popup::context_menu::MenuAction),
+    /// Expand / collapse an accordion submenu of the open context menu.
+    ContextMenuSubmenuToggle(crate::ui::popup::context_menu::SubmenuId),
+    /// Keyboard navigation inside the open context menu.
+    ContextMenuNavigate(ContextMenuNav),
     /// Begin an interactive reference-object pick to move the current
     /// selection above (`true`) or below (`false`) the picked object.
     DrawOrderPickRef(bool),
@@ -3794,6 +3819,8 @@ impl OpenCADStudio {
             pick_box: 3,
             double_click_block_refedit: false,
             double_click_block_attedit: true,
+            right_click_mode: settings::RightClickMode::ShortcutMenu,
+            right_click_hold_ms: 250,
             grip_object_limit: settings::DEFAULT_GRIP_OBJECT_LIMIT,
             ncopy_bind: false,
             cursor_type: settings::CursorType::Crosshair,

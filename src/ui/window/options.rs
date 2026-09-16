@@ -1,6 +1,6 @@
 pub(crate) mod spacemouse;
 use crate::app::config::UiThemeConfig;
-use crate::app::settings::CursorType;
+use crate::app::settings::{CursorType, RightClickMode};
 use crate::app::Message;
 use iced::widget::{
     button, column, container, row, scrollable, slider, text, text_input, Space,
@@ -73,6 +73,10 @@ pub struct AppPrefs {
     pub show_ucs_icon: bool,
     /// UCSICON ORigin: draw it at the origin rather than the corner.
     pub ucs_icon_at_origin: bool,
+    /// SHORTCUTMENU: what a right-click in the drawing area does.
+    pub right_click_mode: RightClickMode,
+    /// SHORTCUTMENUDURATION: time-sensitive hold threshold, ms.
+    pub right_click_hold_ms: i32,
 }
 
 /// The fixed locations the Files page lists.
@@ -216,6 +220,18 @@ pub fn view_window<'a>(
     let selected_cursor = cursor_options
         .iter()
         .find(|choice| choice.value == cursor_type)
+        .cloned();
+
+    let right_click_options = RightClickMode::ALL
+        .into_iter()
+        .map(|value: RightClickMode| Labelled {
+            label: crate::t!(value.label()).into_owned(),
+            value,
+        })
+        .collect::<Vec<_>>();
+    let selected_right_click = right_click_options
+        .iter()
+        .find(|choice| choice.value == prefs.right_click_mode)
         .cloned();
 
     let palette = ui_theme.palette.to_iced();
@@ -1217,6 +1233,43 @@ pub fn view_window<'a>(
         Space::new().height(6),
         text(crate::t!(
             "Which annotative objects pick up a newly set annotation scale (ANNOAUTOSCALE)."
+        ))
+        .size(11)
+        .width(sizing.width),
+        Space::new().height(24),
+        text(crate::t!("Right-click Customization")).size(15),
+        Space::new().height(10),
+        row![
+            text(crate::t!("Right-click in drawing area")).size(12).width(150),
+            iced::widget::pick_list(
+                selected_right_click,
+                right_click_options,
+                |choice| choice.label.clone(),
+            )
+            .on_select(|choice| Message::RightClickModeChanged(choice.value))
+            .width(Fill),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        Space::new().height(12),
+        row![
+            text(crate::t!("Hold duration")).size(12).width(150),
+            slider(
+                100..=1000,
+                prefs.right_click_hold_ms.clamp(100, 1000),
+                Message::RightClickHoldMsChanged
+            )
+            .step(50)
+            .width(Fill),
+            text(format!("{} ms", prefs.right_click_hold_ms.clamp(100, 1000)))
+                .size(11)
+                .width(52),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        Space::new().height(6),
+        text(crate::t!(
+            "Shortcut menu: right-click always opens the menu (AutoCAD default). Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION)."
         ))
         .size(11)
         .width(sizing.width),

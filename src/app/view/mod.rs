@@ -1752,37 +1752,17 @@ bg={bg_ms:.1}ms n={view_count}"
             // the cursor position (canvas-relative) anchors the menu under
             // the cursor instead of drifting into window-relative space.
             if !tab.is_start {
-                let (ctx_pos, draworder_open) = {
+                let (ctx_pos, highlighted) = {
                     let sel = tab.scene.selection.borrow();
-                    (sel.context_menu, sel.draworder_submenu)
+                    (sel.context_menu, sel.context_menu_ui.highlighted)
                 };
                 if let Some(p) = ctx_pos {
-                    let has_cmd = tab.active_cmd.is_some();
-                    // Same guard as typed MTP/M2P and SnapOverrideMtp.
-                    let has_point_step = tab.active_cmd.as_ref().is_some_and(|c| {
-                        (!c.input_kind().wants_text() || c.point_step_accepts_keywords())
-                            && !c.needs_entity_pick()
-                    });
-                    let has_selection = !tab.scene.selected.is_empty();
-                    let isolation_active = tab.scene.is_isolation_active();
-                    let last_cmds: Vec<String> = self
-                        .command_line
-                        .recent_commands
-                        .iter()
-                        .rev()
-                        .take(3)
-                        .cloned()
-                        .collect();
+                    let menu = self.current_context_menu();
                     viewport_stack = viewport_stack.push(viewport_context_menu_overlay(
                         p,
                         command_line_inset,
-                        has_cmd,
-                        has_selection,
-                        tab.scene.selected_constraint,
-                        isolation_active,
-                        last_cmds,
-                        draworder_open,
-                        has_point_step,
+                        &menu,
+                        highlighted,
                     ));
                 }
             }

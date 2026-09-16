@@ -132,6 +132,43 @@ impl CursorType {
     }
 }
 
+/// What a right-click in the drawing area does (AutoCAD SHORTCUTMENU /
+/// "Right-click Customization").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RightClickMode {
+    /// AutoCAD default: a right-click always opens the shortcut menu (Enter /
+    /// Cancel / the command's options while a command runs; Repeat / edit
+    /// tools when idle).
+    #[default]
+    ShortcutMenu,
+    /// AutoCAD "time-sensitive right-click": a quick click is Enter (or
+    /// repeats the last command when idle); holding the button longer than
+    /// `right_click_hold_ms` opens the shortcut menu.
+    TimeSensitive,
+    /// Original Open CAD Studio behaviour: while a command runs the first
+    /// right-click is Enter and a second consecutive one opens the menu;
+    /// when idle a right-click opens the menu.
+    EnterFirst,
+}
+
+impl RightClickMode {
+    pub const ALL: [Self; 3] = [Self::ShortcutMenu, Self::TimeSensitive, Self::EnterFirst];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ShortcutMenu => "Shortcut menu",
+            Self::TimeSensitive => "Time-sensitive (quick click = Enter)",
+            Self::EnterFirst => "Enter first, second click = menu",
+        }
+    }
+}
+
+/// SHORTCUTMENUDURATION bounds: below 100 ms every click reads as a hold,
+/// above 1000 ms the menu becomes unreachable in practice.
+pub fn clamp_right_click_hold_ms(v: i32) -> i32 {
+    v.clamp(100, 1000)
+}
+
 /// Active pair of axes while isometric drafting is enabled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IsoPlane {
@@ -312,6 +349,11 @@ pub struct UserSettings {
     pub double_click_block_refedit: bool,
     /// When true, double-clicking a block with attributes opens ATTEDIT.
     pub double_click_block_attedit: bool,
+    /// What a right-click in the drawing area does (SHORTCUTMENU).
+    pub right_click_mode: RightClickMode,
+    /// Hold duration that turns a time-sensitive right-click into the menu,
+    /// in milliseconds (SHORTCUTMENUDURATION, 100..=1000).
+    pub right_click_hold_ms: i32,
     /// GRIPOBJLIMIT: past this many selected objects, no grips are drawn at
     /// all. 0 means no limit. The drawing header carries no slot for it.
     pub grip_object_limit: i32,
@@ -556,6 +598,8 @@ impl Default for UserSettings {
             selection_cycling: false,
             double_click_block_refedit: false,
             double_click_block_attedit: true,
+            right_click_mode: RightClickMode::ShortcutMenu,
+            right_click_hold_ms: 250,
             grip_object_limit: DEFAULT_GRIP_OBJECT_LIMIT,
             ncopy_bind: false,
             cursor_type: CursorType::Crosshair,

@@ -146,6 +146,12 @@ pub(super) struct DocumentTab {
     pub(super) selected_grip_handles: Vec<Handle>,
     /// Shift-selected grips, keyed by entity and object-local grip id.
     pub(super) hot_grips: rustc_hash::FxHashSet<(Handle, usize)>,
+    /// Grip-mode "Copy" toggle (context menu): each grip placement leaves the
+    /// original in place and adds a modified copy, until Enter / Esc.
+    pub(super) grip_copy: bool,
+    /// Grip-mode "Base Point" (context menu): the next left-click re-bases
+    /// the active grip edit instead of committing it.
+    pub(super) grip_base_pending: bool,
     pub(super) selected_handle: Option<Handle>,
     /// Dynamic-block visibility grip for the current single selection.
     pub(super) visibility_grip: Option<super::visibility::VisibilityGrip>,
@@ -601,6 +607,8 @@ impl DocumentTab {
             selected_grips: vec![],
             selected_grip_handles: vec![],
             hot_grips: rustc_hash::FxHashSet::default(),
+            grip_copy: false,
+            grip_base_pending: false,
             selected_handle: None,
             visibility_grip: None,
             wireframe: false,

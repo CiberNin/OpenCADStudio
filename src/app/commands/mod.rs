@@ -503,6 +503,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "MIRRTEXT",
         "ZOOMWHEEL",
         "ZOOMFACTOR",
+        "SHORTCUTMENU",
+        "SHORTCUTMENUDURATION",
         "CURSORSIZE",
         "PICKBOX",
         "CURSORTYPE",

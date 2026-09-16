@@ -297,6 +297,8 @@ impl OpenCADStudio {
                             show_viewcube: self.show_viewcube,
                             show_ucs_icon: self.show_ucs_icon,
                             ucs_icon_at_origin: self.ucs_icon_at_origin,
+                            right_click_mode: self.right_click_mode,
+                            right_click_hold_ms: self.right_click_hold_ms,
                         },
                         crate::ui::window::options::spacemouse::view(
                             self.spacemouse_preferences, self.spacemouse.status(),

@@ -14,6 +14,9 @@ use std::ops::Range;
 
 use crate::ui::style::common::accessible_accent_threshold;
 
+/// Maximum entries kept for the context menu's "Recent Input" list.
+pub const RECENT_INPUT_CAP: usize = 10;
+
 pub const CMD_INPUT_ID: &str = "cmd_input";
 pub const HISTORY_SCROLL_ID: &str = "command_history_scroll";
 
@@ -120,6 +123,10 @@ pub struct CommandLine {
     /// context menu, shortcuts), newest last. Drives the right-click "Repeat"
     /// menu so it reflects every command source, not only typed ones.
     pub recent_commands: Vec<String>,
+    /// Tokens typed into a running command (points, distances, keywords),
+    /// newest first, de-duplicated. Drives the context menu's "Recent Input"
+    /// submenu so a value can be re-fed with one click. Not persisted.
+    pub recent_inputs: Vec<String>,
     /// Current position in `cmd_recall` while navigating (None = not navigating).
     recall_cursor: Option<usize>,
     /// Saved draft input before the user started navigating history.
@@ -168,6 +175,7 @@ impl Default for CommandLine {
             last_error: None,
             cmd_recall: Vec::new(),
             recent_commands: Vec::new(),
+            recent_inputs: Vec::new(),
             recall_cursor: None,
             recall_draft: String::new(),
             history_open: false,
@@ -307,6 +315,22 @@ impl CommandLine {
             }
         }
         self.cancel_history_navigation();
+    }
+
+    /// Remember a token fed to a running command for the "Recent Input"
+    /// submenu: newest first, case-insensitive move-to-front de-duplication,
+    /// capped at `RECENT_INPUT_CAP`. Empty, overly long and entity-handle
+    /// tokens are skipped (a handle is meaningless outside the pick it
+    /// answered).
+    pub fn record_recent_input(&mut self, token: &str) {
+        let token = token.trim();
+        if token.is_empty() || token.chars().count() > 40 {
+            return;
+        }
+        let upper = token.to_uppercase();
+        self.recent_inputs.retain(|t| t.to_uppercase() != upper);
+        self.recent_inputs.insert(0, token.to_string());
+        self.recent_inputs.truncate(RECENT_INPUT_CAP);
     }
 
     pub fn history_navigation_active(&self) -> bool {

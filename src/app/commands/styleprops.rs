@@ -956,6 +956,8 @@ impl OpenCADStudio {
                 "MIRRTEXT"
                     | "ZOOMWHEEL"
                     | "ZOOMFACTOR"
+                    | "SHORTCUTMENU"
+                    | "SHORTCUTMENUDURATION"
                     | "CURSORSIZE"
                     | "PICKBOX"
                     | "CURSORTYPE"
@@ -1071,7 +1073,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
+                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
                     );
                 } else {
                     if name == "CETRANSPARENCY" {
@@ -1489,6 +1491,51 @@ impl OpenCADStudio {
                                 None => {
                                     Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false))
                                 }
+                            },
+                            // AutoCAD bit code: 0 = no shortcut menus (right-click
+                            // is Enter), 16 = time-sensitive; everything else is the
+                            // regular shortcut menu. Reported as AutoCAD's defaults
+                            // (11 = default+edit+command menus, +16 when
+                            // time-sensitive).
+                            "SHORTCUTMENU" => {
+                                use crate::app::settings::RightClickMode;
+                                let code = |mode: RightClickMode| match mode {
+                                    RightClickMode::EnterFirst => 0,
+                                    RightClickMode::ShortcutMenu => 11,
+                                    RightClickMode::TimeSensitive => 27,
+                                };
+                                match &value {
+                                    Some(v) => match v.parse::<i32>() {
+                                        Ok(bits) if (0..=31).contains(&bits) => {
+                                            self.right_click_mode = if bits == 0 {
+                                                RightClickMode::EnterFirst
+                                            } else if bits & 16 != 0 {
+                                                RightClickMode::TimeSensitive
+                                            } else {
+                                                RightClickMode::ShortcutMenu
+                                            };
+                                            Ok((format!("SHORTCUTMENU = {}", code(self.right_click_mode)), true))
+                                        }
+                                        _ => Err("SETVAR: integer from 0 to 31 required.".into()),
+                                    },
+                                    None => Ok((
+                                        format!("SHORTCUTMENU = {}", code(self.right_click_mode)),
+                                        false,
+                                    )),
+                                }
+                            }
+                            "SHORTCUTMENUDURATION" => match &value {
+                                Some(v) => match v.parse::<i32>() {
+                                    Ok(ms) if (100..=1000).contains(&ms) => {
+                                        self.right_click_hold_ms = ms;
+                                        Ok((format!("SHORTCUTMENUDURATION = {ms}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer from 100 to 1000 required.".into()),
+                                },
+                                None => Ok((
+                                    format!("SHORTCUTMENUDURATION = {}", self.right_click_hold_ms),
+                                    false,
+                                )),
                             },
                             "CURSORSIZE" => match &value {
                                 Some(v) => match v.parse::<i32>() {
@@ -2347,6 +2394,8 @@ impl OpenCADStudio {
                                     name.as_str(),
                                     "ZOOMWHEEL"
                                         | "ZOOMFACTOR"
+                                        | "SHORTCUTMENU"
+                                        | "SHORTCUTMENUDURATION"
                                         | "CURSORSIZE"
                                         | "PICKBOX"
                                         | "CURSORTYPE"
