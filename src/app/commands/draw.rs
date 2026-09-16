@@ -57,6 +57,10 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::ImagePick));
             }
 
+            cmd if cmd == "IMAGEEMBED" => {
+                return Some(Task::done(Message::ImageEmbedPick));
+            }
+
             "REVCLOUD" | "REVCLOUD_RECTANGULAR" | "REVCLOUD_POLYGONAL" | "REVCLOUD_FREEHAND" => {
                 use crate::modules::draw::draw::revcloud::RevCloudCommand;
                 let view_height = self.tabs[i].scene.camera.borrow().ortho_size() as f64 * 2.0;

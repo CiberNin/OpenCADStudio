@@ -861,6 +861,12 @@ pub(super) struct OpenCADStudio {
     point_size_relative: bool,
     /// Whether the default-association prompt has been answered.
     default_assoc_prompted: bool,
+    /// Offer to download missing `.shx` fonts on open (see `io::font_repo`).
+    check_missing_fonts: bool,
+    /// Custom font source base URL; empty selects the community repository.
+    font_source_url: String,
+    /// Editable copy of `font_source_url` shown in the missing-fonts prompt.
+    font_source_input: String,
     donation_prompt_version: String,
     /// Read-only session (`--read-only`): editing is allowed but every save
     /// path is refused. Set once at boot from the CLI config.
@@ -1137,6 +1143,9 @@ pub(super) struct OpenCADStudio {
     open_job_serial: u64,
     /// Last repair or failed-open report shown in the recovery modal.
     recovery_report: Option<crate::io::recovery::RecoveryReport>,
+    /// Missing SHX fonts of the last opened drawing, offered for download
+    /// from the community repository (see `crate::io::font_repo`).
+    missing_fonts: Option<Vec<String>>,
     /// Drawings handed to us by other launches while `opening` was busy.
     /// `opening` is a single slot that a second `OpenPathPicked` would
     /// overwrite, and `on_file_opened` drops any result arriving once it is
@@ -1757,6 +1766,8 @@ pub enum ModalKind {
     Unsaved,
     SaveDialog,
     Recovery,
+    /// Fonts referenced by the drawing are missing on this machine.
+    MissingFonts,
     RecoveryPrompt,
     Options,
     FindReplace,
@@ -3517,6 +3528,20 @@ pub enum Message {
     ImagePick,
     /// Result of the image file picker + pixel dimension decode.
     ImagePickResult(Result<(std::path::PathBuf, u32, u32), String>),
+    /// Open file-picker dialog for IMAGEEMBED command (async).
+    ImageEmbedPick,
+    /// Result of the embedded-image picker: bytes prepared for an OLE2FRAME.
+    ImageEmbedPickResult(Result<crate::io::ole_embed::EmbeddedImage, String>),
+    // ── Missing fonts ─────────────────────────────────────────────────────
+    /// Download the offered missing fonts from the community repository.
+    MissingFontsDownload,
+    /// Edit the custom font source URL in the missing-fonts prompt.
+    MissingFontsSourceChanged(String),
+    /// Close the missing-fonts prompt without downloading.
+    MissingFontsDismiss,
+    /// Fonts fetched (or failed); payload lists (name, saved-path) pairs.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    MissingFontsResult(Result<Vec<(String, std::path::PathBuf)>, String>),
     // ── PDF Underlay ──────────────────────────────────────────────────────
     /// Open file-picker dialog for PDFATTACH command (async).
     PdfAttachPick,
@@ -3843,6 +3868,9 @@ impl OpenCADStudio {
             point_size_buf: String::new(),
             point_size_relative: true,
             default_assoc_prompted: false,
+            check_missing_fonts: true,
+            font_source_url: String::new(),
+            font_source_input: String::new(),
             donation_prompt_version: String::new(),
             read_only: false,
             update_notice_version: None,
@@ -3883,6 +3911,7 @@ impl OpenCADStudio {
             layout_settling: false,
             open_job_serial: 0,
             recovery_report: None,
+            missing_fonts: None,
             pending_opens: std::collections::VecDeque::new(),
             active_interaction_index: None,
             queued_interaction_indices: std::collections::VecDeque::new(),

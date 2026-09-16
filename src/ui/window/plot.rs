@@ -160,6 +160,10 @@ pub struct PlotDialogState {
     pub upside_down: bool,
     pub copies: String,
     pub area: String,
+    /// The picked world-space plot window (x0, y0, x1, y1) backing
+    /// `area == "Window"`. Persisted so reopening the dialog — or the app —
+    /// keeps the same window instead of reporting an empty plot area.
+    pub window: Option<(f64, f64, f64, f64)>,
     pub center: bool,
     pub offset_x: String,
     pub offset_y: String,
@@ -219,6 +223,7 @@ impl Default for PlotDialogState {
             upside_down: false,
             copies: "1".into(),
             area: "Window".into(),
+            window: None,
             center: true,
             offset_x: "0.0".into(),
             offset_y: "0.0".into(),
@@ -263,6 +268,7 @@ impl PlotDialogState {
         self.upside_down = o.upside_down;
         self.copies = o.copies.clone();
         self.area = o.area.clone();
+        self.window = o.window;
         self.center = o.center;
         self.offset_x = o.offset_x.clone();
         self.offset_y = o.offset_y.clone();

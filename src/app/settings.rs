@@ -338,6 +338,15 @@ pub struct UserSettings {
     /// prompt has already been shown. Set once the user answers (either way),
     /// so we never nag again on subsequent launches.
     pub default_assoc_prompted: bool,
+    /// Offer to download missing `.shx` fonts from the community repository
+    /// when a drawing opens (see `crate::io::font_repo`).
+    #[serde(default = "default_check_missing_fonts")]
+    pub check_missing_fonts: bool,
+    /// Custom font source base URL (empty = the OpenCADStudio community
+    /// repository). Each missing font is fetched as `{base}/{file_name}`,
+    /// so an intranet folder or a private GitHub raw folder both work.
+    #[serde(default)]
+    pub font_source_url: String,
     /// App version whose donation prompt has been displayed.
     pub donation_prompt_version: String,
     /// The graphics verdict (`GpuStatus::identity()`) whose warning popup the
@@ -470,6 +479,10 @@ fn default_dimension_continue_mode() -> i16 {
     1
 }
 
+fn default_check_missing_fonts() -> bool {
+    true
+}
+
 fn default_show_constraint_values() -> bool {
     true
 }
@@ -521,6 +534,8 @@ impl Default for UserSettings {
             snap_angle_deg: 0.0,
             otrack: false,
             default_assoc_prompted: false,
+            check_missing_fonts: true,
+            font_source_url: String::new(),
             donation_prompt_version: String::new(),
             gpu_warning_silenced: String::new(),
             disabled_plugins: Vec::new(),

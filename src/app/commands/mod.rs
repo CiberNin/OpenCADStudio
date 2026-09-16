@@ -622,6 +622,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "IM",
         "IMAGE",
         "IMAGEATTACH",
+        "IMAGEEMBED",
         "IMPORTOBJ",
         "ISOLATEOBJECTS",
         "LA",

@@ -951,6 +951,93 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+
+            Message::ImageEmbedPick => {
+                Task::perform(crate::io::pick_embedded_image_file(), Message::ImageEmbedPickResult)
+            }
+
+            Message::ImageEmbedPickResult(Ok(image)) => {
+                use crate::command::CadCommand;
+                use crate::modules::draw::draw::raster_image::ImageCommand;
+                self.command_line.push_output(crate::tf!(
+                    "IMAGEEMBED  \"{name}\": {w}×{h} px (embedded)",
+                    name = image.name.as_str(),
+                    w = image.pixel_width,
+                    h = image.pixel_height,
+                ).as_ref());
+                let cmd = ImageCommand::new_embedded(image);
+                let i = self.active_tab;
+                self.command_line.push_info(&cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(cmd));
+                Task::none()
+            }
+
+            Message::ImageEmbedPickResult(Err(e)) => {
+                if e != "Cancelled" {
+                    self.command_line
+                        .push_error(crate::tf!("IMAGEEMBED: {e}").as_ref());
+                }
+                Task::none()
+            }
+
+            Message::MissingFontsSourceChanged(url) => {
+                self.font_source_input = url;
+                Task::none()
+            }
+            Message::MissingFontsDownload => {
+                // Remember the source across sessions — and across drawings.
+                let source = self.font_source_input.trim().to_string();
+                if self.font_source_url != source {
+                    self.font_source_url = source.clone();
+                    self.save_config();
+                }
+                let fonts = self.missing_fonts.take().unwrap_or_default();
+                Task::perform(
+                    async move {
+                        let source = crate::io::font_repo::FontSource::from_url(&source);
+                        crate::io::font_repo::download_fonts(&fonts, &source)
+                    },
+                    Message::MissingFontsResult,
+                )
+            }
+            Message::MissingFontsDismiss => {
+                self.missing_fonts = None;
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::MissingFontsResult(result) => {
+                self.missing_fonts = None;
+                self.close_active_modal();
+                match result {
+                    Ok(pairs) if pairs.is_empty() => {
+                        self.command_line.push_error(crate::t!(
+                            "None of the missing fonts are in the community repository yet. Contribute them at github.com/huaninstratech/OpenCADStudio/tree/main/fonts."
+                        ).as_ref());
+                    }
+                    Ok(pairs) => {
+                        for (name, path) in &pairs {
+                            self.command_line.push_output(crate::tf!(
+                                "FONT  Downloaded {name} → {path}",
+                                path = path.display()
+                            ).as_ref());
+                        }
+                        // The downloaded files change glyph resolution for the
+                        // whole drawing — reload it through the standard open
+                        // pipeline so every wire is rebuilt with the real fonts.
+                        let i = self.active_tab;
+                        if let Some(path) = self.tabs[i].current_path.clone() {
+                            return Task::done(Message::OpenExternal(path));
+                        }
+                        self.command_line.push_info(crate::t!(
+                            "Save and reopen the drawing to apply the new fonts."
+                        ).as_ref());
+                    }
+                    Err(e) => {
+                        self.command_line.push_error(crate::tf!("Font download failed: {e}").as_ref());
+                    }
+                }
+                Task::none()
+            }
             Message::PdfAttachPick => Task::perform(
                 async {
                     let handle = crate::sys::file_dialog()
@@ -8281,7 +8368,7 @@ impl OpenCADStudio {
                     .and_then(|path| path.file_stem())
                     .map(|name| format!("{}_layouts", name.to_string_lossy()))
                     .unwrap_or_else(|| "drawing_layouts".into());
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
                 {
                     let Some(window_id) = self.main_window else {
                         return Task::done(Message::PrintAllPdfPath(None));
@@ -8290,6 +8377,13 @@ impl OpenCADStudio {
                         crate::io::pdf_export::pick_pdf_path_owned(stem, parent)
                     })
                     .map(Message::PrintAllPdfPath)
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Task::perform(
+                        crate::io::pdf_export::pick_pdf_path_async(stem),
+                        Message::PrintAllPdfPath,
+                    )
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -8326,7 +8420,7 @@ impl OpenCADStudio {
                     .and_then(|p: &std::path::Path| p.file_stem())
                     .map(|s: &std::ffi::OsStr| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "drawing".into());
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
                 {
                     let Some(window_id) = self.main_window else {
                         return Task::done(Message::PlotExportPath(None));
@@ -8335,6 +8429,13 @@ impl OpenCADStudio {
                         crate::io::pdf_export::pick_pdf_path_owned(stem, parent)
                     })
                     .map(Message::PlotExportPath)
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Task::perform(
+                        crate::io::pdf_export::pick_pdf_path_async(stem),
+                        Message::PlotExportPath,
+                    )
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -8363,7 +8464,7 @@ impl OpenCADStudio {
                     .and_then(|p: &std::path::Path| p.file_stem())
                     .map(|s: &std::ffi::OsStr| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "drawing".into());
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
                 {
                     let Some(window_id) = self.main_window else {
                         return Task::done(Message::PlotWindowExportPath(None));
@@ -8372,6 +8473,13 @@ impl OpenCADStudio {
                         crate::io::pdf_export::pick_pdf_path_owned(stem, parent)
                     })
                     .map(Message::PlotWindowExportPath)
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Task::perform(
+                        crate::io::pdf_export::pick_pdf_path_async(stem),
+                        Message::PlotWindowExportPath,
+                    )
                 }
                 #[cfg(target_arch = "wasm32")]
                 {

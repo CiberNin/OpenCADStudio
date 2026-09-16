@@ -375,7 +375,7 @@ fn image_triangle_matrix(p: [[f32; 2]; 3], uv: [[f32; 2]; 3]) -> Option<[f32; 6]
 /// The parent comes from `iced::window::run`, keeping the portal request tied
 /// to the visible app window on Wayland instead of silently resolving to
 /// `None` on desktops that reject a parentless save dialog (#537).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 pub fn pick_pdf_path_owned(
     stem: String,
     parent: &dyn iced::window::Window,
@@ -390,6 +390,25 @@ pub fn pick_pdf_path_owned(
         ?;
     crate::config::remember_dialog_dir(&path);
     Some(path)
+}
+
+/// Windows: pick the PDF destination with the async dialog on a worker
+/// thread. The parented blocking dialog ran `IFileDialog::Show` on the UI
+/// thread inside the window callback, and when the target name already
+/// existed the overwrite-confirmation popup is a second nested modal that
+/// never gets pumped there — the app froze instead of asking. The async
+/// backend runs the dialog off-thread; it is the same pattern the DWG
+/// Save As flow uses, whose confirm popup works.
+#[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
+pub async fn pick_pdf_path_async(stem: String) -> Option<std::path::PathBuf> {
+    let handle = crate::sys::file_dialog()
+        .set_title(crate::t!("Export as PDF").as_ref())
+        .set_file_name(format!("{stem}.pdf"))
+        .add_filter(crate::t!("PDF Files").as_ref(), &["pdf"])
+        .add_filter(crate::t!("All Files").as_ref(), &["*"])
+        .save_file()
+        .await?;
+    Some(crate::sys::handle_path(&handle))
 }
 
 // ── PDF builder ───────────────────────────────────────────────────────────
