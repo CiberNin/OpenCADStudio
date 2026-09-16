@@ -20,7 +20,7 @@ use crate::t;
 
 /// Fixed row height used by the renderer, so `ContextMenu::default_row_y`
 /// (which anchors the default row under the cursor) agrees with the layout.
-pub const MENU_ROW_H: f32 = 24.0;
+pub const MENU_ROW_H: f32 = 22.0;
 /// Height of a separator row (1 px line plus its vertical padding).
 pub const MENU_SEP_H: f32 = 7.0;
 /// Vertical padding inside the menu panel above the first row.
@@ -576,7 +576,11 @@ fn idle_rows(
     // ── Navigation ─────────────────────────────────────────────────────
     rows.push(MenuRow::Item(cmd(t!("Pan").into_owned(), "PAN")));
     rows.push(MenuRow::Item(cmd(t!("Zoom").into_owned(), "ZOOM")));
-    rows.push(MenuRow::Item(cmd(t!("Zoom Extents").into_owned(), "ZOOM EXTENTS")));
+    // The edit menu is long already; Zoom Extents stays on the idle menu
+    // (and on the middle button's double-click), as in AutoCAD.
+    if !has_selection {
+        rows.push(MenuRow::Item(cmd(t!("Zoom Extents").into_owned(), "ZOOM EXTENTS")));
+    }
     rows.push(MenuRow::Separator);
 
     // ── Selection tools ────────────────────────────────────────────────
@@ -594,7 +598,9 @@ fn idle_rows(
             MenuAction::DeselectAll,
         )));
     }
-    rows.push(MenuRow::Item(cmd(t!("Select All").into_owned(), "SELECTALL")));
+    if !has_selection {
+        rows.push(MenuRow::Item(cmd(t!("Select All").into_owned(), "SELECTALL")));
+    }
     rows.push(MenuRow::Item(MenuItem::new(
         t!("Quick Select...").into_owned(),
         MenuAction::QuickSelect,

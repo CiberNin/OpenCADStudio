@@ -267,7 +267,8 @@ impl OpenCADStudio {
             "mtext_cancel" => Message::MTextCancel,
             "text_input" => Message::TextInlineInput(string(req, "value")?.into()),
             "text_commit" => Message::TextInlineOk,
-            "pointer_move" | "pointer_press" | "pointer_release" => {
+            "pointer_move" | "pointer_press" | "pointer_release" | "pointer_right_press"
+            | "pointer_right_release" => {
                 let x = req["x"]
                     .as_f64()
                     .filter(|v| v.is_finite())
@@ -289,6 +290,10 @@ impl OpenCADStudio {
                 let event = match name {
                     "pointer_press" => self.update(Message::ViewportLeftPress),
                     "pointer_release" => self.update(Message::ViewportLeftRelease),
+                    // Right button: the context menu / Enter behaviour chosen in
+                    // Options (see `Message::ViewportRightRelease`).
+                    "pointer_right_press" => self.update(Message::ViewportRightPress),
+                    "pointer_right_release" => self.update(Message::ViewportRightRelease),
                     _ => Task::none(),
                 };
                 return Ok(Task::batch([move_task, event]));

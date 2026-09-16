@@ -994,6 +994,7 @@ impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
             &layout::Limits::new(Size::ZERO, safe),
         );
         let content = node.size();
+        let bottom_inset = self.bottom_inset;
 
         let max_x = (max.width - MARGIN - content.width).max(MARGIN);
         let right = self.anchor.x + self.gap + self.offset.x;
@@ -1006,8 +1007,7 @@ impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
             max_x
         };
 
-        let max_y =
-            (max.height - self.bottom_inset - MARGIN - content.height).max(MARGIN);
+        let max_y = (max.height - bottom_inset - MARGIN - content.height).max(MARGIN);
         let below = self.anchor.y + self.gap + self.offset.y;
         let above = self.anchor.y - self.gap - content.height;
         let y = if below <= max_y {
@@ -1182,7 +1182,7 @@ pub(super) fn viewport_context_menu_overlay(
                 .align_y(iced::Center);
                 let enabled = !children.is_empty();
                 let mut btn = button(content)
-                    .padding([4, 12])
+                    .padding([3, 12])
                     .width(Fill)
                     .height(Length::Fixed(MENU_ROW_H))
                     .style(move |theme: &Theme, status| context_menu_row_style(theme, status, is_hl));
@@ -1263,9 +1263,9 @@ fn context_menu_row(item: &MenuItem, indent: f32, highlighted: bool) -> Element<
     }
     let mut btn = button(content)
         .padding(iced::Padding {
-            top: 4.0,
+            top: 3.0,
             right: 12.0,
-            bottom: 4.0,
+            bottom: 3.0,
             left: 12.0 + indent,
         })
         .width(Fill)

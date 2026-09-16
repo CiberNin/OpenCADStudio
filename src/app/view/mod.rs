@@ -1603,7 +1603,7 @@ bg={bg_ms:.1}ms n={view_count}"
                     crate::ui::command_line::history_max_height(self.win_size.1),
                 ) + 72.0
             } else {
-                34.0
+                34.0 + self.command_line.overlay_lines_height()
             };
             // Quick Properties: stay near the selection cursor, flipping around
             // it as needed to remain inside the visible drawing area.

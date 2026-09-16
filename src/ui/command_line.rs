@@ -500,6 +500,24 @@ impl CommandLine {
         e.pinned || (self.fade_ms > 0 && e.created_at.elapsed().as_secs_f32() < self.fade_secs())
     }
 
+    /// Height of the overlaid prompt lines currently shown above the input
+    /// row (CLIPROMPTLINES, minus lines that have faded out), in pixels. Lets
+    /// cursor-anchored panels stay clear of the whole command area, not just
+    /// the input row.
+    pub fn overlay_lines_height(&self) -> f32 {
+        if self.cliprompt_lines == 0 || self.history_open {
+            return 0.0;
+        }
+        let visible = self
+            .history
+            .iter()
+            .filter(|e| self.entry_visible(e))
+            .count()
+            .min(self.cliprompt_lines as usize);
+        // Text size 12 (line height ≈ 15.6) plus the 1 px padding each side.
+        visible as f32 * 18.0
+    }
+
     /// Visible overlay count respecting CLIPROMPTLINES (0–50). Used in tests.
     #[cfg(test)]
     pub fn visible_history_count(&self) -> usize {
