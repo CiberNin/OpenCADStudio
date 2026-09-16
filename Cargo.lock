@@ -35,6 +35,7 @@ dependencies = [
  "image",
  "inventory",
  "js-sys",
+ "libloading",
  "log",
  "lyon_tessellation",
  "meshopt",
