@@ -2,7 +2,7 @@
 //! supplies a viewport scale; sheet-only dimensions retain paper units.
 
 use super::OpenCADStudio;
-use crate::command::DimensionAssociationSource;
+use crate::command::{DimensionAssociationSource, DimensionPreview};
 use crate::entities::dim_override;
 use crate::scene::viewport_ref::{AcceptedSnap, MeasurementScale, SnapSourceRef, ViewportFrame};
 use acadrust::entities::Dimension;
@@ -27,12 +27,25 @@ impl OpenCADStudio {
     }
 
     pub(crate) fn dimension_measure_space(&self, i: usize) -> DimensionMeasureSpace {
+        self.dimension_measure_space_with_candidate(i, None)
+    }
+
+    fn dimension_measure_space_with_candidate(
+        &self,
+        i: usize,
+        candidate: Option<ViewportFrame>,
+    ) -> DimensionMeasureSpace {
         let scene = &self.tabs[i].scene;
         if scene.current_layout == "Model" || scene.active_viewport.is_some() {
             return DimensionMeasureSpace::Direct;
         }
         let mut frame: Option<ViewportFrame> = None;
-        for f in self.accepted_snaps().iter().filter_map(|snap| snap.frame) {
+        for f in self
+            .accepted_snaps()
+            .iter()
+            .filter_map(|snap| snap.frame)
+            .chain(candidate)
+        {
             match frame {
                 None => frame = Some(f),
                 Some(previous) if previous.viewport == f.viewport => {}
@@ -122,13 +135,10 @@ impl OpenCADStudio {
         i: usize,
         entity: &mut EntityType,
     ) -> bool {
-        let EntityType::Dimension(dimension) = entity else {
+        if !matches!(entity, EntityType::Dimension(_)) {
             return true;
-        };
-        let angular = matches!(
-            dimension,
-            Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)
-        );
+        }
+        let angular = is_angular_dimension(entity);
         let frame = match self.dimension_measure_space(i) {
             DimensionMeasureSpace::Direct => return true,
             DimensionMeasureSpace::ConflictingViewports => {
@@ -140,18 +150,106 @@ impl OpenCADStudio {
         if angular {
             return true;
         }
+        let Some(scale) = self.viewport_dimension_scale(i, entity, frame) else {
+            return false;
+        };
+        // Owner is needed even by DIMASSOC=0's explode path, before insertion.
+        entity.common_mut().owner_handle = self.tabs[i].scene.current_layout_block_handle_pub();
+        scale.write_to_entity(entity);
+        true
+    }
+
+    fn viewport_dimension_scale(
+        &self,
+        i: usize,
+        entity: &EntityType,
+        frame: ViewportFrame,
+    ) -> Option<MeasurementScale> {
         let dimlfac = self.pending_dimension_style_dimlfac(i, entity);
         let scale = MeasurementScale {
             user_lfac: MeasurementScale::user_lfac_for_space(dimlfac, true),
             viewport_compensation: frame.paper_to_model_length_factor(),
         };
-        if !scale.paper_factor().is_finite() || scale.paper_factor() <= 0.0 {
-            return false;
+        (scale.paper_factor().is_finite() && scale.paper_factor() > 0.0).then_some(scale)
+    }
+
+    /// Styled dimensions for the placement preview at `cursor`, carrying the
+    /// same style and viewport measurement the commit path would apply.
+    /// `None` when the active command has no committable dimension at this
+    /// stage; an empty list when the candidate geometry or scale is invalid.
+    pub(crate) fn dimension_preview_entities(
+        &self,
+        i: usize,
+        cursor: DVec3,
+    ) -> Option<Vec<EntityType>> {
+        let command = self.tabs[i].active_cmd.as_ref()?;
+        let previews = command.dimension_preview(cursor)?;
+        let scene = &self.tabs[i].scene;
+        let measure_space = if command.measures_through_viewports() {
+            // The hovered model snap supplies a provisional viewport only while
+            // the second definition point is still being acquired.
+            let candidate = if command.dimension_placement_pending() {
+                None
+            } else {
+                self.vp_snap_frame.filter(|frame| {
+                    self.tabs[i]
+                        .snap_result
+                        .is_some_and(|hit| hit.viewport == Some(frame.viewport))
+                })
+            };
+            self.dimension_measure_space_with_candidate(i, candidate)
+        } else {
+            DimensionMeasureSpace::Direct
+        };
+        if matches!(measure_space, DimensionMeasureSpace::ConflictingViewports) {
+            return Some(Vec::new());
         }
-        // Owner is needed even by DIMASSOC=0's explode path, before insertion.
-        entity.common_mut().owner_handle = self.tabs[i].scene.current_layout_block_handle_pub();
-        scale.write_to_entity(entity);
-        true
+        let mut entities = Vec::with_capacity(previews.len());
+        for DimensionPreview {
+            mut entity,
+            preserve_base_style,
+        } in previews
+        {
+            if !preserve_base_style {
+                crate::scene::creation_style::apply_current_creation_styles(
+                    &scene.document,
+                    &mut entity,
+                );
+            }
+            entity.common_mut().owner_handle = scene.current_layout_block_handle_pub();
+            if let DimensionMeasureSpace::Viewport(frame) = measure_space {
+                if !is_angular_dimension(&entity) {
+                    let Some(scale) = self.viewport_dimension_scale(i, &entity, frame) else {
+                        return Some(Vec::new());
+                    };
+                    scale.write_to_entity(&mut entity);
+                }
+            }
+            entities.push(entity);
+        }
+        Some(entities)
+    }
+
+    pub(crate) fn dimension_preview_wires(
+        &self,
+        i: usize,
+        cursor: DVec3,
+    ) -> Option<Vec<crate::scene::WireModel>> {
+        let entities = self.dimension_preview_entities(i, cursor)?;
+        // Degenerate geometry, an invalid scale, or conflicting viewports
+        // produce no styled dimension. Returning None lets the command's
+        // plain rubber-band preview run, which shows no value to mistrust.
+        if entities.is_empty() {
+            return None;
+        }
+        let mut wires = self.tabs[i].scene.wires_for_entities(&entities);
+        for wire in &mut wires {
+            wire.color = crate::scene::WireModel::CYAN;
+            for vertex in &mut wire.text_verts {
+                vertex.color = crate::scene::WireModel::CYAN;
+            }
+        }
+        Some(wires)
     }
 
     pub(crate) fn try_dimension_viewport_entity_pick(
@@ -253,4 +351,11 @@ impl OpenCADStudio {
             .scene
             .bump_entities(&[(dimension, crate::scene::ChangeKind::Modified)]);
     }
+}
+
+fn is_angular_dimension(entity: &EntityType) -> bool {
+    matches!(
+        entity,
+        EntityType::Dimension(Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_))
+    )
 }

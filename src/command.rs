@@ -1345,6 +1345,23 @@ pub enum DimensionBreakOperation {
     Remove,
 }
 
+/// A transient dimension built for the placement preview.
+pub struct DimensionPreview {
+    pub entity: EntityType,
+    /// Keep the base dimension's style instead of the current one
+    /// (`DIMCONTINUE` / `DIMBASELINE` with `DIMCONTINUEMODE=1`).
+    pub preserve_base_style: bool,
+}
+
+impl DimensionPreview {
+    pub fn current_style(entity: EntityType) -> Self {
+        Self {
+            entity,
+            preserve_base_style: false,
+        }
+    }
+}
+
 /// Returned by every `CadCommand` method to tell main.rs what to do.
 #[allow(dead_code)]
 pub enum CmdResult {
@@ -2259,6 +2276,13 @@ pub trait CadCommand: Send {
     /// The next point places annotation rather than acquiring geometry.
     fn dimension_placement_pending(&self) -> bool {
         false
+    }
+
+    /// Dimensions the command would commit if the cursor were clicked now.
+    /// `None` means this stage has no committable dimension; an empty list
+    /// means the geometry is degenerate and nothing styled should be shown.
+    fn dimension_preview(&self, _cursor: DVec3) -> Option<Vec<DimensionPreview>> {
+        None
     }
 
     /// Needs entity hit-testing instead of point input.

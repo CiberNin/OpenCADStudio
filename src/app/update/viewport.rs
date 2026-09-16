@@ -2547,6 +2547,8 @@ impl OpenCADStudio {
                     }
                 }
                 p
+            } else if let Some(wires) = self.dimension_preview_wires(i, effective) {
+                wires
             } else {
                 self.tabs[i]
                     .active_cmd

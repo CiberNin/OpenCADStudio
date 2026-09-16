@@ -13,6 +13,8 @@ pub(crate) mod commands;
 pub(crate) mod dim_viewport;
 #[cfg(test)]
 mod viewport_dimension_tests;
+#[cfg(test)]
+mod dimension_preview_tests;
 mod document;
 mod drafting_settings;
 pub(crate) mod expr_eval;
