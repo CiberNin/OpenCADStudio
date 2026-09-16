@@ -943,8 +943,10 @@ pub(super) struct OpenCADStudio {
     mtext_click_count: u8,
     /// Pending model-space plot window (x0, y0, x1, y1) in world XY, or None.
     plot_window: Option<(f64, f64, f64, f64)>,
-    plot_format: crate::io::paper_sizes::PaperSize,
-    plot_orientation: crate::io::paper_sizes::Orientation,
+    /// Sheet the Plot dialog opens with when the layout has no page setup;
+    /// updated from every plot / apply so the next dialog remembers it.
+    plot_paper: crate::io::paper_catalog::PaperSize,
+    plot_orientation: crate::io::paper_catalog::Orientation,
     /// Backing state for the full Plot / Print dialog.
     plot_dialog: crate::ui::window::plot::PlotDialogState,
     /// Snapshot of the dialog's settings taken when it opened, restored by the
@@ -3317,10 +3319,6 @@ pub enum Message {
     PlotExport,
     /// Callback after the user picks (or cancels) the export path.
     PlotExportPath(Option<std::path::PathBuf>),
-    /// User picked a paper size for the model-space window plot.
-    PlotFormat(crate::io::paper_sizes::PaperSize),
-    /// User picked a sheet orientation for the model-space window plot.
-    PlotOrientation(crate::io::paper_sizes::Orientation),
     /// Export the pending model-space plot window (from PLOTWINDOW) to PDF.
     PlotWindowExport,
     /// Callback after the user picks (or cancels) the window-export path.
@@ -3944,8 +3942,8 @@ impl OpenCADStudio {
             mtext_click_off: 0,
             mtext_click_count: 0,
             plot_window: None,
-            plot_format: crate::io::paper_sizes::PaperSize::A4,
-            plot_orientation: crate::io::paper_sizes::Orientation::Landscape,
+            plot_paper: crate::io::paper_catalog::default_paper().clone(),
+            plot_orientation: crate::io::paper_catalog::Orientation::Landscape,
             plot_dialog: crate::ui::window::plot::PlotDialogState::default(),
             plot_prev: None,
             plot_setup_template: None,

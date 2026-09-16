@@ -5,7 +5,7 @@
 //! PDF. Styled to match the other OCS dialogs (dark pills + fields).
 
 use crate::app::Message;
-use crate::io::paper_sizes::PaperSize;
+use crate::io::paper_catalog::{self, PaperSize};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
     Space,
@@ -28,25 +28,39 @@ pub const STYLE_NONE: &str = "<none>";
 /// A plot dropdown value keeps its persisted/raw value separate from the
 /// localized label shown by Iced. Printer names, scale names, paper sizes, and
 /// style-table file names remain verbatim; built-in choices use the catalog.
+/// A paper choice keeps the canonical media name as its value and shows the
+/// sheet's human name with its dimensions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PlotChoice {
     raw: String,
     localized: bool,
+    /// Display text when it differs from `raw` (paper sizes).
+    display: Option<String>,
 }
 
 impl PlotChoice {
     fn raw(value: impl Into<String>) -> Self {
-        Self { raw: value.into(), localized: false }
+        Self { raw: value.into(), localized: false, display: None }
     }
 
     fn localized(value: impl Into<String>) -> Self {
-        Self { raw: value.into(), localized: true }
+        Self { raw: value.into(), localized: true, display: None }
+    }
+
+    fn paper(paper: &PaperSize) -> Self {
+        Self {
+            raw: paper.canonical.to_string(),
+            localized: false,
+            display: Some(paper.display()),
+        }
     }
 }
 
 impl fmt::Display for PlotChoice {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.localized {
+        if let Some(display) = &self.display {
+            formatter.write_str(display)
+        } else if self.localized {
             if let Some(name) = self.raw.strip_prefix("View: ") {
                 formatter.write_str(crate::tf!("View: {name}").as_ref())
             } else {
@@ -212,7 +226,7 @@ impl Default for PlotDialogState {
             printers: Vec::new(),
             printer: None,
             to_file: false,
-            paper: "A4".into(),
+            paper: paper_catalog::default_paper().canonical.to_string(),
             paper_width_mm: 297.0,
             paper_height_mm: 210.0,
             orientation: "Landscape".into(),
@@ -659,9 +673,17 @@ pub fn view_window(
             None => PlotChoice::localized(OUT_DEFAULT),
         })
     };
-    let mut paper_opts: Vec<String> = PaperSize::ALL.iter().map(|p| p.label().to_string()).collect();
-    if !paper_opts.iter().any(|name| name == &s.paper) {
-        paper_opts.push(s.paper.clone());
+    // The picker lists the catalogue by series; a sheet that only exists in
+    // the drawing (a driver's custom size, an old config's bare name) is added
+    // at the top so the current selection is always visible and re-selectable.
+    let selected_paper = paper_catalog::from_drawing(&s.paper, s.paper_width_mm, s.paper_height_mm);
+    let mut paper_opts: Vec<PlotChoice> = paper_catalog::catalog()
+        .iter()
+        .map(PlotChoice::paper)
+        .collect();
+    let paper_sel = PlotChoice::paper(&selected_paper);
+    if !paper_opts.contains(&paper_sel) {
+        paper_opts.insert(0, paper_sel.clone());
     }
     let paper_note: Element<'_, Message> = if s.area == "Layout" {
         text(t!("Layout plots the current sheet using the selected paper size."))
@@ -712,13 +734,7 @@ pub fn view_window(
     // ── Paper, area, offset, scale ────────────────────────────────────────
     let paper_panel = panel(column![
         section_label(t!("Paper")),
-        drop_row(
-            t!("Size"),
-            paper_opts.into_iter().map(PlotChoice::raw).collect(),
-            Some(PlotChoice::raw(s.paper.clone())),
-            PlotDlgMsg::Paper,
-            width,
-        ),
+        drop_row(t!("Size"), paper_opts, Some(paper_sel), PlotDlgMsg::Paper, width),
         paper_note,
     ].spacing(7));
 

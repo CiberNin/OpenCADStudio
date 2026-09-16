@@ -20,7 +20,7 @@ pub mod xref_model;
 pub mod linetypes;
 pub mod patterns;
 pub mod update_check;
-pub mod paper_sizes;
+pub mod paper_catalog;
 pub mod thumbnail;
 #[cfg(target_arch = "wasm32")]
 mod web_worker;

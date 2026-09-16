@@ -88,32 +88,60 @@ fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
 
 use crate::io::pdf_export::{PdfPageInput, PlotContent};
 
-fn plot_dialog_sheet_mm(d: &crate::ui::window::plot::PlotDialogState) -> (f64, f64) {
-    use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
-    let orientation = if d.orientation == "Portrait" {
+/// The dialog's sheet orientation as a catalogue value.
+fn plot_dialog_orientation(
+    d: &crate::ui::window::plot::PlotDialogState,
+) -> crate::io::paper_catalog::Orientation {
+    use crate::io::paper_catalog::Orientation;
+    if d.orientation == "Portrait" {
         Orientation::Portrait
     } else {
         Orientation::Landscape
-    };
-    let standard = match d.paper.as_str() {
-        "A3" => Some(PaperSize::A3),
-        "A2" => Some(PaperSize::A2),
-        "A1" => Some(PaperSize::A1),
-        "A0" => Some(PaperSize::A0),
-        "A4" => Some(PaperSize::A4),
-        "Letter" => Some(PaperSize::Letter),
-        "Legal" => Some(PaperSize::Legal),
-        "Tabloid" => Some(PaperSize::Tabloid),
-        _ => None,
-    };
-    if let Some(paper) = standard {
-        return sheet_mm(paper, orientation);
     }
-    let short = d.paper_width_mm.min(d.paper_height_mm).max(1.0);
-    let long = d.paper_width_mm.max(d.paper_height_mm).max(1.0);
-    match orientation {
-        Orientation::Portrait => (short, long),
-        Orientation::Landscape => (long, short),
+}
+
+/// The sheet the dialog names, or — when the name carries no size (an old
+/// config, a bare driver name) — a custom sheet built from the dialog's stored
+/// dimensions, so a drawing whose paper we cannot identify still plots at its
+/// own size.
+fn plot_dialog_paper(
+    d: &crate::ui::window::plot::PlotDialogState,
+) -> crate::io::paper_catalog::PaperSize {
+    use crate::io::paper_catalog::{from_drawing, resolve, PaperSize, PaperUnits};
+    if d.paper_width_mm > 0.0 && d.paper_height_mm > 0.0 {
+        from_drawing(&d.paper, d.paper_width_mm, d.paper_height_mm)
+    } else {
+        resolve(&d.paper)
+            .unwrap_or_else(|| PaperSize::custom(210.0, 297.0, PaperUnits::Millimeters))
+    }
+}
+
+fn plot_dialog_sheet_mm(d: &crate::ui::window::plot::PlotDialogState) -> (f64, f64) {
+    plot_dialog_paper(d).sheet_mm(plot_dialog_orientation(d))
+}
+
+/// The media name to store for the dialog's sheet. A drawing keeps its own
+/// spelling of a sheet the user did not change — a system printer's `A4` or a
+/// plotter's custom name must not turn into the catalogue's canonical name
+/// just by passing through the dialog, or AutoCAD would look the sheet up
+/// under a name that driver never reported. Only a genuinely different
+/// selection writes the canonical name.
+fn paper_name_for_settings(
+    d: &crate::ui::window::plot::PlotDialogState,
+    stored: &acadrust::objects::PlotSettings,
+) -> String {
+    let unchanged = !stored.paper_size.is_empty()
+        && crate::io::paper_catalog::from_drawing(
+            &stored.paper_size,
+            stored.paper_width,
+            stored.paper_height,
+        )
+        .canonical
+            == d.paper;
+    if unchanged {
+        stored.paper_size.clone()
+    } else {
+        d.paper.clone()
     }
 }
 
@@ -2916,9 +2944,9 @@ impl OpenCADStudio {
                 .clone()
                 .or_else(|| self.tabs[i].scene.plot_settings_for(&layout_name))
                 .unwrap_or_else(|| PlotSettings::new(""));
+            ps.paper_size = paper_name_for_settings(&dialog, &ps);
             ps.paper_width = w;
             ps.paper_height = h;
-            ps.paper_size = dialog.paper.clone();
             ps.plot_type = match plot_area {
                 "Window" => PlotType::Window,
                 "Display" => PlotType::LastScreenDisplay,
@@ -3637,7 +3665,7 @@ impl OpenCADStudio {
     /// Open the full Plot / Print dialog, seeding its state from the active
     /// layout's plot settings and the printers found on the system.
     pub(super) fn on_plot_dialog_open(&mut self) -> Task<Message> {
-        use crate::io::paper_sizes::Orientation;
+        use crate::io::paper_catalog::Orientation;
         let previous = self.plot_dialog.clone();
         let scales: Vec<(String, f64)> = self.tabs[self.active_tab]
             .scene
@@ -3671,7 +3699,8 @@ impl OpenCADStudio {
             d.scale = one_to_one.clone();
         }
         d.paper_space = paper_space;
-        d.paper = self.plot_format.label().to_string();
+        d.paper = self.plot_paper.canonical.to_string();
+        (d.paper_width_mm, d.paper_height_mm) = self.plot_paper.sheet_mm(self.plot_orientation);
         d.orientation = match self.plot_orientation {
             Orientation::Portrait => "Portrait",
             Orientation::Landscape => "Landscape",
@@ -4100,10 +4129,11 @@ impl OpenCADStudio {
             let is_model = self.tabs[self.active_tab].scene.current_layout == "Model";
             let d = &mut self.plot_dialog;
             d.to_file = true;
-            d.paper = "A4".into();
+            let a4 = crate::io::paper_catalog::default_paper();
+            d.paper = a4.canonical.to_string();
             d.orientation = "Landscape".into();
-            d.paper_width_mm = 297.0;
-            d.paper_height_mm = 210.0;
+            (d.paper_width_mm, d.paper_height_mm) =
+                a4.sheet_mm(crate::io::paper_catalog::Orientation::Landscape);
             d.area = if is_model {
                 "Window".into()
             } else {
@@ -4164,9 +4194,9 @@ impl OpenCADStudio {
                 settings
             }
         };
+        ps.paper_size = paper_name_for_settings(d, &ps);
         ps.paper_width = w;
         ps.paper_height = h;
-        ps.paper_size = d.paper.clone();
         ps.plot_type = match d.area.as_str() {
             "Window" => PlotType::Window,
             "Layout" => PlotType::Layout,
@@ -4281,16 +4311,23 @@ impl OpenCADStudio {
             && active_style_name
                 .as_deref()
                 .is_some_and(|name| name.eq_ignore_ascii_case(&style_name));
-        let (mut paper, orient) = paper_label_from_dims(ps.paper_width, ps.paper_height);
-        if !matches!(
-            paper.as_str(),
-            "A4" | "A3" | "A2" | "A1" | "A0" | "Letter" | "Legal" | "Tabloid"
-        ) && !ps.paper_size.is_empty()
-        {
-            paper = ps.paper_size.clone();
+        // The stored media name wins (it is what AutoCAD wrote); a drawing
+        // without a usable name is matched by size, and an unknown size keeps
+        // its own dimensions as a custom sheet. The sheet's orientation is the
+        // stored width/height order; the rotation below may flip it again.
+        let paper = crate::io::paper_catalog::from_drawing(
+            &ps.paper_size,
+            ps.paper_width,
+            ps.paper_height,
+        );
+        let orient = if ps.paper_width >= ps.paper_height {
+            "Landscape"
+        } else {
+            "Portrait"
         }
+        .to_string();
         let d = &mut self.plot_dialog;
-        d.paper = paper;
+        d.paper = paper.canonical.to_string();
         d.paper_width_mm = ps.paper_width.max(1.0);
         d.paper_height_mm = ps.paper_height.max(1.0);
         d.orientation = orient;
@@ -4381,25 +4418,9 @@ impl OpenCADStudio {
     /// Copy transient paper/scale choices out of the dialog without changing
     /// the active layout.
     fn sync_dialog_plot_runtime(&mut self) {
-        use crate::io::paper_sizes::{Orientation, PaperSize};
-        let d = self.plot_dialog.clone();
-        let paper = match d.paper.as_str() {
-            "A3" => PaperSize::A3,
-            "A2" => PaperSize::A2,
-            "A1" => PaperSize::A1,
-            "A0" => PaperSize::A0,
-            "Letter" => PaperSize::Letter,
-            "Legal" => PaperSize::Legal,
-            "Tabloid" => PaperSize::Tabloid,
-            _ => PaperSize::A4,
-        };
-        let orient = if d.orientation == "Portrait" {
-            Orientation::Portrait
-        } else {
-            Orientation::Landscape
-        };
-        self.plot_format = paper;
-        self.plot_orientation = orient;
+        let d = &self.plot_dialog;
+        self.plot_paper = plot_dialog_paper(d);
+        self.plot_orientation = plot_dialog_orientation(d);
     }
 
     fn apply_dialog_to_layout(&mut self) {
@@ -4651,7 +4672,7 @@ impl OpenCADStudio {
     /// Render a selected rectangle through one shared Model/Paper path. The
     /// window may lie partly or wholly outside a paper sheet.
     fn area_plot_job(&self, window: (f64, f64, f64, f64)) -> Option<PdfPageInput> {
-        use crate::io::paper_sizes::{window_to_sheet, PlotScale};
+        use crate::io::paper_catalog::{window_to_sheet, PlotScale};
         let i = self.active_tab;
         let (x0, y0, x1, y1) = window;
         if (x1 - x0) < 1e-6 || (y1 - y0) < 1e-6 {
@@ -4809,5 +4830,86 @@ impl OpenCADStudio {
             },
             Message::PlotStylePanelSavePath,
         )
+    }
+}
+
+#[cfg(test)]
+mod plot_paper_tests {
+    use crate::app::{Message, OpenCADStudio};
+    use crate::ui::window::plot::PlotDlgMsg;
+
+    /// A drawing on `Layout1` whose page setup names its sheet the way a
+    /// Windows printer driver does — a bare `A4` with landscape dimensions.
+    fn app_with_printer_named_sheet() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.update(Message::LayoutSwitch("Layout1".into()));
+        let i = app.active_tab;
+        let mut ps = app.tabs[i]
+            .scene
+            .plot_settings_for("Layout1")
+            .expect("a fresh layout carries plot settings");
+        ps.paper_size = "A4".into();
+        ps.paper_width = 297.0;
+        ps.paper_height = 210.0;
+        assert!(app.tabs[i].scene.set_layout_plot_settings("Layout1", &ps));
+        app
+    }
+
+    fn layout_paper(app: &OpenCADStudio) -> (String, f64, f64) {
+        let ps = app.tabs[app.active_tab]
+            .scene
+            .plot_settings_for("Layout1")
+            .unwrap();
+        (ps.paper_size, ps.paper_width, ps.paper_height)
+    }
+
+    #[test]
+    fn dialog_shows_the_catalogue_sheet_for_a_driver_name() {
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        assert_eq!(app.plot_dialog.paper, "ISO_A4_(210.00_x_297.00_MM)");
+        assert_eq!(app.plot_dialog.orientation, "Landscape");
+        assert_eq!(super::plot_dialog_sheet_mm(&app.plot_dialog), (297.0, 210.0));
+    }
+
+    #[test]
+    fn applying_an_unchanged_sheet_keeps_the_drawing_media_name() {
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let (name, w, h) = layout_paper(&app);
+        assert_eq!(name, "A4", "the driver's own spelling must survive the dialog");
+        assert_eq!((w, h), (297.0, 210.0));
+    }
+
+    #[test]
+    fn picking_another_sheet_writes_the_canonical_name() {
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::Paper("ISO_A3_(297.00_x_420.00_MM)".into()));
+        assert_eq!(super::plot_dialog_sheet_mm(&app.plot_dialog), (420.0, 297.0));
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let (name, w, h) = layout_paper(&app);
+        assert_eq!(name, "ISO_A3_(297.00_x_420.00_MM)");
+        assert_eq!((w, h), (420.0, 297.0));
+        // The next dialog remembers the sheet the user chose.
+        assert_eq!(app.plot_paper.canonical, "ISO_A3_(297.00_x_420.00_MM)");
+    }
+
+    #[test]
+    fn an_unknown_sheet_from_a_drawing_keeps_its_own_dimensions() {
+        let mut app = app_with_printer_named_sheet();
+        let i = app.active_tab;
+        let mut ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        ps.paper_size = "Roll_24_(609.60_x_1500.00_MM)".into();
+        ps.paper_width = 1500.0;
+        ps.paper_height = 609.6;
+        assert!(app.tabs[i].scene.set_layout_plot_settings("Layout1", &ps));
+        let _ = app.on_plot_dialog_open();
+        assert_eq!(app.plot_dialog.paper, "Roll_24_(609.60_x_1500.00_MM)");
+        assert_eq!(super::plot_dialog_sheet_mm(&app.plot_dialog), (1500.0, 609.6));
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        assert_eq!(layout_paper(&app).0, "Roll_24_(609.60_x_1500.00_MM)");
     }
 }
