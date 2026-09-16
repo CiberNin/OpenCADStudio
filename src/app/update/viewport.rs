@@ -6371,11 +6371,13 @@ mod selection_preview_tests {
             Vector3::new(-1.0, 0.0, 0.0),
             Vector3::new(1.0, 0.0, 0.0),
         )));
-        app.tabs[i].scene.parametric_constraint_set_mut(ParametricScope::ModelSpace).add(
-            ConstraintKind::Horizontal,
-            vec![ParametricRef::whole(handle)],
-            None,
-        );
+        app.constraint_bar_display = 3;
+        let _ = app.apply_cmd_result(crate::command::CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Horizontal,
+            refs: vec![ParametricRef::whole(handle)],
+            driving_param: None,
+            label: "Horizontal constraint",
+        });
         let anchor = app.tabs[i].scene.constraint_glyph_placements_screen(
             ParametricScope::ModelSpace,
             (800.0, 600.0),

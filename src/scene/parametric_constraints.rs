@@ -972,8 +972,22 @@ impl super::Scene {
     ) -> bool {
         self.is_parametric_constraint_visible(scope, id)
             && (self.shown_parametric_constraints.contains(&(scope, id))
-                || display_mode & 1 != 0
                 || (display_mode & 2 != 0 && related_entity_selected))
+    }
+
+    /// Apply display bit 1 at creation; bit 2 follows the current selection.
+    pub fn note_parametric_constraint_applied(
+        &mut self,
+        scope: ParametricScope,
+        id: ConstraintId,
+        display_mode: i16,
+    ) {
+        self.hidden_parametric_constraints.remove(&(scope, id));
+        if display_mode & 1 != 0 {
+            self.shown_parametric_constraints.insert((scope, id));
+        } else {
+            self.shown_parametric_constraints.remove(&(scope, id));
+        }
     }
 
     pub fn set_parametric_constraint_visibility(
@@ -2072,6 +2086,29 @@ mod tests {
         );
         assert!(!scene.is_parametric_constraint_visible(ParametricScope::ModelSpace, geometric));
         assert!(scene.is_parametric_constraint_visible(ParametricScope::ModelSpace, dimensional));
+    }
+
+    #[test]
+    fn constraint_display_distinguishes_loaded_created_and_explicit_visibility() {
+        let mut scene = super::super::Scene::new();
+        let scope = ParametricScope::ModelSpace;
+        let id = scene.parametric_constraint_set_mut(scope).add(
+            ConstraintKind::Horizontal,
+            vec![ParametricRef::whole(h(1))],
+            None,
+        );
+        assert!(!scene.should_display_parametric_constraint(scope, id, false, 3));
+        assert!(scene.should_display_parametric_constraint(scope, id, true, 2));
+        assert!(!scene.should_display_parametric_constraint(scope, id, true, 1));
+        scene.note_parametric_constraint_applied(scope, id, 1);
+        assert!(scene.should_display_parametric_constraint(scope, id, false, 0));
+        scene.set_parametric_constraint_visibility(scope, None, false, false);
+        assert!(!scene.should_display_parametric_constraint(scope, id, true, 3));
+        scene.set_parametric_constraint_visibility(scope, None, false, true);
+        assert!(scene.should_display_parametric_constraint(scope, id, false, 0));
+        scene.note_parametric_constraint_applied(scope, id, 0);
+        assert!(!scene.should_display_parametric_constraint(scope, id, false, 3));
+        assert!(scene.should_display_parametric_constraint(scope, id, true, 2));
     }
 
     #[test]
