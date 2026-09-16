@@ -5,6 +5,7 @@
 mod coincident;
 mod equal_distance;
 mod point_on_entity;
+mod tangent;
 mod tools;
 mod value;
 pub use coincident::{coincident_tool, CoincidentConstraintCommand};
@@ -12,6 +13,7 @@ pub use equal_distance::{equal_distance_tool, EqualDistanceConstraintCommand};
 pub use point_on_entity::{
     center_point_tool, midpoint_tool, point_on_curve_tool, PointOnEntityConstraintCommand,
 };
+pub use tangent::TangentConstraintCommand;
 pub use tools::{
     colinear, concentric, equal, fixed, horizontal, normal, parallel, perpendicular, symmetric,
     tangent, vertical,

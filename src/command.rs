@@ -1466,6 +1466,14 @@ pub enum CmdResult {
         /// Undo-history label, e.g. `"Horizontal constraint"`.
         label: &'static str,
     },
+    /// Adds an ordered tangent relation. The first picked reference stays
+    /// fixed during the initial solve and the second keeps its intrinsic
+    /// shape while it moves into tangency.
+    AddTangentConstraint {
+        first: crate::scene::parametric_constraints::ParametricRef,
+        second: crate::scene::parametric_constraints::ParametricRef,
+        label: &'static str,
+    },
     /// Opens the Auto Constrain settings dialog from the selection prompt.
     OpenAutoConstrainSettings,
     /// Adds a Coincident constraint between the sub-entity points nearest

@@ -3067,6 +3067,64 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
+            CmdResult::AddTangentConstraint {
+                first,
+                second,
+                label,
+            } => {
+                use crate::scene::parametric_constraints::ConstraintKind;
+
+                let refs = vec![first, second];
+                if let Err(message) = self.tabs[i].scene.validate_parametric_constraint(
+                    ConstraintKind::Tangent,
+                    &refs,
+                    None,
+                ) {
+                    self.tabs[i].active_cmd = None;
+                    self.tabs[i].snap_result = None;
+                    self.command_line.push_error(message);
+                    return Task::none();
+                }
+                let scope = self.tabs[i].current_parametric_scope();
+                let constraints_before = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::scene::parametric_constraints::ParametricConstraintSet::new(scope)
+                    });
+                let touched = if first.entity == second.entity {
+                    vec![first.entity]
+                } else {
+                    vec![first.entity, second.entity]
+                };
+                let pending = self.begin_undo(i, label, touched.len(), true);
+                self.tabs[i]
+                    .scene
+                    .record_undo_parametric_constraints_before(scope, constraints_before);
+                self.tabs[i].scene.parametric_constraint_set_mut(scope).add(
+                    ConstraintKind::Tangent,
+                    refs,
+                    None,
+                );
+                let changes = touched
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect::<Vec<_>>();
+                self.tabs[i].scene.bump_entities_with_initial_parametric_policy(
+                    &changes,
+                    &[first],
+                    true,
+                );
+                self.tabs[i].dirty = true;
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.command_line.push_output("Constraint applied.");
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
             CmdResult::AddCoincidentConstraint {
                 point_a,
                 point_b,

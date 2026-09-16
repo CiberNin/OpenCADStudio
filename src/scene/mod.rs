@@ -2874,6 +2874,41 @@ impl Scene {
         retain_size: bool,
         retained_originals: &[(Handle, EntityType)],
     ) {
+        self.bump_entities_with_parametric_context(
+            changes,
+            driven_refs,
+            retain_size,
+            retained_originals,
+            &[],
+        );
+    }
+
+    /// Apply a newly-created ordered relation while temporarily anchoring
+    /// its reference side. The anchors guide only this first solve and are
+    /// never added to the persistent constraint graph.
+    pub fn bump_entities_with_initial_parametric_policy(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        fixed_refs: &[parametric_constraints::ParametricRef],
+        retain_size: bool,
+    ) {
+        self.bump_entities_with_parametric_context(
+            changes,
+            &[],
+            retain_size,
+            &[],
+            fixed_refs,
+        );
+    }
+
+    fn bump_entities_with_parametric_context(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[parametric_constraints::ParametricRef],
+        retain_size: bool,
+        retained_originals: &[(Handle, EntityType)],
+        fixed_refs: &[parametric_constraints::ParametricRef],
+    ) {
         if changes.iter().any(|(handle, kind)| {
             matches!(kind, ChangeKind::Removed)
                 || self
@@ -2907,11 +2942,12 @@ impl Scene {
             }
         }
         if !self.parametric_constraints.is_empty() {
-            for change in self.refresh_parametric_constraints_with_originals(
+            for change in self.refresh_parametric_constraints_with_initial_policy(
                 &changes,
                 driven_refs,
                 retain_size,
                 retained_originals,
+                fixed_refs,
             ) {
                 if !changes.iter().any(|(handle, _)| *handle == change.0) {
                     changes.push(change);

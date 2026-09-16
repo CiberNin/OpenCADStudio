@@ -1605,6 +1605,7 @@ fn solve_scope(
     driven_refs: &[ParametricRef],
     retain_size: bool,
     retained_before: &HashMap<Handle, std::sync::Arc<EntityType>>,
+    initial_fixed_refs: &[ParametricRef],
 ) -> Option<SolveResult> {
     let params = if set.local_parameters.is_empty() {
         drawing_params
@@ -1630,6 +1631,28 @@ fn solve_scope(
         }
     }
 
+    // Ordered two-object constraints use the first pick as a reference for
+    // their initial placement. Build temporary Fixed equations into this
+    // solve only; they are deliberately omitted from `owner` and from the
+    // persistent constraint set/native graph.
+    for reference in initial_fixed_refs {
+        let temporary = ParametricConstraint {
+            id: ConstraintId::MAX,
+            kind: ConstraintKind::Fixed,
+            refs: vec![*reference],
+            driving_param: None,
+            enabled: true,
+            native_origin: None,
+            rigid_points: Vec::new(),
+            distance_direction_type: distance_direction_type::UNDIRECTED,
+            distance_direction: None,
+            angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
+        };
+        for constraint in build_constraint(document, &mut sys, &mut cache, params, &temporary) {
+            sys.add_constraint(constraint);
+        }
+    }
+
     let has_smooth = set
         .constraints
         .iter()
@@ -1643,6 +1666,12 @@ fn solve_scope(
     // solution without becoming persistent dimensional constraints.
     if retain_size {
         for (handle, geom) in &cache {
+            if initial_fixed_refs
+                .iter()
+                .any(|reference| reference.entity == *handle)
+            {
+                continue;
+            }
             match geom {
                 EntityGeom::Line(line) => {
                     let current_length = {
@@ -1701,12 +1730,37 @@ fn solve_scope(
                     sys.add_constraint(Rc::new(Equal::new(circle.rad, target, 1.0)));
                 }
                 EntityGeom::Arc(arc) => {
+                    let (current_start, current_end) = {
+                        let store = sys.store();
+                        (store.get(arc.start_angle), store.get(arc.end_angle))
+                    };
                     let radius = retained_before
                         .get(handle)
                         .and_then(|entity| retained_radius(entity))
                         .unwrap_or_else(|| sys.store().get(arc.circle.rad));
-                    let target = sys.add_param(radius, true);
-                    sys.add_constraint(Rc::new(Equal::new(arc.circle.rad, target, 1.0)));
+                    let target_radius = sys.add_param(radius, true);
+                    let target_start = sys.add_param(current_start, true);
+                    let target_end = sys.add_param(current_end, true);
+                    sys.add_constraint(Rc::new(Equal::new(
+                        arc.circle.rad,
+                        target_radius,
+                        1.0,
+                    )));
+                    sys.add_constraint(Rc::new(Equal::new(
+                        arc.start_angle,
+                        target_start,
+                        1.0,
+                    )));
+                    sys.add_constraint(Rc::new(Equal::new(
+                        arc.end_angle,
+                        target_end,
+                        1.0,
+                    )));
+                }
+                EntityGeom::Ellipse(ellipse) => {
+                    let minor_radius = sys.store().get(ellipse.radmin);
+                    let target = sys.add_param(minor_radius, true);
+                    sys.add_constraint(Rc::new(Equal::new(ellipse.radmin, target, 1.0)));
                 }
                 _ => {}
             }
@@ -2332,6 +2386,23 @@ impl Scene {
         retain_size: bool,
         retained_originals: &[(Handle, EntityType)],
     ) -> Vec<(Handle, ChangeKind)> {
+        self.refresh_parametric_constraints_with_initial_policy(
+            changes,
+            driven_refs,
+            retain_size,
+            retained_originals,
+            &[],
+        )
+    }
+
+    pub(crate) fn refresh_parametric_constraints_with_initial_policy(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        driven_refs: &[ParametricRef],
+        retain_size: bool,
+        retained_originals: &[(Handle, EntityType)],
+        initial_fixed_refs: &[ParametricRef],
+    ) -> Vec<(Handle, ChangeKind)> {
         // An erased entity takes its constraints with it instead of leaving
         // dangling references. Done first,
         // and unconditionally over every scope (not just ones a `touched`
@@ -2399,11 +2470,17 @@ impl Scene {
                 driven_refs,
                 retain_size,
                 &retained_before,
+                initial_fixed_refs,
             ) else {
                 continue;
             };
-            self.parametric_constraints[i].dof = Some(dof);
-            self.parametric_constraints[i].conflicts = conflicts;
+            if initial_fixed_refs.is_empty() {
+                self.parametric_constraints[i].dof = Some(dof);
+                self.parametric_constraints[i].conflicts = conflicts;
+            } else {
+                self.parametric_constraints[i].dof = None;
+                self.parametric_constraints[i].conflicts.clear();
+            }
             for (handle, new_entity) in solved {
                 if let Some(before) = self.document.get_entity_arc(handle) {
                     self.record_undo_before(handle, Some(before));
@@ -2449,6 +2526,7 @@ impl Scene {
                 driven_refs,
                 retain_size,
                 &retained_before,
+                &[],
             )
             else {
                 continue;
