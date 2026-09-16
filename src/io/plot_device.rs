@@ -22,8 +22,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// AutoCAD's plotter configuration name for PDF output.
 pub const PDF_DEVICE_NAME: &str = "DWG To PDF.pc3";
-/// AutoCAD's spelling for "no plotter assigned".
+/// AutoCAD's spelling for "no plotter assigned" in the plot dialog…
 pub const NO_DEVICE_NAME: &str = "None";
+/// …and the name it actually stores in the drawing for that choice.
+const NO_DEVICE_STORED_NAME: &str = "none_device";
 /// The label older Open CAD Studio builds wrote into drawings for PDF output.
 /// Recognised on read so those drawings keep plotting to PDF, and always
 /// rewritten with [`PDF_DEVICE_NAME`] on save.
@@ -44,7 +46,7 @@ impl PlotDevice {
     /// The name AutoCAD would store for this device.
     pub fn canonical_name(&self) -> String {
         match self {
-            PlotDevice::None => NO_DEVICE_NAME.to_string(),
+            PlotDevice::None => NO_DEVICE_STORED_NAME.to_string(),
             PlotDevice::Pdf => PDF_DEVICE_NAME.to_string(),
             PlotDevice::Printer(name) => name.clone(),
         }
@@ -60,6 +62,10 @@ impl PlotDevice {
         let name = name.trim();
         if name.is_empty() || name.eq_ignore_ascii_case(NO_DEVICE_NAME) {
             return (PlotDevice::None, false);
+        }
+        if name.eq_ignore_ascii_case(NO_DEVICE_STORED_NAME) {
+            // AutoCAD's own spelling: keep it rather than rewriting it.
+            return (PlotDevice::None, true);
         }
         if name == LEGACY_PDF_LABEL {
             return (PlotDevice::Pdf, false);
@@ -387,7 +393,8 @@ mod tests {
     #[test]
     fn canonical_names_follow_autocad() {
         assert_eq!(PlotDevice::Pdf.canonical_name(), "DWG To PDF.pc3");
-        assert_eq!(PlotDevice::None.canonical_name(), "None");
+        // What AutoCAD writes for "None" in its plot dialog.
+        assert_eq!(PlotDevice::None.canonical_name(), "none_device");
         assert_eq!(
             PlotDevice::Printer("L3270".into()).canonical_name(),
             "L3270"
@@ -400,6 +407,14 @@ mod tests {
         assert_eq!(
             PlotDevice::from_stored_name("None"),
             (PlotDevice::None, false)
+        );
+        assert_eq!(
+            PlotDevice::from_stored_name("none_device"),
+            (PlotDevice::None, true)
+        );
+        assert_eq!(
+            PlotDevice::from_stored_name("NONE_DEVICE"),
+            (PlotDevice::None, true)
         );
         assert_eq!(
             PlotDevice::from_stored_name("Save to PDF file…"),

@@ -153,6 +153,18 @@ pub enum PlotDlgMsg {
     Commit,
     Preview,
     PrinterProperties,
+    /// The driver options of a printer arrived (or failed to), for the
+    /// in-line properties editor; carries the printer's name so a late
+    /// answer for a printer the user has since left is ignored.
+    PrinterOptionsLoaded(String, Result<Vec<crate::io::print_to_printer::PrinterOption>, String>),
+    /// One option of the properties editor was set to a choice keyword.
+    PrinterOptionSet(String, String),
+    /// Keep the editor's choices for the printer and close it.
+    PrinterOptionsApply,
+    /// Put every option back to the driver's default.
+    PrinterOptionsReset,
+    /// Close the editor without keeping its changes.
+    PrinterOptionsCancel,
     Printer(String),
     /// A printer answered (or failed) the media query started when it was
     /// selected; carries the printer's name so a stale answer for a printer
@@ -291,7 +303,7 @@ impl CustomPaperDraft {
         let (Some(width), Some(height)) = (number(&self.width), number(&self.height)) else {
             return Err(CustomPaperError::Size);
         };
-        if !(width > 0.0) || !(height > 0.0) || !width.is_finite() || !height.is_finite() {
+        if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
             return Err(CustomPaperError::Size);
         }
         let margin = |text: &str| number(text).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
@@ -307,6 +319,36 @@ impl CustomPaperDraft {
                 top: margin(&self.margins[3]),
             },
         })
+    }
+}
+
+/// The in-line printer-properties editor: the printer it belongs to, the
+/// driver's options, and the choice currently shown for each.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrinterOptionsDraft {
+    pub printer: String,
+    /// `None` while the options are still being fetched.
+    pub options: Option<Vec<crate::io::print_to_printer::PrinterOption>>,
+    /// Current choice keyword per option key.
+    pub choices: std::collections::BTreeMap<String, String>,
+    /// Why the options could not be listed, when they could not.
+    pub error: Option<String>,
+}
+
+impl PrinterOptionsDraft {
+    /// The choices that differ from the driver's defaults — all a job needs
+    /// to pass along.
+    pub fn overrides(&self) -> std::collections::BTreeMap<String, String> {
+        let Some(options) = &self.options else {
+            return std::collections::BTreeMap::new();
+        };
+        options
+            .iter()
+            .filter_map(|option| {
+                let choice = self.choices.get(&option.key)?;
+                (choice != &option.default).then(|| (option.key.clone(), choice.clone()))
+            })
+            .collect()
     }
 }
 
@@ -336,6 +378,13 @@ pub struct PlotDialogState {
     /// The inline custom-sheet editor while it is open.
     #[serde(skip)]
     pub custom_editor: Option<CustomPaperDraft>,
+    /// Driver options chosen per printer (`printer → key → choice`), the way
+    /// a plotter configuration remembers its device settings; applied to
+    /// every job sent to that printer and kept across sessions.
+    pub driver_options: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// The in-line printer-properties editor while it is open.
+    #[serde(skip)]
+    pub printer_editor: Option<PrinterOptionsDraft>,
     /// Chosen printer name, or `None` for the system default.
     pub printer: Option<String>,
     /// Output goes to a PDF file instead of a printer.
@@ -403,6 +452,8 @@ impl Default for PlotDialogState {
             printer_media: None,
             custom_papers: Vec::new(),
             custom_editor: None,
+            driver_options: std::collections::BTreeMap::new(),
+            printer_editor: None,
             printer: None,
             to_file: false,
             paper: paper_catalog::default_paper().canonical.to_string(),
@@ -623,25 +674,125 @@ fn choices(items: &[&str]) -> Vec<PlotChoice> {
     items.iter().map(|&value| PlotChoice::localized(value)).collect()
 }
 
+/// The in-line printer-properties editor: one `label : choice` row per
+/// driver option (media type, colour mode, quality, duplex, trays…), with
+/// Reset / Cancel / Apply. Mirrors what LibreOffice's Properties… shows for a
+/// CUPS printer, without leaving the plot dialog.
+fn printer_options_editor<'a>(draft: &'a PrinterOptionsDraft, width: Length) -> Element<'a, Message> {
+    let mut rows = column![section_label(Cow::Owned(crate::tf!(
+        "Printer properties — {printer}",
+        printer = draft.printer
+    ).into_owned()))]
+    .spacing(6);
+    match (&draft.options, &draft.error) {
+        (Some(options), _) if options.is_empty() => {
+            rows = rows.push(
+                text(t!("This printer reports no driver options."))
+                    .size(10)
+                    .style(muted_style),
+            );
+        }
+        (Some(options), _) => {
+            for option in options {
+                let current = draft
+                    .choices
+                    .get(&option.key)
+                    .cloned()
+                    .unwrap_or_else(|| option.default.clone());
+                let choices: Vec<PlotChoice> = option
+                    .choices
+                    .iter()
+                    .map(|choice| PlotChoice {
+                        raw: choice.keyword.clone(),
+                        localized: false,
+                        display: Some(choice.label.clone()),
+                    })
+                    .collect();
+                let selected = choices.iter().find(|c| c.raw == current).cloned();
+                let key = option.key.clone();
+                rows = rows.push(form::labeled_pick_list(
+                    Cow::Owned(option.label.clone()),
+                    choices,
+                    selected,
+                    move |choice| Message::PlotDlg(PlotDlgMsg::PrinterOptionSet(key.clone(), choice.raw)),
+                    Length::Fill,
+                ));
+            }
+        }
+        (None, Some(error)) => {
+            rows = rows.push(
+                text(crate::tf!("Could not read the printer's options: {error}"))
+                    .size(10)
+                    .style(|theme: &Theme| iced::widget::text::Style {
+                        color: Some(theme.palette().danger.base.color),
+                    }),
+            );
+        }
+        (None, None) => {
+            rows = rows.push(text(t!("Reading the printer's options…")).size(10).style(muted_style));
+        }
+    }
+    let mut buttons = row![
+        button(text(t!("Reset")).size(11))
+            .on_press(Message::PlotDlg(PlotDlgMsg::PrinterOptionsReset))
+            .style(btn(false))
+            .padding([4, 10]),
+        Space::new().width(Length::Fill),
+        button(text(t!("Cancel")).size(11))
+            .on_press(Message::PlotDlg(PlotDlgMsg::PrinterOptionsCancel))
+            .style(btn(false))
+            .padding([4, 10]),
+    ]
+    .spacing(6);
+    if draft.options.is_some() {
+        buttons = buttons.push(
+            button(text(t!("Apply")).size(11))
+                .on_press(Message::PlotDlg(PlotDlgMsg::PrinterOptionsApply))
+                .style(btn(true))
+                .padding([4, 12]),
+        );
+    }
+    rows = rows.push(buttons);
+    container(rows)
+        .padding(8)
+        .width(width)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.weak.color)),
+            border: Border {
+                color: theme.palette().background.neutral.color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 /// The inline editor for a user-defined sheet: name, dimensions and unit,
 /// printable margins, Add / Cancel. Numbers stay text until Add validates
-/// them.
+/// them. Every margin field carries its own side label so the four values
+/// cannot be confused, and the unit is repeated where the numbers are typed.
 fn custom_paper_editor<'a>(draft: &'a CustomPaperDraft, width: Length) -> Element<'a, Message> {
     let msg = |m: CustomPaperMsg| Message::PlotDlg(PlotDlgMsg::CustomPaper(m));
-    let units_label = |inches: bool| {
-        if inches {
-            crate::i18n::translate("Inches")
-        } else {
-            crate::i18n::translate("Millimeters")
-        }
-    };
+    let unit = if draft.inches { "in" } else { "mm" };
     let unit_options: Vec<PlotChoice> = vec![
         PlotChoice::localized("Millimeters"),
         PlotChoice::localized("Inches"),
     ];
     let unit_selected = Some(PlotChoice::localized(if draft.inches { "Inches" } else { "Millimeters" }));
-    let margin_field = |side: MarginSide, index: usize, hint: &'a str| {
-        form::compact_field(hint, &draft.margins[index], move |v| msg(CustomPaperMsg::Margin(side, v)), 56.0)
+    const SIDE_LABEL: f32 = 52.0;
+    const NUMBER: f32 = 64.0;
+    let dimension = |label: Cow<'static, str>, value: &'a str, ctor: fn(String) -> CustomPaperMsg| {
+        form::labeled_field_compact(label, value, move |v| msg(ctor(v)), SIDE_LABEL, NUMBER)
+    };
+    let margin = |label: Cow<'static, str>, side: MarginSide, index: usize| {
+        form::labeled_field_compact(
+            label,
+            &draft.margins[index],
+            move |v| msg(CustomPaperMsg::Margin(side, v)),
+            SIDE_LABEL,
+            NUMBER,
+        )
     };
     let error: Element<'_, Message> = match draft.error {
         Some(CustomPaperError::Size) => text(t!("Enter a positive width and height."))
@@ -652,33 +803,37 @@ fn custom_paper_editor<'a>(draft: &'a CustomPaperDraft, width: Length) -> Elemen
             .into(),
         None => Space::new().height(0).into(),
     };
-    let unit_hint = text(units_label(draft.inches)).size(10).style(muted_style);
     container(
         column![
             section_label(t!("Custom paper size")),
-            form::labeled_field(t!("Name"), &draft.name, move |v| msg(CustomPaperMsg::Name(v)), 220.0),
-            row![
-                form::labeled_field(t!("Width"), &draft.width, move |v| msg(CustomPaperMsg::Width(v)), 70.0),
-                form::labeled_field(t!("Height"), &draft.height, move |v| msg(CustomPaperMsg::Height(v)), 70.0),
-            ]
-            .spacing(12),
+            form::labeled_field(t!("Name"), &draft.name, move |v| msg(CustomPaperMsg::Name(v)), 200.0),
             form::labeled_pick_list(
                 t!("Units"),
                 unit_options,
                 unit_selected,
                 move |choice| msg(CustomPaperMsg::Units(choice.raw)),
-                Length::Fixed(140.0),
+                Length::Fixed(150.0),
             ),
             row![
-                text(t!("Printable margins")).size(11).style(muted_style).width(form::LABEL_WIDTH),
-                margin_field(MarginSide::Left, 0, "L"),
-                margin_field(MarginSide::Bottom, 1, "B"),
-                margin_field(MarginSide::Right, 2, "R"),
-                margin_field(MarginSide::Top, 3, "T"),
-                unit_hint,
+                dimension(t!("Width"), &draft.width, CustomPaperMsg::Width),
+                dimension(t!("Height"), &draft.height, CustomPaperMsg::Height),
+                text(unit).size(11).style(muted_style),
             ]
-            .spacing(6)
+            .spacing(14)
             .align_y(iced::Center),
+            text(format!("{} ({unit})", t!("Printable margins")))
+                .size(11)
+                .style(muted_style),
+            row![
+                margin(t!("Left"), MarginSide::Left, 0),
+                margin(t!("Right"), MarginSide::Right, 2),
+            ]
+            .spacing(14),
+            row![
+                margin(t!("Top"), MarginSide::Top, 3),
+                margin(t!("Bottom"), MarginSide::Bottom, 1),
+            ]
+            .spacing(14),
             error,
             row![
                 Space::new().width(Length::Fill),
@@ -897,7 +1052,11 @@ pub fn view_window(
     } else {
         Space::new().height(0).into()
     };
-    let mut output_row = row![
+    // Heading and picker share one line — the section has nothing else to
+    // announce — and the picker takes the whole row so a long queue name
+    // stays readable; the driver's Properties… button sits beneath it.
+    let output_field = row![
+        text(t!("Printer / plotter")).size(11).style(muted_style).width(form::LABEL_WIDTH),
         iced::widget::pick_list(printer_sel, printer_opts, |value| value.to_string())
             .on_select(|choice| Message::PlotDlg(PlotDlgMsg::Printer(choice.raw)))
             .text_size(12)
@@ -905,66 +1064,69 @@ pub fn view_window(
             .width(Length::Fill),
     ]
     .spacing(8)
-    .align_y(iced::Center);
-    if !s.to_file {
-        output_row = output_row.push(
+    .align_y(iced::Center)
+    .width(Length::Fill);
+    let printer_controls: Element<'_, Message> = if s.to_file {
+        Space::new().height(0).into()
+    } else {
+        row![
+            field_row(t!("Copies"), &s.copies, PlotDlgMsg::Copies, 60),
+            Space::new().width(Length::Fill),
             button(text(t!("Properties…")).size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::PrinterProperties))
                 .style(btn(false))
-                .padding([4, 8]),
-        );
-    }
-    let output_field = column![
-        text(t!("Output")).size(11).style(muted_style),
-        output_row,
-    ]
-    .spacing(4)
-    .width(Length::Fill);
-    let copies_row: Element<'_, Message> = if s.to_file {
-        Space::new().height(0).into()
-    } else {
-        field_row(t!("Copies"), &s.copies, PlotDlgMsg::Copies, 60)
-    };
-    let printer_panel = panel(
-        column![
-            section_label(t!("Printer / plotter")),
-            output_field,
-            copies_row,
+                .padding([4, 10]),
         ]
-        .spacing(7),
-    );
+        .align_y(iced::Center)
+        .into()
+    };
+    // A printer with remembered driver choices says so under its row; the
+    // editor itself unfolds there when Properties… is pressed.
+    let printer_note: Element<'_, Message> = match (&s.printer_editor, &s.printer) {
+        (Some(draft), _) => printer_options_editor(draft, width),
+        (None, Some(printer)) if s.driver_options.get(printer).is_some_and(|o| !o.is_empty()) => {
+            let count = s.driver_options[printer].len();
+            text(crate::tf!("{count} driver option(s) set for this printer."))
+                .size(10)
+                .style(muted_style)
+                .into()
+        }
+        _ => Space::new().height(0).into(),
+    };
+    let printer_panel = panel(column![output_field, printer_controls, printer_note].spacing(7));
 
     // ── Paper, area, offset, scale ────────────────────────────────────────
-    // Size row with the custom-sheet controls; the editor unfolds below it.
-    let mut size_row = row![
-        drop_row(t!("Size"), paper_opts, Some(paper_sel), PlotDlgMsg::Paper, Length::Fill),
-    ]
-    .spacing(6)
-    .align_y(iced::Center);
-    if s.custom_editor.is_none() {
-        size_row = size_row.push(
-            button(text(t!("Custom…")).size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::CustomPaper(CustomPaperMsg::Open)))
-                .style(btn(false))
-                .padding([4, 8]),
-        );
-        if selected_is_custom {
-            size_row = size_row.push(
-                button(text(t!("Remove")).size(11))
-                    .on_press(Message::PlotDlg(PlotDlgMsg::CustomPaper(CustomPaperMsg::Remove)))
-                    .style(btn(false))
-                    .padding([4, 8]),
-            );
-        }
-    }
-    let custom_editor: Element<'_, Message> = match &s.custom_editor {
+    // The picker takes the whole row so long media names stay readable; the
+    // custom-sheet buttons sit right-aligned beneath it, and the editor
+    // unfolds in their place.
+    let size_row = drop_row(t!("Paper size"), paper_opts, Some(paper_sel), PlotDlgMsg::Paper, Length::Fill);
+    let custom_controls: Element<'_, Message> = match &s.custom_editor {
         Some(draft) => custom_paper_editor(draft, width),
-        None => Space::new().height(0).into(),
+        None => {
+            let mut buttons = row![Space::new().width(Length::Fill)].spacing(6);
+            if selected_is_custom {
+                buttons = buttons.push(
+                    button(text(t!("Remove")).size(11))
+                        .on_press(Message::PlotDlg(PlotDlgMsg::CustomPaper(CustomPaperMsg::Remove)))
+                        .style(btn(false))
+                        .padding([4, 10]),
+                );
+            }
+            buttons
+                .push(
+                    button(text(t!("Custom…")).size(11))
+                        .on_press(Message::PlotDlg(PlotDlgMsg::CustomPaper(CustomPaperMsg::Open)))
+                        .style(btn(false))
+                        .padding([4, 10]),
+                )
+                .into()
+        }
     };
+    // Like the printer row: the section is its one picker, so heading and
+    // control share a line.
     let paper_panel = panel(column![
-        section_label(t!("Paper")),
         size_row,
-        custom_editor,
+        custom_controls,
         paper_source_note,
         paper_note,
     ].spacing(7));

@@ -47,6 +47,12 @@ pub struct PrintOptions {
     /// setting wins, so the field is legitimately unread there.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub quality: Option<String>,
+    /// Driver options chosen in the printer-properties editor, as CUPS
+    /// `key=value` pairs (`ColorModel=Gray`, `MediaType=Photographic`). Read
+    /// on the CUPS path (`lp -o`); Windows keeps such choices in the
+    /// printer's own preferences instead.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub driver_options: Vec<(String, String)>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -238,13 +244,16 @@ fn printer_properties_command(printer: Option<&str>) -> (&'static str, Vec<Strin
         .map(str::trim)
         .filter(|name| !name.is_empty());
 
+    // `/e` opens the driver's *printing preferences* (paper, tray, duplex,
+    // quality — what a print job honours), not the device's admin properties
+    // sheet that `/p` shows.
     #[cfg(target_os = "windows")]
     let command = match named {
         Some(name) => (
             "rundll32.exe",
             vec![
                 "printui.dll,PrintUIEntry".to_string(),
-                "/p".to_string(),
+                "/e".to_string(),
                 "/n".to_string(),
                 name.to_string(),
             ],
@@ -263,6 +272,7 @@ fn printer_properties_command(printer: Option<&str>) -> (&'static str, Vec<Strin
 
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     let command = {
+        // Reached only outside Linux; Linux opens the desktop's own panel.
         let target = named
             .map(|name| format!("http://localhost:631/printers/{name}"))
             .unwrap_or_else(|| "http://localhost:631/printers".to_string());
@@ -275,6 +285,11 @@ fn printer_properties_command(printer: Option<&str>) -> (&'static str, Vec<Strin
 /// Open the operating system's printer configuration surface.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_printer_properties(printer: Option<&str>) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        return open_desktop_printer_settings(printer);
+    }
+    #[allow(unreachable_code)]
     let (program, args) = printer_properties_command(printer);
     std::process::Command::new(program)
         .args(args)
@@ -406,6 +421,10 @@ fn dispatch_to_printer_opts(
             };
             cmd.arg("-o").arg(format!("print-quality={pq}"));
         }
+        // The driver's own options, exactly as the PPD names them.
+        for (key, value) in &opts.driver_options {
+            cmd.arg("-o").arg(format!("{key}={value}"));
+        }
         let lp_result = cmd
             .arg("--")
             .arg(path_str.as_ref())
@@ -521,5 +540,290 @@ mod printer_properties_tests {
             printer_properties_command(Some("   ")),
             printer_properties_command(None),
         );
+    }
+}
+
+// ── Driver options (CUPS PPD) ─────────────────────────────────────────────
+
+/// One option a CUPS printer's driver exposes, as `lpoptions -l` lists it:
+/// the PPD keyword, its description, the choices, and the current default.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrinterOption {
+    /// PPD keyword, e.g. `MediaType`, passed back verbatim as `-o key=value`.
+    pub key: String,
+    /// The driver's description, e.g. `Media Type`.
+    pub label: String,
+    /// Keyword of the currently selected choice.
+    pub default: String,
+    pub choices: Vec<PrinterChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrinterChoice {
+    /// PPD choice keyword, e.g. `PhotographicHighGloss`.
+    pub keyword: String,
+    /// Readable form of the keyword, e.g. `Photographic High Gloss`.
+    pub label: String,
+}
+
+impl PrinterOption {
+    pub fn label_for(&self, keyword: &str) -> String {
+        self.choices
+            .iter()
+            .find(|choice| choice.keyword == keyword)
+            .map(|choice| choice.label.clone())
+            .unwrap_or_else(|| humanize_keyword(keyword))
+    }
+}
+
+/// Ask CUPS for the options of `printer` (blocking, one `lpoptions` spawn).
+/// The sheet (`PageSize`) is left out: the plot dialog chooses it.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+pub fn printer_options(printer: &str) -> Result<Vec<PrinterOption>, String> {
+    let output = std::process::Command::new("lpoptions")
+        .args(["-p", printer, "-l"])
+        .output()
+        .map_err(|error| format!("lpoptions: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(parse_lpoptions(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Windows drivers keep their options behind `DocumentProperties`; there is
+/// no list to show in-line.
+#[cfg(any(target_arch = "wasm32", target_os = "windows"))]
+pub fn printer_options(_printer: &str) -> Result<Vec<PrinterOption>, String> {
+    Ok(Vec::new())
+}
+
+/// Parse `lpoptions -l` output: one option per line as
+/// `Key/Description: choice *default choice …`, the asterisk marking the
+/// current default. Numeric-range options print the same way and are kept.
+pub fn parse_lpoptions(text: &str) -> Vec<PrinterOption> {
+    let mut options = Vec::new();
+    for line in text.lines() {
+        let Some((head, tail)) = line.split_once(':') else {
+            continue;
+        };
+        let (key, label) = head
+            .split_once('/')
+            .map(|(key, label)| (key.trim(), label.trim()))
+            .unwrap_or((head.trim(), head.trim()));
+        if key.is_empty() || key.eq_ignore_ascii_case("PageSize") {
+            continue;
+        }
+        let mut default = String::new();
+        let choices: Vec<PrinterChoice> = tail
+            .split_whitespace()
+            .map(|token| {
+                let (keyword, is_default) = match token.strip_prefix('*') {
+                    Some(keyword) => (keyword, true),
+                    None => (token, false),
+                };
+                if is_default {
+                    default = keyword.to_string();
+                }
+                PrinterChoice {
+                    keyword: keyword.to_string(),
+                    label: humanize_keyword(keyword),
+                }
+            })
+            .collect();
+        if choices.is_empty() {
+            continue;
+        }
+        if default.is_empty() {
+            default = choices[0].keyword.clone();
+        }
+        options.push(PrinterOption {
+            key: key.to_string(),
+            label: if label.is_empty() { key.to_string() } else { label.to_string() },
+            default,
+            choices,
+        });
+    }
+    options
+}
+
+/// `PhotographicHighGloss` → `Photographic High Gloss`, `DuplexNoTumble` →
+/// `Duplex No Tumble`; keywords that are already words or numbers pass
+/// through. Consecutive capitals (`RGB`, `A4`) stay together.
+pub fn humanize_keyword(keyword: &str) -> String {
+    let mut out = String::with_capacity(keyword.len() + 4);
+    let chars: Vec<char> = keyword.chars().collect();
+    for (index, &ch) in chars.iter().enumerate() {
+        if index > 0 && ch.is_ascii_uppercase() {
+            let previous = chars[index - 1];
+            let next_lower = chars.get(index + 1).is_some_and(|c| c.is_ascii_lowercase());
+            if previous.is_ascii_lowercase() || (previous.is_ascii_uppercase() && next_lower) {
+                out.push(' ');
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The desktop environment's printer settings panel — where the driver
+/// options cannot be listed (no CUPS) the user still gets somewhere useful.
+/// Tries the panel of the running desktop first, then the
+/// distribution-neutral tools, and only then the CUPS web interface.
+#[cfg(target_os = "linux")]
+pub fn open_desktop_printer_settings(printer: Option<&str>) -> Result<(), String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut candidates: Vec<(&str, Vec<String>)> = Vec::new();
+    if desktop.contains("gnome") || desktop.contains("ubuntu") || desktop.contains("cinnamon") {
+        candidates.push(("gnome-control-center", vec!["printers".into()]));
+    }
+    if desktop.contains("kde") || desktop.contains("plasma") {
+        candidates.push(("kcmshell6", vec!["kcm_printer_manager".into()]));
+        candidates.push(("kcmshell5", vec!["kcm_printer_manager".into()]));
+    }
+    candidates.push(("system-config-printer", Vec::new()));
+    candidates.push(("gnome-control-center", vec!["printers".into()]));
+    for (program, args) in candidates {
+        if std::process::Command::new(program)
+            .args(&args)
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    let target = printer
+        .map(|name| format!("http://localhost:631/printers/{name}"))
+        .unwrap_or_else(|| "http://localhost:631/printers".to_string());
+    std::process::Command::new("xdg-open")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open printer settings: {error}"))
+}
+
+/// Show the driver's own document-properties sheet for `printer`, owned by
+/// the window `owner` (an `HWND`, 0 for none), and on OK store the result as
+/// the user's printing preferences for that printer — which is what the
+/// print job then honours. Returns `Ok(false)` when the user cancelled.
+#[cfg(target_os = "windows")]
+pub fn edit_printer_preferences(printer: &str, owner: isize) -> Result<bool, String> {
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Graphics::Gdi::DEVMODEW;
+    use windows_sys::Win32::Graphics::Printing::{
+        ClosePrinter, DocumentPropertiesW, OpenPrinterW, SetPrinterW, PRINTER_INFO_9W,
+    };
+    // winspool.h: DM_OUT_BUFFER = DM_COPY, DM_IN_PROMPT = DM_PROMPT,
+    // DM_IN_BUFFER = DM_MODIFY.
+    const DM_OUT_BUFFER: u32 = 2;
+    const DM_IN_PROMPT: u32 = 4;
+    const DM_IN_BUFFER: u32 = 8;
+    const IDOK: i32 = 1;
+
+    let name: Vec<u16> = printer.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut handle: HANDLE = std::ptr::null_mut();
+    // SAFETY: `name` is NUL-terminated and outlives the call; a null default
+    // asks for PRINTER_ACCESS_USE, enough for per-user preferences.
+    if unsafe { OpenPrinterW(name.as_ptr(), &mut handle, std::ptr::null()) } == 0 {
+        return Err(format!("Could not open printer \"{printer}\""));
+    }
+    let owner = owner as windows_sys::Win32::Foundation::HWND;
+    let outcome = (|| {
+        // SAFETY: with null buffers the call only reports the DEVMODE size.
+        let size = unsafe {
+            DocumentPropertiesW(owner, handle, name.as_ptr(), std::ptr::null_mut(), std::ptr::null(), 0)
+        };
+        if size <= 0 {
+            return Err(format!("Printer \"{printer}\" reports no document properties"));
+        }
+        // DEVMODEW is u16-aligned; a u16 buffer keeps the cast sound.
+        let words = (size as usize).div_ceil(2);
+        let mut current = vec![0u16; words];
+        let mut edited = vec![0u16; words];
+        // SAFETY: both buffers hold `size` bytes as the driver requested.
+        let fetched = unsafe {
+            DocumentPropertiesW(
+                owner,
+                handle,
+                name.as_ptr(),
+                current.as_mut_ptr().cast::<DEVMODEW>(),
+                std::ptr::null(),
+                DM_OUT_BUFFER,
+            )
+        };
+        if fetched < 0 {
+            return Err(format!("Could not read the preferences of \"{printer}\""));
+        }
+        edited.copy_from_slice(&current);
+        // SAFETY: as above; DM_IN_PROMPT runs the driver's modal sheet.
+        let response = unsafe {
+            DocumentPropertiesW(
+                owner,
+                handle,
+                name.as_ptr(),
+                edited.as_mut_ptr().cast::<DEVMODEW>(),
+                current.as_ptr().cast::<DEVMODEW>(),
+                DM_IN_BUFFER | DM_IN_PROMPT | DM_OUT_BUFFER,
+            )
+        };
+        if response != IDOK {
+            return Ok(false);
+        }
+        let info = PRINTER_INFO_9W {
+            pDevMode: edited.as_mut_ptr().cast::<DEVMODEW>(),
+        };
+        // SAFETY: level 9 takes a PRINTER_INFO_9W; the DEVMODE outlives the call.
+        if unsafe { SetPrinterW(handle, 9, (&info as *const PRINTER_INFO_9W).cast::<u8>(), 0) } == 0 {
+            return Err(format!("Could not save the preferences of \"{printer}\""));
+        }
+        Ok(true)
+    })();
+    // SAFETY: `handle` came from OpenPrinterW above.
+    unsafe { ClosePrinter(handle) };
+    outcome
+}
+
+#[cfg(test)]
+mod driver_option_tests {
+    use super::*;
+
+    const LPOPTIONS: &str = "PageSize/Media Size: 101.6x180.6mm *A4 A4.Borderless A5\n\
+MediaType/Media Type: *Stationery PhotographicHighGloss Photographic Envelope\n\
+ColorModel/Print Color Mode: *RGB Gray AutoGray ProcessGray\n\
+Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble\n\
+cupsPrintQuality/Print Quality: *Normal High\n\
+print-scaling/Print Scaling: auto auto-fit fill *fit none\n\
+Broken line without colon\n";
+
+    #[test]
+    fn lpoptions_output_becomes_options_with_defaults() {
+        let options = parse_lpoptions(LPOPTIONS);
+        let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        // PageSize is the plot dialog's business; everything else is listed.
+        assert_eq!(
+            keys,
+            ["MediaType", "ColorModel", "Duplex", "cupsPrintQuality", "print-scaling"]
+        );
+        let media = &options[0];
+        assert_eq!(media.label, "Media Type");
+        assert_eq!(media.default, "Stationery");
+        assert_eq!(media.choices[1].keyword, "PhotographicHighGloss");
+        assert_eq!(media.choices[1].label, "Photographic High Gloss");
+        assert_eq!(media.label_for("Envelope"), "Envelope");
+        let scaling = &options[4];
+        assert_eq!(scaling.default, "fit");
+        assert_eq!(scaling.choices.len(), 5);
+    }
+
+    #[test]
+    fn keywords_read_as_words() {
+        assert_eq!(humanize_keyword("DuplexNoTumble"), "Duplex No Tumble");
+        assert_eq!(humanize_keyword("RGB"), "RGB");
+        assert_eq!(humanize_keyword("AutoGray"), "Auto Gray");
+        assert_eq!(humanize_keyword("ProcessGray"), "Process Gray");
+        assert_eq!(humanize_keyword("auto-fit"), "auto-fit");
+        assert_eq!(humanize_keyword("PhotographicSemiGloss"), "Photographic Semi Gloss");
+        assert_eq!(humanize_keyword("A4"), "A4");
     }
 }

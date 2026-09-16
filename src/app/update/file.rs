@@ -3935,6 +3935,85 @@ impl OpenCADStudio {
         }
     }
 
+    /// Properties… for the selected printer.
+    ///
+    /// On CUPS platforms (Linux, macOS) the driver's options are listed in an
+    /// in-line editor and applied to every job for that printer through
+    /// `lp -o`. On Windows the driver's own document-properties sheet is
+    /// shown and its result stored as the printer's preferences, which the
+    /// print job honours. Without a named printer, or where the options
+    /// cannot be listed, the platform's printer settings open instead.
+    fn on_printer_properties(&mut self) -> Task<Message> {
+        let Some(printer) = self.plot_dialog.printer.clone().filter(|_| !self.plot_dialog.to_file)
+        else {
+            self.open_printer_settings_fallback();
+            return Task::none();
+        };
+        #[cfg(target_os = "windows")]
+        {
+            return self.edit_windows_printer_preferences(printer);
+        }
+        #[allow(unreachable_code)]
+        {
+            self.plot_dialog.printer_editor = Some(crate::ui::window::plot::PrinterOptionsDraft {
+                printer: printer.clone(),
+                options: None,
+                choices: Default::default(),
+                error: None,
+            });
+            let name = printer.clone();
+            background_task(
+                move || crate::io::print_to_printer::printer_options(&printer),
+                move |result| {
+                    Message::PlotDlg(crate::ui::window::plot::PlotDlgMsg::PrinterOptionsLoaded(
+                        name, result,
+                    ))
+                },
+            )
+        }
+    }
+
+    /// The driver's document-properties sheet, owned by the main window so
+    /// it sits on top of the plot dialog.
+    #[cfg(target_os = "windows")]
+    fn edit_windows_printer_preferences(&mut self, printer: String) -> Task<Message> {
+        let Some(window) = self.main_window else {
+            self.open_printer_settings_fallback();
+            return Task::none();
+        };
+        iced::window::run(window, move |w| {
+            use iced::window::raw_window_handle::RawWindowHandle;
+            let owner = match w.window_handle().ok().map(|h| h.as_raw()) {
+                Some(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
+                _ => 0,
+            };
+            match crate::io::print_to_printer::edit_printer_preferences(&printer, owner) {
+                Ok(true) => Ok(crate::tf!("Printing preferences saved for {printer}.").into_owned()),
+                Ok(false) => Ok(crate::t!("Printing preferences unchanged.").into_owned()),
+                Err(error) => Err(error),
+            }
+        })
+        .then(|result| {
+            Task::done(Message::BackgroundIoFinished(
+                result.map(|message| message),
+                false,
+            ))
+        })
+    }
+
+    /// The platform's printer settings surface: a settings panel on Linux,
+    /// the printers control panel on Windows, System Settings on macOS.
+    fn open_printer_settings_fallback(&mut self) {
+        match crate::io::print_to_printer::open_printer_properties(
+            self.plot_dialog.printer.as_deref(),
+        ) {
+            Ok(()) => self
+                .command_line
+                .push_info(crate::t!("Opened printer properties.").as_ref()),
+            Err(error) => self.command_line.push_error(&error),
+        }
+    }
+
     fn normalize_common_plot_dialog(&mut self) {
         self.plot_dialog.center = true;
         self.plot_dialog.offset_x = "0.0".into();
@@ -3957,6 +4036,9 @@ impl OpenCADStudio {
                 Task::none()
             }
             M::Printer(s) => {
+                // Driver choices belong to a printer; the editor closes when
+                // the target changes.
+                self.plot_dialog.printer_editor = None;
                 if s == OUT_PDF {
                     self.plot_dialog.to_file = true;
                 } else if s == OUT_DEFAULT {
@@ -3979,15 +4061,71 @@ impl OpenCADStudio {
                 self.on_custom_paper_msg(msg);
                 Task::none()
             }
-            M::PrinterProperties => {
-                match crate::io::print_to_printer::open_printer_properties(
-                    self.plot_dialog.printer.as_deref(),
-                ) {
-                    Ok(()) => self
-                        .command_line
-                        .push_info(crate::t!("Opened printer properties.").as_ref()),
-                    Err(error) => self.command_line.push_error(&error),
+            M::PrinterProperties => self.on_printer_properties(),
+            M::PrinterOptionsLoaded(printer, result) => {
+                if let Some(draft) = self.plot_dialog.printer_editor.as_mut() {
+                    if draft.printer == printer {
+                        match result {
+                            Ok(options) => {
+                                // Start from the remembered choices, then the
+                                // driver's defaults.
+                                let remembered = self
+                                    .plot_dialog
+                                    .driver_options
+                                    .get(&printer)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let draft = self.plot_dialog.printer_editor.as_mut().unwrap();
+                                draft.choices = options
+                                    .iter()
+                                    .map(|option| {
+                                        let choice = remembered
+                                            .get(&option.key)
+                                            .filter(|c| option.choices.iter().any(|x| &x.keyword == *c))
+                                            .cloned()
+                                            .unwrap_or_else(|| option.default.clone());
+                                        (option.key.clone(), choice)
+                                    })
+                                    .collect();
+                                draft.options = Some(options);
+                            }
+                            Err(error) => draft.error = Some(error),
+                        }
+                    }
                 }
+                Task::none()
+            }
+            M::PrinterOptionSet(key, choice) => {
+                if let Some(draft) = self.plot_dialog.printer_editor.as_mut() {
+                    draft.choices.insert(key, choice);
+                }
+                Task::none()
+            }
+            M::PrinterOptionsReset => {
+                if let Some(draft) = self.plot_dialog.printer_editor.as_mut() {
+                    if let Some(options) = &draft.options {
+                        draft.choices = options
+                            .iter()
+                            .map(|option| (option.key.clone(), option.default.clone()))
+                            .collect();
+                    }
+                }
+                Task::none()
+            }
+            M::PrinterOptionsApply => {
+                if let Some(draft) = self.plot_dialog.printer_editor.take() {
+                    let overrides = draft.overrides();
+                    if overrides.is_empty() {
+                        self.plot_dialog.driver_options.remove(&draft.printer);
+                    } else {
+                        self.plot_dialog.driver_options.insert(draft.printer.clone(), overrides);
+                    }
+                    self.save_config();
+                }
+                Task::none()
+            }
+            M::PrinterOptionsCancel => {
+                self.plot_dialog.printer_editor = None;
                 Task::none()
             }
             M::Paper(s) => {
@@ -4720,6 +4858,12 @@ impl OpenCADStudio {
             printer: d.printer.clone(),
             copies: d.copies.trim().parse::<u32>().unwrap_or(1).max(1),
             quality: Some(d.quality.clone()),
+            driver_options: d
+                .printer
+                .as_ref()
+                .and_then(|printer| d.driver_options.get(printer))
+                .map(|options| options.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -5218,6 +5362,73 @@ mod plot_paper_tests {
         assert!(app.plot_dialog.custom_editor.as_ref().unwrap().error.is_none());
         let _ = app.on_plot_dlg(PlotDlgMsg::CustomPaper(C::Cancel));
         assert!(app.plot_dialog.custom_editor.is_none());
+    }
+
+    #[test]
+    fn driver_options_are_edited_remembered_and_sent_with_the_job() {
+        use crate::io::print_to_printer::parse_lpoptions;
+        const LPOPTIONS: &str = "MediaType/Media Type: *Stationery Photographic\n\
+ColorModel/Print Color Mode: *RGB Gray\n\
+cupsPrintQuality/Print Quality: *Normal High\n";
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer("OCS Test Printer".into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterProperties);
+        let draft = app.plot_dialog.printer_editor.as_ref().expect("editor opens");
+        assert_eq!(draft.printer, "OCS Test Printer");
+        assert!(draft.options.is_none(), "options load in the background");
+        // An answer for another printer is ignored; the right one fills the editor.
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsLoaded(
+            "Other".into(),
+            Ok(parse_lpoptions(LPOPTIONS)),
+        ));
+        assert!(app.plot_dialog.printer_editor.as_ref().unwrap().options.is_none());
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsLoaded(
+            "OCS Test Printer".into(),
+            Ok(parse_lpoptions(LPOPTIONS)),
+        ));
+        let draft = app.plot_dialog.printer_editor.as_ref().unwrap();
+        assert_eq!(draft.options.as_ref().map(|o| o.len()), Some(3));
+        assert_eq!(draft.choices["ColorModel"], "RGB");
+        assert!(draft.overrides().is_empty(), "defaults are not overrides");
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionSet("ColorModel".into(), "Gray".into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionSet("cupsPrintQuality".into(), "High".into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsApply);
+        assert!(app.plot_dialog.printer_editor.is_none(), "Apply closes the editor");
+        let remembered = &app.plot_dialog.driver_options["OCS Test Printer"];
+        assert_eq!(remembered.len(), 2);
+        assert_eq!(remembered["ColorModel"], "Gray");
+        // The job carries exactly those overrides…
+        let opts = app.plot_print_options(&app.plot_dialog);
+        assert_eq!(
+            opts.driver_options,
+            vec![("ColorModel".to_string(), "Gray".to_string()), ("cupsPrintQuality".to_string(), "High".to_string())]
+        );
+        // …they survive in the config, and another printer gets none of them.
+        assert_eq!(app.current_config().plot.driver_options.len(), 1);
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer("Another".into()));
+        assert!(app.plot_print_options(&app.plot_dialog).driver_options.is_empty());
+        // Reopening the editor starts from the remembered choices; Reset then
+        // Apply forgets them.
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer("OCS Test Printer".into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterProperties);
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsLoaded(
+            "OCS Test Printer".into(),
+            Ok(parse_lpoptions(LPOPTIONS)),
+        ));
+        assert_eq!(app.plot_dialog.printer_editor.as_ref().unwrap().choices["ColorModel"], "Gray");
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsReset);
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsApply);
+        assert!(app.plot_dialog.driver_options.get("OCS Test Printer").is_none());
+        // A failed listing is reported inside the editor, not lost.
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterProperties);
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsLoaded(
+            "OCS Test Printer".into(),
+            Err("no cups".into()),
+        ));
+        assert_eq!(app.plot_dialog.printer_editor.as_ref().unwrap().error.as_deref(), Some("no cups"));
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterOptionsCancel);
+        assert!(app.plot_dialog.printer_editor.is_none());
     }
 
     #[test]

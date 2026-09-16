@@ -189,18 +189,25 @@ pub fn labeled_field_enabled<'a>(
     .into()
 }
 
-/// A short unlabeled text field for a compact multi-value row (`L B R T`).
-pub fn compact_field<'a>(
-    placeholder: &'a str,
+/// A `label : text field` pair with its own label width, for rows that put
+/// several small values side by side.
+pub fn labeled_field_compact<'a>(
+    label: Cow<'static, str>,
     value: &'a str,
     on_input: impl Fn(String) -> Message + 'a,
-    width: f32,
+    label_width: f32,
+    field_width: f32,
 ) -> Element<'a, Message> {
-    text_input(placeholder, value)
-        .on_input(on_input)
-        .style(field_style)
-        .size(12)
-        .padding([3, 6])
-        .width(width)
-        .into()
+    row![
+        text(label).size(11).style(muted_style).width(label_width),
+        text_input("", value)
+            .on_input(on_input)
+            .style(field_style)
+            .size(12)
+            .padding([3, 6])
+            .width(field_width),
+    ]
+    .spacing(6)
+    .align_y(iced::Center)
+    .into()
 }
