@@ -6179,8 +6179,8 @@ fn dimension_text_parts(
     // lower one and no nominal, so the tolerance slot stays empty.
     let value = match limits_text(dim, style, is_angular) {
         Some(limits) => limits,
-        None if is_angular => format_angular_value(dim.measurement(), style),
-        None => format_linear_value(dim.measurement(), style),
+        None if is_angular => format_angular_value(display_measurement(dim), style),
+        None => format_linear_value(display_measurement(dim), style),
     };
     let primary_raw = match dim {
         Dimension::Radius(_) | Dimension::LargeRadial(_) => format!("R{}", value),
@@ -6217,11 +6217,29 @@ fn dimension_text_parts(
     Some((primary, tolerance_suffix))
 }
 
+/// The value the text reports. An angular dimension whose extension point
+/// sits on its vertex has no measurable angle; AutoCAD then keeps showing the
+/// angle it stored (group 42, radians) rather than 0°, and so do we.
+fn display_measurement(dim: &Dimension) -> f64 {
+    let measured = dim.measurement();
+    let stored = dim.base().actual_measurement;
+    match dim {
+        Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)
+            if measured.abs() < 1e-9 && stored.abs() > 1e-9 =>
+        {
+            stored.to_degrees()
+        }
+        _ => measured,
+    }
+}
+
 /// DIMLIM: the upper limit stacked over the lower one, replacing the nominal.
 /// The offsets apply to the displayed number, so DIMLFAC and DIMRND come first.
 fn limits_text(dim: &Dimension, style: Option<&DimStyle>, is_angular: bool) -> Option<String> {
-    let s = style.filter(|s| s.dimlim)?;
-    let measurement = dim.measurement();
+    // With both offsets zero AutoCAD prints the plain value, not a stack of
+    // two equal numbers.
+    let s = style.filter(|s| s.dimlim && (s.dimtp.abs() > 1e-12 || s.dimtm.abs() > 1e-12))?;
+    let measurement = display_measurement(dim);
     if is_angular {
         return Some(format!(
             "\\S{}^{};",
@@ -8058,12 +8076,6 @@ mod limits_format_tests {
             dimension_text_parts(&horizontal(), Some(&s)),
             Some((r"\S10.02^9.92;".to_string(), None))
         );
-        s.dimtp = 0.0;
-        s.dimtm = 0.0;
-        assert_eq!(
-            dimension_text_parts(&horizontal(), Some(&s)),
-            Some((r"\S10^10;".to_string(), None))
-        );
     }
 
     // The offsets apply to the number the reader sees, which for a paper
@@ -8078,11 +8090,24 @@ mod limits_format_tests {
             Some((r"\S75.020^74.950;".to_string(), None))
         );
         s.dimrnd = 0.5;
+        s.dimtm = 0.0;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S75.020^75.000;".to_string(), None))
+        );
+    }
+
+    // DIMLIM with both offsets at zero is a plain value in AutoCAD, not a
+    // stack of two equal numbers.
+    #[test]
+    fn limits_without_offsets_show_the_plain_value() {
+        let mut s = style();
+        s.dimlim = true;
         s.dimtp = 0.0;
         s.dimtm = 0.0;
         assert_eq!(
             dimension_text_parts(&horizontal(), Some(&s)),
-            Some((r"\S75.000^75.000;".to_string(), None))
+            Some(("10.000".to_string(), None))
         );
     }
 
@@ -8133,6 +8158,31 @@ mod limits_format_tests {
         assert_eq!(text_cells("10.000", 0.5), 6.0);
         assert_eq!(text_cells(r"R\S1.020^0.98;", 0.5), 1.0 + 5.0 * 0.5);
         assert_eq!(text_cells(r"\S10.020^9.950; REF", 1.0), 6.0 + 4.0);
+    }
+
+    // A three-point angular dimension whose first extension point coincides
+    // with the vertex measures nothing; the stored angle keeps the text.
+    #[test]
+    fn degenerate_angular_dimension_reports_its_stored_angle() {
+        use acadrust::entities::DimensionAngular3Pt;
+        let mut d = DimensionAngular3Pt::default();
+        d.angle_vertex = Vector3::new(6.0, 4.85, 0.0);
+        d.first_point = d.angle_vertex;
+        d.second_point = Vector3::new(7.0, 4.85, 0.0);
+        d.definition_point = Vector3::new(8.0, 5.4, 0.0);
+        d.base.actual_measurement = std::f64::consts::FRAC_PI_4;
+        let dim = Dimension::Angular3Pt(d);
+        let mut s = style();
+        s.dimadec = 0;
+        assert_eq!(
+            dimension_text_parts(&dim, Some(&s)),
+            Some(("45°".to_string(), None))
+        );
+        s.dimlim = true;
+        s.dimtp = 0.1;
+        s.dimtm = 0.1;
+        let (value, _) = dimension_text_parts(&dim, Some(&s)).unwrap();
+        assert!(value.starts_with(r"\S45"), "{value}");
     }
 
     #[test]
