@@ -1417,7 +1417,8 @@ mod tests {
         doc.add_entity(acadrust::EntityType::Circle(good)).unwrap();
         let mut corrupt = acadrust::entities::Circle::new();
         corrupt.center = acadrust::types::Vector3::new(1.0, 1.0, 0.0);
-        corrupt.radius = 0.0; // io::is_entity_corrupt rejects a zero-radius circle
+        // An absurd radius is rejected; a zero radius is valid.
+        corrupt.radius = 1.0e11;
         doc.add_entity(acadrust::EntityType::Circle(corrupt))
             .unwrap();
         let bytes = crate::io::save_to_bytes(&doc, "dxf", doc.version)
