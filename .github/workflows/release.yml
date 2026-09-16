@@ -194,6 +194,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    # Step-level `if:` cannot read the `secrets` context, so the signing
+    # waterfall is driven by these boolean mirrors of the credential secrets.
+    env:
+      AZURE_SIGNING_CONFIGURED: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' }}
+      PFX_CONFIGURED: ${{ secrets.WINDOWS_PFX_BASE64 != '' }}
 
     steps:
       - name: Checkout
@@ -241,7 +246,7 @@ jobs:
       # gated on its credentials being present and the pipeline falls through:
       # Azure Trusted Signing (upstream setup) -> PFX certificate -> unsigned.
       - name: Sign executable (Azure Trusted Signing)
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' }}
+        if: env.AZURE_SIGNING_CONFIGURED == 'true'
         uses: azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -256,7 +261,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Import signing certificate (PFX fallback)
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME == '' && secrets.WINDOWS_PFX_BASE64 != '' }}
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED == 'true'
         shell: pwsh
         env:
           WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
@@ -266,7 +271,7 @@ jobs:
           "Imported signing certificate to $pfxPath"
 
       - name: Sign executable (certificate)
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME == '' && secrets.WINDOWS_PFX_BASE64 != '' }}
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED == 'true'
         shell: pwsh
         env:
           WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
@@ -281,7 +286,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "signtool failed for the executable" }
 
       - name: Note unsigned executable
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME == '' && secrets.WINDOWS_PFX_BASE64 == '' }}
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED != 'true'
         shell: pwsh
         run: |
           "No signing credentials configured - add the Azure Trusted Signing secrets or WINDOWS_PFX_BASE64/WINDOWS_PFX_PASSWORD to sign. Building UNSIGNED." >> $env:GITHUB_STEP_SUMMARY
@@ -320,7 +325,7 @@ jobs:
       - name: Sign MSI installer (Azure Trusted Signing)
         # The installer itself must be signed separately - light produces a
         # fresh, unsigned .msi even though the .exe inside is already signed.
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' }}
+        if: env.AZURE_SIGNING_CONFIGURED == 'true'
         uses: azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -335,7 +340,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Sign MSI installer (certificate)
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME == '' && secrets.WINDOWS_PFX_BASE64 != '' }}
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED == 'true'
         shell: pwsh
         env:
           WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
@@ -350,7 +355,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "signtool failed for the MSI" }
 
       - name: Note unsigned MSI
-        if: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME == '' && secrets.WINDOWS_PFX_BASE64 == '' }}
+        if: env.AZURE_SIGNING_CONFIGURED != 'true' && env.PFX_CONFIGURED != 'true'
         shell: pwsh
         run: |
           "MSI left unsigned - no signing credentials configured." >> $env:GITHUB_STEP_SUMMARY
