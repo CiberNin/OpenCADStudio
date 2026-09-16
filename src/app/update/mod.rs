@@ -4484,6 +4484,33 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            Message::DraftingSettingsSnapXChanged(value) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.snap_x_input = value.clone();
+                    if state.snap_equal {
+                        state.snap_y_input = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsSnapYChanged(value) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.snap_y_input = value.clone();
+                    if state.snap_equal {
+                        state.snap_x_input = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleEqualSnap => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.snap_equal = !state.snap_equal;
+                    if state.snap_equal {
+                        state.snap_y_input = state.snap_x_input.clone();
+                    }
+                }
+                Task::none()
+            }
             Message::DraftingSettingsToggleIsometric => {
                 if let Some(state) = &mut self.drafting_settings_state {
                     state.isometric = !state.isometric;
@@ -4574,17 +4601,19 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::DraftingSettingsApply => {
-                self.apply_drafting_settings();
-                self.drafting_settings_saved = self.drafting_settings_state.clone();
-                self.persist_settings_if_changed();
+                if self.apply_drafting_settings() {
+                    self.drafting_settings_saved = self.drafting_settings_state.clone();
+                    self.persist_settings_if_changed();
+                }
                 Task::none()
             }
             Message::DraftingSettingsOk => {
-                self.apply_drafting_settings();
-                self.drafting_settings_saved = self.drafting_settings_state.clone();
-                self.drafting_settings_close_confirm = false;
-                self.persist_settings_if_changed();
-                self.close_active_modal();
+                if self.apply_drafting_settings() {
+                    self.drafting_settings_saved = self.drafting_settings_state.clone();
+                    self.drafting_settings_close_confirm = false;
+                    self.persist_settings_if_changed();
+                    self.close_active_modal();
+                }
                 Task::none()
             }
             Message::DraftingSettingsClose => {

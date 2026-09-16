@@ -1928,7 +1928,9 @@ impl OpenCADStudio {
                     )
                 }
             };
-            // Sync grid-snap spacing to the adaptive spacing of the visible grid.
+            // Sync the adaptive visible-grid step. It drives display and
+            // snap-aperture tolerances — grid *snap* itself locks to the
+            // fixed SNAPUNIT X/Y spacing from the Drafting Settings dialog.
             self.snapper.grid_spacing = grid_spacing;
             // Cursor and wires are model-space; the snap result is model.
             let snap_cursor = cursor_world;

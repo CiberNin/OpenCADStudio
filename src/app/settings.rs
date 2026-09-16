@@ -434,6 +434,13 @@ pub struct UserSettings {
         deserialize_with = "deserialize_commandline_fade_ms"
     )]
     pub commandline_fade_ms: i32,
+    /// SNAPUNIT X/Y spacing used by grid snap. 10 matches the Drafting
+    /// Settings dialog defaults; older configs without these keys fall
+    /// back via `default_snap_spacing`.
+    #[serde(default = "default_snap_spacing")]
+    pub snap_spacing_x: f32,
+    #[serde(default = "default_snap_spacing")]
+    pub snap_spacing_y: f32,
     /// Most-recently-inserted block names, most recent first, capped to 20.
     /// Used to rank INSERT suggestions without touching the drawing file.
     #[serde(default)]
@@ -453,6 +460,20 @@ fn default_delete_objects() -> i16 {
 
 fn default_commandline_fade_ms() -> i32 {
     3000
+}
+
+/// Default SNAPUNIT spacing shown in the Drafting Settings dialog.
+fn default_snap_spacing() -> f32 {
+    10.0
+}
+
+/// Clamp a snap spacing to the positive range the dialog accepts.
+pub fn sanitize_snap_spacing(v: f32) -> f32 {
+    if v.is_finite() && v > 0.0 && v <= 1e9 {
+        v
+    } else {
+        10.0
+    }
 }
 
 fn deserialize_commandline_fade_ms<'de, D>(de: D) -> Result<i32, D::Error>
@@ -552,6 +573,8 @@ impl Default for UserSettings {
             language: crate::i18n::Language::default(),
             cliprompt_lines: 3,
             commandline_fade_ms: 3000,
+            snap_spacing_x: 10.0,
+            snap_spacing_y: 10.0,
             block_mru: Vec::new(),
             block_freq: std::collections::HashMap::new(),
         }

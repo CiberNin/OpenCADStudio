@@ -1,7 +1,7 @@
 use crate::app::settings::IsoPlane;
 use crate::app::Message;
 use crate::snap::{SnapType, ALL_SNAP_MODES};
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, Space};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 use std::borrow::Cow;
 
@@ -28,6 +28,9 @@ pub struct DraftingSettingsState {
     // Snap and Grid
     pub snap_on: bool,
     pub grid_on: bool,
+    pub snap_x_input: String,
+    pub snap_y_input: String,
+    pub snap_equal: bool,
     pub isometric: bool,
     pub iso_plane: IsoPlane,
     pub snap_angle_deg: f32,
@@ -55,6 +58,9 @@ impl DraftingSettingsState {
     pub fn is_dirty(&self, saved: &Self) -> bool {
         self.snap_on != saved.snap_on
             || self.grid_on != saved.grid_on
+            || self.snap_x_input != saved.snap_x_input
+            || self.snap_y_input != saved.snap_y_input
+            || self.snap_equal != saved.snap_equal
             || self.isometric != saved.isometric
             || self.iso_plane != saved.iso_plane
             || (self.snap_angle_deg - saved.snap_angle_deg).abs() > 0.001
@@ -68,6 +74,25 @@ impl DraftingSettingsState {
             || self.dyn_input_on != saved.dyn_input_on
             || self.quick_props_on != saved.quick_props_on
             || self.selection_cycling_on != saved.selection_cycling_on
+    }
+}
+
+/// Format a snap spacing value for the dialog's text inputs.
+pub fn format_snap_spacing(v: f32) -> String {
+    if (v - v.round()).abs() < 1e-4 {
+        format!("{}", v.round() as i32)
+    } else {
+        format!("{v}")
+    }
+}
+
+/// Parse a snap spacing input. Spacings must be positive and finite.
+pub fn parse_snap_spacing(s: &str) -> Option<f32> {
+    let v: f32 = s.trim().parse().ok()?;
+    if v.is_finite() && v > 0.0 && v <= 1e9 {
+        Some(v)
+    } else {
+        None
     }
 }
 
@@ -187,18 +212,28 @@ pub fn view_window<'a>(
             column![
                 row![
                     text(crate::t!("Snap X spacing:")).size(11).width(120),
-                    text("10.00").size(11),
+                    text_input("10", &state.snap_x_input)
+                        .on_input(Message::DraftingSettingsSnapXChanged)
+                        .size(11)
+                        .padding([4, 7])
+                        .width(100),
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
                 row![
                     text(crate::t!("Snap Y spacing:")).size(11).width(120),
-                    text("10.00").size(11),
+                    text_input("10", &state.snap_y_input)
+                        .on_input(Message::DraftingSettingsSnapYChanged)
+                        .size(11)
+                        .padding([4, 7])
+                        .width(100),
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
                 row![
-                    checkbox(true).size(14),
+                    checkbox(state.snap_equal)
+                        .on_toggle(|_| Message::DraftingSettingsToggleEqualSnap)
+                        .size(14),
                     text(crate::t!("Equal X and Y spacing")).size(11),
                 ]
                 .spacing(6)

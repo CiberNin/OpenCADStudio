@@ -149,6 +149,11 @@ pub struct Snapper {
     pub grid_snap_on: bool,
     /// World-space grid spacing.
     pub grid_spacing: f32,
+    /// User-configurable snap spacing (SNAPUNIT X/Y). Used for grid-snap
+    /// positions; kept separate from the adaptive `grid_spacing`, which
+    /// tracks the visible grid step and drives tolerances.
+    pub snap_spacing_x: f32,
+    pub snap_spacing_y: f32,
     /// Pixel-radius snap aperture, shared by OSNAP, tracking, polar and
     /// extension so the catch distance is the same everywhere.
     pub osnap_radius_px: f32,
@@ -216,6 +221,8 @@ impl Default for Snapper {
             enabled,
             grid_snap_on: false,
             grid_spacing: 1.0,
+            snap_spacing_x: 10.0,
+            snap_spacing_y: 10.0,
             osnap_radius_px: DEFAULT_OSNAP_RADIUS_PX,
             otrack_enabled: false,
             tracking_points: Vec::new(),
@@ -1012,6 +1019,8 @@ impl Snapper {
             },
             grid_snap_on: false,
             grid_spacing: self.grid_spacing,
+            snap_spacing_x: self.snap_spacing_x,
+            snap_spacing_y: self.snap_spacing_y,
             osnap_radius_px: self.osnap_radius_px,
             otrack_enabled: false,
             tracking_points: Vec::new(),
@@ -1084,9 +1093,16 @@ impl Snapper {
         // Object snaps therefore NEVER catch grid points; only when grid snap is
         // on can a grid corner be picked. It is evaluated first and at the
         // lowest priority, so any object snap inside the aperture overrides it.
+        // Unlike object snap, grid snap LOCKS: like AutoCAD SNAP, every point
+        // rounds to the grid — it is not gated by the aperture. (Gating it
+        // would break as soon as the fixed SNAPUNIT spacing differs from the
+        // adaptive visible-grid step on screen.)
         if self.grid_snap_on {
-            let s = self.grid_spacing as f64;
-            if s.abs() > 1e-9 {
+            let sx = self.snap_spacing_x as f64;
+            let sy = self.snap_spacing_y as f64;
+            // Z has no independent spacing in the dialog; follow X.
+            let sz = sx;
+            if sx.abs() > 1e-9 && sy.abs() > 1e-9 && sz.abs() > 1e-9 {
                 // Round in the UCS grid frame, then map back to world.
                 let (ax, ay, az) = grid_axes;
                 let ax = ax.normalize_or(Vec3::X).as_dvec3();
@@ -1107,13 +1123,16 @@ impl Snapper {
                 } else {
                     (rel.dot(ax), rel.dot(ay))
                 };
-                let ux = (ux / s).round() * s;
-                let uy = (uy / s).round() * s;
-                let uz = (rel.dot(az) / s).round() * s;
+                let ux = (ux / sx).round() * sx;
+                let uy = (uy / sy).round() * sy;
+                let uz = (rel.dot(az) / sz).round() * sz;
                 let gp = origin + ax * ux + ay * uy + az * uz;
                 let screen = world_to_screen(gp, view_rot, eye, bounds);
                 let d2 = dist2(screen, cursor_screen);
-                if d2 < radius2 && in_bounds(screen) {
+                // Lock, don't magnet: any in-pane grid point stands, so the
+                // cursor jumps grid-to-grid even when the SNAPUNIT spacing
+                // is far from the adaptive visible-grid step.
+                if in_bounds(screen) {
                     best = Some(SnapResult {
                         world: gp,
                         screen,
@@ -3813,6 +3832,34 @@ mod ext_tests {
         ).expect("should snap to endpoint even with > 16 wires in aperture");
         assert_eq!(res.snap_type, SnapType::Endpoint);
         assert_eq!(res.world, DVec3::ZERO);
+    }
+
+    #[test]
+    fn grid_snap_locks_beyond_aperture_with_independent_xy() {
+        let mut s = Snapper::default();
+        s.grid_snap_on = true;
+        s.snap_enabled = false; // grid only
+        s.snap_spacing_x = 1.0;
+        s.snap_spacing_y = 0.5;
+        s.osnap_radius_px = 15.0;
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(0.0, 0.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+        let wires: Vec<WireModel> = Vec::new();
+
+        // 500 px per world unit: the cursor sits ~160 px from the nearest
+        // grid corner — far outside the 15 px aperture — yet SNAP must still
+        // lock like AutoCAD instead of magnetizing only when near a point.
+        let cursor_world = DVec3::new(0.32, 0.47, 500.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye, bounds);
+        let res = s.snap(
+            cursor_world, cursor_screen, &wires,
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("grid snap must lock even outside the aperture");
+        assert_eq!(res.snap_type, SnapType::Grid);
+        assert!((res.world.x - 0.0).abs() < 1e-9, "x rounds to 0: {:?}", res.world);
+        assert!((res.world.y - 0.5).abs() < 1e-9, "y rounds to 0.5: {:?}", res.world);
     }
 
 }

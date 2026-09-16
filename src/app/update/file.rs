@@ -443,6 +443,8 @@ impl OpenCADStudio {
             commandline_fade_ms: crate::app::settings::clamp_commandline_fade_ms(
                 self.commandline_fade_ms,
             ),
+            snap_spacing_x: self.snapper.snap_spacing_x,
+            snap_spacing_y: self.snapper.snap_spacing_y,
             block_mru: self.block_mru.clone(),
             block_freq: self.block_freq.clone(),
         }
@@ -540,6 +542,10 @@ impl OpenCADStudio {
             crate::app::settings::clamp_commandline_fade_ms(s.commandline_fade_ms);
         self.command_line
             .set_commandline_fade_ms(self.commandline_fade_ms.clamp(0, 60000) as u32);
+        self.snapper.snap_spacing_x =
+            crate::app::settings::sanitize_snap_spacing(s.snap_spacing_x);
+        self.snapper.snap_spacing_y =
+            crate::app::settings::sanitize_snap_spacing(s.snap_spacing_y);
         // Block usage: clone but cap to sane sizes (MRU 20, freq map 200)
         self.block_mru = s.block_mru.iter().take(20).cloned().collect();
         self.block_freq = s

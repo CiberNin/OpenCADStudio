@@ -3,10 +3,19 @@ use crate::ui::window::drafting_settings::{DraftingSettingsState, DraftingSettin
 
 impl DraftingSettingsState {
     pub(crate) fn from_app(app: &OpenCADStudio) -> Self {
+        let snap_x = app.snapper.snap_spacing_x;
+        let snap_y = app.snapper.snap_spacing_y;
+        // The dialog has no stored "equal" flag, so infer it: equal when
+        // X and Y match. This keeps the checkbox checked for the common
+        // case (including fresh defaults of 10/10).
+        let snap_equal = (snap_x - snap_y).abs() < 1e-6;
         Self {
             active_tab: DraftingSettingsTab::SnapAndGrid,
             snap_on: app.snapper.grid_snap(),
             grid_on: app.show_grid,
+            snap_x_input: crate::ui::window::drafting_settings::format_snap_spacing(snap_x),
+            snap_y_input: crate::ui::window::drafting_settings::format_snap_spacing(snap_y),
+            snap_equal,
             isometric: app.isometric_drafting,
             iso_plane: app.iso_plane,
             snap_angle_deg: app.snap_angle_deg,
@@ -33,24 +42,42 @@ impl OpenCADStudio {
         }
     }
 
-    pub(super) fn apply_drafting_settings(&mut self) {
-        if let Some(state) = &self.drafting_settings_state {
-            self.show_grid = state.grid_on;
-            self.snapper.grid_snap_on = state.snap_on;
-            self.isometric_drafting = state.isometric;
-            self.iso_plane = state.iso_plane;
-            self.snap_angle_deg = state.snap_angle_deg;
-            self.polar_mode = state.polar_on;
-            self.ortho_mode = state.ortho_on;
-            self.polar_increment_deg = state.polar_increment_deg;
-            self.snapper.snap_enabled = state.osnap_on;
-            self.snapper.otrack_enabled = state.otrack_on;
-            self.snapper.enabled = state.snap_modes.clone();
-            self.dyn_input = state.dyn_input_on;
-            self.quick_properties = state.quick_props_on;
-            self.selection_cycling = state.selection_cycling_on;
-            self.sync_vport_display(self.active_tab);
+    pub(super) fn apply_drafting_settings(&mut self) -> bool {
+        let Some(state) = &self.drafting_settings_state.clone() else {
+            return true;
+        };
+        let x = crate::ui::window::drafting_settings::parse_snap_spacing(&state.snap_x_input);
+        let y = crate::ui::window::drafting_settings::parse_snap_spacing(&state.snap_y_input);
+        let (Some(sx), Some(sy)) = (x, y) else {
+            self.command_line
+                .push_error(crate::t!("Snap X and Y spacings must be positive numbers.").as_ref());
+            return false;
+        };
+        // When locked, Y follows X so the two can never diverge.
+        let sy = if state.snap_equal { sx } else { sy };
+        if let Some(live) = &mut self.drafting_settings_state {
+            if live.snap_equal {
+                live.snap_y_input = live.snap_x_input.clone();
+            }
         }
+        self.show_grid = state.grid_on;
+        self.snapper.grid_snap_on = state.snap_on;
+        self.snapper.snap_spacing_x = sx;
+        self.snapper.snap_spacing_y = sy;
+        self.isometric_drafting = state.isometric;
+        self.iso_plane = state.iso_plane;
+        self.snap_angle_deg = state.snap_angle_deg;
+        self.polar_mode = state.polar_on;
+        self.ortho_mode = state.ortho_on;
+        self.polar_increment_deg = state.polar_increment_deg;
+        self.snapper.snap_enabled = state.osnap_on;
+        self.snapper.otrack_enabled = state.otrack_on;
+        self.snapper.enabled = state.snap_modes.clone();
+        self.dyn_input = state.dyn_input_on;
+        self.quick_properties = state.quick_props_on;
+        self.selection_cycling = state.selection_cycling_on;
+        self.sync_vport_display(self.active_tab);
+        true
     }
 }
 
@@ -64,6 +91,9 @@ mod tests {
             active_tab: DraftingSettingsTab::SnapAndGrid,
             snap_on: false,
             grid_on: true,
+            snap_x_input: "10".to_string(),
+            snap_y_input: "10".to_string(),
+            snap_equal: true,
             isometric: false,
             iso_plane: crate::app::settings::IsoPlane::Left,
             snap_angle_deg: 0.0,
@@ -96,6 +126,9 @@ mod tests {
             active_tab: DraftingSettingsTab::SnapAndGrid,
             snap_on: false,
             grid_on: true,
+            snap_x_input: "10".to_string(),
+            snap_y_input: "10".to_string(),
+            snap_equal: true,
             isometric: false,
             iso_plane: crate::app::settings::IsoPlane::Left,
             snap_angle_deg: 0.0,
@@ -166,5 +199,29 @@ mod tests {
         let mut modded = base.clone();
         modded.selection_cycling_on = true;
         assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.snap_x_input = "5".to_string();
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.snap_y_input = "5".to_string();
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.snap_equal = false;
+        assert!(modded.is_dirty(&base));
+    }
+
+    #[test]
+    fn test_parse_snap_spacing() {
+        use crate::ui::window::drafting_settings::{format_snap_spacing, parse_snap_spacing};
+        assert_eq!(parse_snap_spacing("10"), Some(10.0));
+        assert_eq!(parse_snap_spacing(" 2.5 "), Some(2.5));
+        assert_eq!(parse_snap_spacing("0"), None);
+        assert_eq!(parse_snap_spacing("-1"), None);
+        assert_eq!(parse_snap_spacing("abc"), None);
+        assert_eq!(parse_snap_spacing(""), None);
+        assert_eq!(format_snap_spacing(10.0), "10");
     }
 }
