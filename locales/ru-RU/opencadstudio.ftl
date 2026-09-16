@@ -5014,6 +5014,7 @@ plot =
     .export-pdf = Экспорт PDF
     .fit-to-paper = Вписать в лист
     .layout-plots-the-current-sheet-using-the-selec = Лист печатается на выбранном формате бумаги.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Слияние пересекающихся линий
     .object-lineweights = Весы для объектов
     .orientation = Ориентация

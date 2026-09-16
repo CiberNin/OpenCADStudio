@@ -5001,6 +5001,7 @@ plot =
     .export-pdf = PDF 書き出し
     .fit-to-paper = 用紙にフィット
     .layout-plots-the-current-sheet-using-the-selec = 選択した用紙サイズで現在のシートを印刷します。
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = 重複線を結合
     .object-lineweights = オブジェクトの線の太さ
     .orientation = 方向

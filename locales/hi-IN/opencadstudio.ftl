@@ -5001,6 +5001,7 @@ plot =
     .export-pdf = निर्यात PDF
     .fit-to-paper = कागज़ पर फ़िट करें
     .layout-plots-the-current-sheet-using-the-selec = लेआउट चयनित कागज़ आकार पर वर्तमान शीट प्लॉट करता है।
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = मर्ज ओवरलैपिंग लाइन
     .object-lineweights = ऑब्जेक्ट लाइनवेट
     .orientation = अभिविन्यास

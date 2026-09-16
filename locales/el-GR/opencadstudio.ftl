@@ -5013,6 +5013,7 @@ plot =
     .export-pdf = Εξαγωγή PDF
     .fit-to-paper = Προσαρμογή στο χαρτί
     .layout-plots-the-current-sheet-using-the-selec = Η επιλογή Διάταξη εκτυπώνει το τρέχον φύλλο με το επιλεγμένο μέγεθος χαρτιού.
+    .sheet-sizes-and-printable-areas-reported-by-th = Μεγέθη φύλλων και εκτυπώσιμες περιοχές όπως τα αναφέρει ο εκτυπωτής.
     .merge-overlapping-lines = Συγχώνευση επικαλυπτόμενων γραμμών
     .object-lineweights = Πάχη γραμμών αντικειμένων
     .orientation = Προσανατολισμός

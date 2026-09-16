@@ -5013,6 +5013,7 @@ plot =
     .export-pdf = Експортирай PDF
     .fit-to-paper = Побери в хартията
     .layout-plots-the-current-sheet-using-the-selec = Оформлението плотира текущия лист, използвайки избрания размер хартия.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Обедини припокриващи се линии
     .object-lineweights = Дебелини на линии на обект
     .orientation = Ориентация

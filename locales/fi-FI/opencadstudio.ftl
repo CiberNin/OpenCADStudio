@@ -5012,6 +5012,7 @@ plot =
     .export-pdf = Vie PDF
     .fit-to-paper = Sovita paperille
     .layout-plots-the-current-sheet-using-the-selec = Asettelu piirtää nykyisen arkin käyttämällä valittua paperikokoa.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Yhdistä päällekkäiset rivit
     .object-lineweights = Objektin viivan painot
     .orientation = Suuntautuminen

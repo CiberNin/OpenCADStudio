@@ -5014,6 +5014,7 @@ plot =
     .export-pdf = Export PDF
     .fit-to-paper = Fit to paper
     .layout-plots-the-current-sheet-using-the-selec = Layout plots the current sheet using the selected paper size.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Merge overlapping lines
     .object-lineweights = Object lineweights
     .orientation = Orientation

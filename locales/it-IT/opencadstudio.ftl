@@ -5012,6 +5012,7 @@ plot =
     .export-pdf = Esporta PDF
     .fit-to-paper = Adatta alla carta
     .layout-plots-the-current-sheet-using-the-selec = Layout traccia il foglio corrente utilizzando il formato carta selezionato.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Unisci linee sovrapposte
     .object-lineweights = Spessori linea degli oggetti
     .orientation = Orientamento

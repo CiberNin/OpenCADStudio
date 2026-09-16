@@ -5010,6 +5010,7 @@ plot =
     .export-pdf = Exportujte PDF
     .fit-to-paper = Přizpůsobit papíru
     .layout-plots-the-current-sheet-using-the-selec = Rozvržení vykreslí aktuální list pomocí zvolené velikosti papíru.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Sloučit překrývající se čáry
     .object-lineweights = Tloušťky čar objektů
     .orientation = Orientace

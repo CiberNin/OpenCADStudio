@@ -4953,6 +4953,7 @@ plot =
     .export-pdf = PDF'ye Aktar
     .fit-to-paper = Kağıda sığdır
     .layout-plots-the-current-sheet-using-the-selec = Yerleşim, geçerli sayfayı seçilen kağıt boyutuyla çizer.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Çakışan çizgileri birleştir
     .object-lineweights = Nesne çizgi kalınlıkları
     .orientation = Yönelim

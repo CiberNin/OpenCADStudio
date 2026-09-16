@@ -1456,6 +1456,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "Layout Print Configuration" => Some(("properties", "layout-print-configuration")),
         "Layout name cannot be empty." => Some(("common", "layout-name-cannot-be-empty")),
         "Layout plots the current sheet using the selected paper size." => Some(("plot", "layout-plots-the-current-sheet-using-the-selec")),
+        "Sheet sizes and printable areas reported by the printer." => Some(("plot", "sheet-sizes-and-printable-areas-reported-by-th")),
         "Layout renamed: '{old_name}' → '{new_name}'" => Some(("common", "layout-renamed-old-name-new-name")),
         "Layouts" => Some(("layout", "layouts")),
         "Leader" => Some(("common", "leader")),

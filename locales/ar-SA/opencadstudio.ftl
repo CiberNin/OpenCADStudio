@@ -5025,6 +5025,7 @@ plot =
     .export-pdf = تصدير PDF
     .fit-to-paper = ملاءمة للورق
     .layout-plots-the-current-sheet-using-the-selec = يطبع التخطيط الورقة الحالية باستخدام حجم الورق المحدد.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = دمج الخطوط المتداخلة
     .object-lineweights = سماكات خطوط الكائنات
     .orientation = الاتجاه

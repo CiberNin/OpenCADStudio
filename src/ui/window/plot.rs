@@ -6,6 +6,7 @@
 
 use crate::app::Message;
 use crate::io::paper_catalog::{self, PaperSize};
+use crate::io::plot_device::PrinterCapabilities;
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
     Space,
@@ -113,6 +114,10 @@ pub enum PlotDlgMsg {
     Preview,
     PrinterProperties,
     Printer(String),
+    /// A printer answered (or failed) the media query started when it was
+    /// selected; carries the printer's name so a stale answer for a printer
+    /// the user has since left is ignored.
+    PrinterMedia(String, Option<std::sync::Arc<PrinterCapabilities>>),
     Paper(String),
     Orientation(String),
     Area(String),
@@ -161,6 +166,13 @@ pub struct PlotDialogState {
     /// sentinels.
     #[serde(skip)]
     pub printers: Vec<String>,
+    /// Name of the system default printer, shown next to the default entry.
+    #[serde(skip)]
+    pub default_printer: Option<String>,
+    /// Sheets and printable areas the selected printer reported; `None`
+    /// while unknown, when the platform cannot ask, or for PDF output.
+    #[serde(skip)]
+    pub printer_media: Option<std::sync::Arc<PrinterCapabilities>>,
     /// Chosen printer name, or `None` for the system default.
     pub printer: Option<String>,
     /// Output goes to a PDF file instead of a printer.
@@ -224,6 +236,8 @@ impl Default for PlotDialogState {
     fn default() -> Self {
         Self {
             printers: Vec::new(),
+            default_printer: None,
+            printer_media: None,
             printer: None,
             to_file: false,
             paper: paper_catalog::default_paper().canonical.to_string(),
@@ -662,7 +676,17 @@ pub fn view_window(
     .spacing(4);
 
     // ── Printer / plotter ─────────────────────────────────────────────────
-    let mut printer_opts = vec![PlotChoice::localized(OUT_DEFAULT)];
+    // The default entry names the printer it resolves to, when known, so the
+    // user sees where a plot will go without leaving the dialog.
+    let default_entry = match &s.default_printer {
+        Some(name) => PlotChoice {
+            raw: OUT_DEFAULT.to_string(),
+            localized: true,
+            display: Some(format!("{} ({name})", crate::i18n::translate(OUT_DEFAULT))),
+        },
+        None => PlotChoice::localized(OUT_DEFAULT),
+    };
+    let mut printer_opts = vec![default_entry.clone()];
     printer_opts.extend(s.printers.iter().cloned().map(PlotChoice::raw));
     printer_opts.push(PlotChoice::localized(OUT_PDF));
     let printer_sel = if s.to_file {
@@ -670,21 +694,33 @@ pub fn view_window(
     } else {
         Some(match &s.printer {
             Some(printer) => PlotChoice::raw(printer.clone()),
-            None => PlotChoice::localized(OUT_DEFAULT),
+            None => default_entry,
         })
     };
-    // The picker lists the catalogue by series; a sheet that only exists in
-    // the drawing (a driver's custom size, an old config's bare name) is added
-    // at the top so the current selection is always visible and re-selectable.
+    // A printer that reported its media lists those sheets (with the
+    // printable areas it will actually honour); PDF output and printers that
+    // could not be asked list the catalogue by series. A sheet that only
+    // exists in the drawing (a driver's custom size, an old config's bare
+    // name) is added at the top so the current selection stays selectable.
     let selected_paper = paper_catalog::from_drawing(&s.paper, s.paper_width_mm, s.paper_height_mm);
-    let mut paper_opts: Vec<PlotChoice> = paper_catalog::catalog()
-        .iter()
-        .map(PlotChoice::paper)
-        .collect();
+    let printer_sheets = (!s.to_file).then_some(()).and(s.printer_media.as_deref());
+    let mut paper_opts: Vec<PlotChoice> = match printer_sheets {
+        Some(caps) => caps.media.iter().map(|media| PlotChoice::paper(&media.paper)).collect(),
+        None => paper_catalog::catalog().iter().map(PlotChoice::paper).collect(),
+    };
     let paper_sel = PlotChoice::paper(&selected_paper);
     if !paper_opts.contains(&paper_sel) {
         paper_opts.insert(0, paper_sel.clone());
     }
+    let paper_source_note: Element<'_, Message> = if printer_sheets.is_some() {
+        text(t!("Sheet sizes and printable areas reported by the printer."))
+            .size(10)
+            .style(muted_style)
+            .width(width)
+            .into()
+    } else {
+        Space::new().height(0).into()
+    };
     let paper_note: Element<'_, Message> = if s.area == "Layout" {
         text(t!("Layout plots the current sheet using the selected paper size."))
             .size(10)
@@ -735,6 +771,7 @@ pub fn view_window(
     let paper_panel = panel(column![
         section_label(t!("Paper")),
         drop_row(t!("Size"), paper_opts, Some(paper_sel), PlotDlgMsg::Paper, width),
+        paper_source_note,
         paper_note,
     ].spacing(7));
 

@@ -5012,6 +5012,7 @@ plot =
     .export-pdf = PDF exportálása
     .fit-to-paper = Papírra illeszthető
     .layout-plots-the-current-sheet-using-the-selec = Az Elrendezés az aktuális lapot a kiválasztott papírmérettel ábrázolja.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Egyesítse az átfedő vonalakat
     .object-lineweights = Objektumvonalvastagságok
     .orientation = Tájékozódás

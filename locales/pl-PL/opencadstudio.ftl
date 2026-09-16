@@ -5012,6 +5012,7 @@ plot =
     .export-pdf = Eksportuj PDF
     .fit-to-paper = Dopasuj do papieru
     .layout-plots-the-current-sheet-using-the-selec = Układ drukuje bieżący arkusz przy użyciu wybranego rozmiaru papieru.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Połącz nakładające się linie
     .object-lineweights = Szerokości linii obiektu
     .orientation = Orientacja

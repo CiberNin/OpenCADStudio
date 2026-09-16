@@ -5008,6 +5008,7 @@ plot =
     .export-pdf = 匯出 PDF
     .fit-to-paper = 布滿圖紙
     .layout-plots-the-current-sheet-using-the-selec = 配置使用所選紙張尺寸列印目前圖紙。
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = 合併重疊線
     .object-lineweights = 物件線寬
     .orientation = 方向

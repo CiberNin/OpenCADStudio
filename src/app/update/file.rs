@@ -120,6 +120,21 @@ fn plot_dialog_sheet_mm(d: &crate::ui::window::plot::PlotDialogState) -> (f64, f
     plot_dialog_paper(d).sheet_mm(plot_dialog_orientation(d))
 }
 
+/// Whether the dialog still names the sheet the stored settings carry.
+fn paper_unchanged(
+    d: &crate::ui::window::plot::PlotDialogState,
+    stored: &acadrust::objects::PlotSettings,
+) -> bool {
+    !stored.paper_size.is_empty()
+        && crate::io::paper_catalog::from_drawing(
+            &stored.paper_size,
+            stored.paper_width,
+            stored.paper_height,
+        )
+        .canonical
+            == d.paper
+}
+
 /// The media name to store for the dialog's sheet. A drawing keeps its own
 /// spelling of a sheet the user did not change — a system printer's `A4` or a
 /// plotter's custom name must not turn into the catalogue's canonical name
@@ -130,19 +145,60 @@ fn paper_name_for_settings(
     d: &crate::ui::window::plot::PlotDialogState,
     stored: &acadrust::objects::PlotSettings,
 ) -> String {
-    let unchanged = !stored.paper_size.is_empty()
-        && crate::io::paper_catalog::from_drawing(
-            &stored.paper_size,
-            stored.paper_width,
-            stored.paper_height,
-        )
-        .canonical
-            == d.paper;
-    if unchanged {
+    if paper_unchanged(d, stored) {
         stored.paper_size.clone()
     } else {
         d.paper.clone()
     }
+}
+
+/// The plot device the dialog currently targets.
+fn plot_dialog_device(d: &crate::ui::window::plot::PlotDialogState) -> crate::io::plot_device::PlotDevice {
+    use crate::io::plot_device::PlotDevice;
+    if d.to_file {
+        PlotDevice::Pdf
+    } else {
+        match &d.printer {
+            Some(name) => PlotDevice::Printer(name.clone()),
+            None => PlotDevice::None,
+        }
+    }
+}
+
+/// The plotter name to store. Same rule as the sheet: a device name AutoCAD
+/// wrote (its PDF driver, a plotter `.pc3` we plot to PDF for it) stays as it
+/// is while the dialog still points at the same kind of device; a changed
+/// device, or one of our own legacy labels, is written in AutoCAD's spelling.
+fn device_name_for_settings(
+    d: &crate::ui::window::plot::PlotDialogState,
+    stored: &acadrust::objects::PlotSettings,
+) -> String {
+    use crate::io::plot_device::PlotDevice;
+    let device = plot_dialog_device(d);
+    let (stored_device, keep_stored) = PlotDevice::from_stored_name(&stored.printer_name);
+    if keep_stored && stored_device == device {
+        stored.printer_name.clone()
+    } else {
+        device.canonical_name()
+    }
+}
+
+/// The unprintable margins to store: the drawing's own while neither the
+/// sheet nor the device changed (they came from AutoCAD's driver and we have
+/// no better source), otherwise what our device reports for the new sheet —
+/// the equivalent of AutoCAD's `PAPERUPDATE`.
+fn margins_for_settings(
+    d: &crate::ui::window::plot::PlotDialogState,
+    stored: &acadrust::objects::PlotSettings,
+) -> acadrust::objects::PaperMargin {
+    use crate::io::plot_device::PlotDevice;
+    let device = plot_dialog_device(d);
+    let (stored_device, _) = PlotDevice::from_stored_name(&stored.printer_name);
+    if paper_unchanged(d, stored) && stored_device == device {
+        return stored.margins;
+    }
+    let margins = device.margins_mm(&plot_dialog_paper(d));
+    acadrust::objects::PaperMargin::new(margins.left, margins.bottom, margins.right, margins.top)
 }
 
 fn plot_content_extents(content: &PlotContent) -> Option<(f64, f64, f64, f64)> {
@@ -2944,7 +3000,14 @@ impl OpenCADStudio {
                 .clone()
                 .or_else(|| self.tabs[i].scene.plot_settings_for(&layout_name))
                 .unwrap_or_else(|| PlotSettings::new(""));
-            ps.paper_size = paper_name_for_settings(&dialog, &ps);
+            // Names and margins are decided against the stored settings before
+            // any field is overwritten.
+            let paper_size = paper_name_for_settings(&dialog, &ps);
+            let printer_name = device_name_for_settings(&dialog, &ps);
+            let margins = margins_for_settings(&dialog, &ps);
+            ps.paper_size = paper_size;
+            ps.printer_name = printer_name;
+            ps.margins = margins;
             ps.paper_width = w;
             ps.paper_height = h;
             ps.plot_type = match plot_area {
@@ -2983,11 +3046,6 @@ impl OpenCADStudio {
                 ps.standard_scale_factor = factor;
                 ps.flags.use_standard_scale = false;
             }
-            ps.printer_name = if dialog.to_file {
-                crate::ui::window::plot::OUT_PDF.into()
-            } else {
-                dialog.printer.clone().unwrap_or_default()
-            };
             ps.current_style_sheet = dialog.style_name.clone();
             ps.flags.scale_lineweights = dialog.scale_lw;
             ps.flags.print_lineweights = dialog.lineweights;
@@ -3688,6 +3746,7 @@ impl OpenCADStudio {
         // Keep session-only choices while loading drawing fields from the layout.
         let d = &mut self.plot_dialog;
         d.printers = crate::io::print_to_printer::list_printers();
+        d.default_printer = crate::io::plot_device::default_printer_name();
         d.plot_styles = crate::io::plot_style::available_ctb_names();
         d.scales = scales;
         d.plot_views = plot_views;
@@ -3771,7 +3830,29 @@ impl OpenCADStudio {
             }
         }
         self.active_modal = Some(crate::app::ModalKind::Plot);
-        Task::none()
+        self.request_printer_media()
+    }
+
+    /// Keep the dialog's view of the selected printer's media current: use the
+    /// session cache when the printer was asked before, otherwise ask it in
+    /// the background and clear the stale answer meanwhile. PDF output and
+    /// the default printer list the catalogue instead.
+    fn request_printer_media(&mut self) -> Task<Message> {
+        let d = &mut self.plot_dialog;
+        let Some(printer) = (!d.to_file).then(|| d.printer.clone()).flatten() else {
+            d.printer_media = None;
+            return Task::none();
+        };
+        if let Some(caps) = crate::io::plot_device::cached_printer_capabilities(&printer) {
+            d.printer_media = Some(caps);
+            return Task::none();
+        }
+        d.printer_media = None;
+        let name = printer.clone();
+        background_task(
+            move || crate::io::plot_device::printer_capabilities(&printer),
+            move |caps| Message::PlotDlg(crate::ui::window::plot::PlotDlgMsg::PrinterMedia(name, caps)),
+        )
     }
 
     fn normalize_common_plot_dialog(&mut self) {
@@ -3804,6 +3885,13 @@ impl OpenCADStudio {
                 } else {
                     self.plot_dialog.to_file = false;
                     self.plot_dialog.printer = Some(s);
+                }
+                self.request_printer_media()
+            }
+            M::PrinterMedia(printer, caps) => {
+                let d = &mut self.plot_dialog;
+                if !d.to_file && d.printer.as_deref() == Some(printer.as_str()) {
+                    d.printer_media = caps;
                 }
                 Task::none()
             }
@@ -3967,7 +4055,8 @@ impl OpenCADStudio {
                     self.plot_dialog.paper_space = true;
                     self.plot_dialog.area = "Layout".into();
                 }
-                Task::none()
+                // The setup may name a different printer.
+                self.request_printer_media()
             }
             M::SetCurrent => {
                 self.apply_dialog_to_layout();
@@ -4194,7 +4283,12 @@ impl OpenCADStudio {
                 settings
             }
         };
-        ps.paper_size = paper_name_for_settings(d, &ps);
+        let paper_size = paper_name_for_settings(d, &ps);
+        let printer_name = device_name_for_settings(d, &ps);
+        let margins = margins_for_settings(d, &ps);
+        ps.paper_size = paper_size;
+        ps.printer_name = printer_name;
+        ps.margins = margins;
         ps.paper_width = w;
         ps.paper_height = h;
         ps.plot_type = match d.area.as_str() {
@@ -4242,11 +4336,6 @@ impl OpenCADStudio {
             ps.standard_scale_factor = factor;
             ps.flags.use_standard_scale = false;
         }
-        ps.printer_name = if d.to_file {
-            crate::ui::window::plot::OUT_PDF.into()
-        } else {
-            d.printer.clone().unwrap_or_default()
-        };
         ps.current_style_sheet = d.style_name.clone();
         ps.flags.scale_lineweights = d.scale_lw;
         ps.flags.print_lineweights = d.lineweights;
@@ -4402,12 +4491,19 @@ impl OpenCADStudio {
             _ => "Normal",
         }
         .into();
-        if ps.printer_name.to_ascii_lowercase().contains("pdf") {
-            d.to_file = true;
-            d.printer = None;
-        } else {
-            d.to_file = false;
-            d.printer = (!ps.printer_name.is_empty()).then(|| ps.printer_name.clone());
+        match crate::io::plot_device::PlotDevice::from_stored_name(&ps.printer_name).0 {
+            crate::io::plot_device::PlotDevice::Pdf => {
+                d.to_file = true;
+                d.printer = None;
+            }
+            crate::io::plot_device::PlotDevice::Printer(name) => {
+                d.to_file = false;
+                d.printer = Some(name);
+            }
+            crate::io::plot_device::PlotDevice::None => {
+                d.to_file = false;
+                d.printer = None;
+            }
         }
         d.style_name = style_name;
         d.apply_plot_styles = ps.flags.plot_plot_styles;
@@ -4895,6 +4991,90 @@ mod plot_paper_tests {
         assert_eq!((w, h), (420.0, 297.0));
         // The next dialog remembers the sheet the user chose.
         assert_eq!(app.plot_paper.canonical, "ISO_A3_(297.00_x_420.00_MM)");
+    }
+
+    #[test]
+    fn pdf_output_is_stored_as_the_autocad_pdf_driver() {
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer(crate::ui::window::plot::OUT_PDF.into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let ps = app.tabs[app.active_tab].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(ps.printer_name, "DWG To PDF.pc3");
+        // A changed device takes the PDF driver's printable area for the sheet.
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(5.0, 5.0, 5.0, 5.0));
+    }
+
+    #[test]
+    fn legacy_pdf_label_is_upgraded_on_save() {
+        let mut app = app_with_printer_named_sheet();
+        let i = app.active_tab;
+        let mut ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        ps.printer_name = "Save to PDF file…".into();
+        assert!(app.tabs[i].scene.set_layout_plot_settings("Layout1", &ps));
+        let _ = app.on_plot_dialog_open();
+        assert!(app.plot_dialog.to_file, "the legacy label still means PDF output");
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(ps.printer_name, "DWG To PDF.pc3");
+    }
+
+    #[test]
+    fn a_plotter_configuration_from_autocad_is_preserved_with_its_margins() {
+        let mut app = app_with_printer_named_sheet();
+        let i = app.active_tab;
+        let mut ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        ps.printer_name = "DWF6 ePlot.pc3".into();
+        ps.paper_size = "ISO_A4_(210.00_x_297.00_MM)".into();
+        ps.margins = acadrust::objects::PaperMargin::new(5.793749, 17.793753, 5.793744, 17.793747);
+        assert!(app.tabs[i].scene.set_layout_plot_settings("Layout1", &ps));
+        let _ = app.on_plot_dialog_open();
+        assert!(app.plot_dialog.to_file, "an unknown plotter plots to PDF here");
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let after = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(after.printer_name, "DWF6 ePlot.pc3");
+        assert_eq!(after.margins, ps.margins, "AutoCAD's driver margins survive an unchanged setup");
+    }
+
+    #[test]
+    fn changing_the_sheet_updates_the_printable_area() {
+        let mut app = app_with_printer_named_sheet();
+        let i = app.active_tab;
+        let mut ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        ps.printer_name = "DWG To PDF.pc3".into();
+        ps.paper_size = "ISO_A4_(210.00_x_297.00_MM)".into();
+        ps.margins = acadrust::objects::PaperMargin::new(5.0, 5.0, 5.0, 5.0);
+        assert!(app.tabs[i].scene.set_layout_plot_settings("Layout1", &ps));
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::Paper("ISO_full_bleed_A4_(210.00_x_297.00_MM)".into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(ps.paper_size, "ISO_full_bleed_A4_(210.00_x_297.00_MM)");
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(0.0, 0.0, 0.0, 0.0));
+        let _ = app.on_plot_dlg(PlotDlgMsg::Paper("ISO_A3_(297.00_x_420.00_MM)".into()));
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(5.0, 5.0, 5.0, 5.0));
+        assert_eq!((ps.paper_width, ps.paper_height), (420.0, 297.0));
+    }
+
+    #[test]
+    fn a_selected_printer_is_stored_by_name() {
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer("OCS Test Printer".into()));
+        assert!(!app.plot_dialog.to_file);
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let ps = app.tabs[app.active_tab].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(ps.printer_name, "OCS Test Printer");
+        // Reopening resolves the stored name back to the same printer.
+        let _ = app.on_plot_dialog_open();
+        assert_eq!(app.plot_dialog.printer.as_deref(), Some("OCS Test Printer"));
+        // A media answer for a printer that is no longer selected is ignored.
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer(crate::ui::window::plot::OUT_PDF.into()));
+        let caps = std::sync::Arc::new(crate::io::plot_device::PrinterCapabilities::default());
+        let _ = app.on_plot_dlg(PlotDlgMsg::PrinterMedia("OCS Test Printer".into(), Some(caps)));
+        assert!(app.plot_dialog.printer_media.is_none());
     }
 
     #[test]

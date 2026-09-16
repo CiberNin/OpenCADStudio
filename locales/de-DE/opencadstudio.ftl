@@ -5011,6 +5011,7 @@ plot =
     .export-pdf = PDF exportieren
     .fit-to-paper = An Papier anpassen
     .layout-plots-the-current-sheet-using-the-selec = Das Layout plottet das aktuelle Blatt mit dem ausgewählten Papierformat.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Zusammenführung überlappender Leitungen
     .object-lineweights = Objektliniengewichte
     .orientation = Ausrichtung

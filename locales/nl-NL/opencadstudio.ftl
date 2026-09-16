@@ -5011,6 +5011,7 @@ plot =
     .export-pdf = Exporteren PDF
     .fit-to-paper = Aan papier aanpassen
     .layout-plots-the-current-sheet-using-the-selec = De lay-out plot het huidige vel op het geselecteerde papierformaat.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = Overlaplijnen samenvoegen
     .object-lineweights = Objectlijndiktes
     .orientation = Oriëntatie

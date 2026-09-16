@@ -5012,6 +5012,7 @@ plot =
     .export-pdf = PDF 내보내기
     .fit-to-paper = 종이에 맞추기
     .layout-plots-the-current-sheet-using-the-selec = 레이아웃은 선택한 용지 크기를 사용하여 현재 시트를 플롯합니다.
+    .sheet-sizes-and-printable-areas-reported-by-th = Sheet sizes and printable areas reported by the printer.
     .merge-overlapping-lines = 겹치는 선 병합
     .object-lineweights = 객체 선가중치
     .orientation = 오리엔테이션
