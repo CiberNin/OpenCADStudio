@@ -1,0 +1,30 @@
+[plugin]
+id = "com.example.plugin-template-v2"
+name = "Plugin Template v2"
+version = "0.1.0"
+description = "Demonstrates read/write object round-trips with the host."
+author = "Your Name"
+license = "GPL-3.0-only"
+repository = "your-account/your-plugin-repo"
+
+[opencad]
+api_version = 5
+# Both filled at release-build time from the actual compiler and Cargo.lock's
+# resolved `acadrust` source — see docs/plugin-template's release.yml for the
+# exact substitution. Do not fill these in by hand. Declare acadrust_source
+# even though it's optional: the host's compatibility check only runs at all
+# if this field is present, so an omitted field is silently treated as
+# compatible rather than rejected (see plugin-architecture.md's "Build-time
+# ABI metadata"). This template ships without its own CI workflow (see
+# DESIGN.md) — copy docs/plugin-template's release.yml if you turn this into
+# a real, released plugin.
+rustc_version = "__RUSTC_VERSION__"
+acadrust_source = "__ACADRUST_SOURCE__"
+ribbon_order = 100
+command_prefixes = [
+    "COUNT_SURVEY_POINTS",
+    "ADD_SURVEY_POINT",
+    "MARK_FIRST_SURVEY_POINT",
+    "COUNT_MARKED_SURVEY_POINTS",
+]
+xdata_apps = ["SURVEYMARK"]

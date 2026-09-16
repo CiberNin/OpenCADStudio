@@ -10,6 +10,13 @@ repository = "your-account/your-plugin-repo"
 [opencad]
 api_version = 5
 rustc_version = "__RUSTC_VERSION__"
+# Both placeholders are filled by release.yml at build time (from `rustc
+# --version` and Cargo.lock's resolved `acadrust` source respectively) — do
+# not fill these in by hand. Declare acadrust_source even though it's
+# optional: the host's compatibility check only runs at all if this field is
+# present, so an omitted field is silently treated as compatible rather than
+# rejected (see plugin-architecture.md's "Build-time ABI metadata").
+acadrust_source = "__ACADRUST_SOURCE__"
 ribbon_order = 60
 command_prefixes = ["MP_"]
 xdata_apps = ["MYPLUGIN_RECORD"]
