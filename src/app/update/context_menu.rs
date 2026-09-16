@@ -5,9 +5,13 @@
 //! this module is the glue between that model and the app's messages.
 
 use crate::app::{ArrowKey, ContextMenuNav, Message, OpenCADStudio};
+use crate::command::StepInput;
+use crate::scene::pick::grip::GripEditMode;
 use crate::ui::popup::context_menu::{
-    build_context_menu, ContextMenu, GripMenuContext, MenuAction, MenuContext, SubmenuId,
+    build_context_menu, ContextMenu, GripMenuCmd, GripMenuContext, MenuAction, MenuContext,
+    SubmenuId,
 };
+use acadrust::Handle;
 use iced::Task;
 
 impl OpenCADStudio {
@@ -121,6 +125,9 @@ impl OpenCADStudio {
         }
         let focus = self.focus_cmd_input();
         let task = match action {
+            MenuAction::Enter if self.tabs[i].active_grip.is_some() => {
+                self.commit_active_grip_edit()
+            }
             MenuAction::Enter => self.update(Message::CommandFinalize),
             MenuAction::Cancel => self.update(Message::CommandEscape),
             MenuAction::Option(kw) => self.update(Message::CommandOptionPick(kw)),
@@ -299,10 +306,80 @@ impl OpenCADStudio {
         None
     }
 
-    /// Grip-mode shortcut menu actions (Stage 7).
-    pub(in crate::app) fn on_grip_context_pick(&mut self, cmd: crate::ui::popup::context_menu::GripMenuCmd) -> Task<Message> {
-        let _ = cmd;
-        Task::none()
+    /// Grip-mode shortcut menu (AutoCAD's grip menu): the grip stays hot
+    /// for Stretch / Base Point / Copy / Undo; Move / Rotate / Scale / Mirror
+    /// hand the selection to the matching command with the grip as its base
+    /// point; Exit drops the edit.
+    pub(in crate::app) fn on_grip_context_pick(&mut self, cmd: GripMenuCmd) -> Task<Message> {
+        let i = self.active_tab;
+        let Some(grip) = self.tabs[i].active_grip.clone() else {
+            return Task::none();
+        };
+        match cmd {
+            GripMenuCmd::Exit => {
+                self.cancel_active_grip_edit();
+                self.tabs[i].grip_copy = false;
+                self.tabs[i].grip_base_pending = false;
+                Task::none()
+            }
+            GripMenuCmd::Stretch => {
+                if let Some(active) = self.tabs[i].active_grip.as_mut() {
+                    active.mode = GripEditMode::Stretch;
+                    active.axis = None;
+                }
+                Task::none()
+            }
+            GripMenuCmd::Move | GripMenuCmd::Rotate | GripMenuCmd::Scale | GripMenuCmd::Mirror => {
+                let base = grip.origin_world;
+                let handles: Vec<Handle> = grip.targets.iter().map(|t| t.handle).collect();
+                self.cancel_active_grip_edit();
+                self.tabs[i].grip_copy = false;
+                self.tabs[i].grip_base_pending = false;
+                // The command edits the current selection; make sure the
+                // gripped objects are in it.
+                if self.tabs[i].scene.selected.is_empty() {
+                    self.tabs[i].scene.select_entities(&handles);
+                }
+                let name = match cmd {
+                    GripMenuCmd::Move => "MOVE",
+                    GripMenuCmd::Rotate => "ROTATE",
+                    GripMenuCmd::Scale => "SCALE",
+                    _ => "MIRROR",
+                };
+                let start = self.dispatch_command(name);
+                if self.tabs[i].active_cmd.is_none() {
+                    return start;
+                }
+                // The grip is the base point, so the command opens directly
+                // at its second prompt.
+                self.last_point = Some(base);
+                let fed = self.feed_command(StepInput::Point(base));
+                Task::batch(vec![start, fed])
+            }
+            GripMenuCmd::BasePoint => {
+                self.tabs[i].grip_base_pending = true;
+                Task::none()
+            }
+            GripMenuCmd::CopyToggle => {
+                self.tabs[i].grip_copy = !self.tabs[i].grip_copy;
+                Task::none()
+            }
+            GripMenuCmd::Undo => {
+                // Put the shapes back where the gesture started and keep the
+                // grip hot there (the Copy toggle survives).
+                let copy = self.tabs[i].grip_copy;
+                self.cancel_active_grip_edit();
+                self.tabs[i].grip_copy = copy;
+                let mut again = grip;
+                let delta = again.last_world - again.origin_world;
+                again.last_world = again.origin_world;
+                for target in &mut again.targets {
+                    target.last_world -= delta;
+                }
+                self.tabs[i].active_grip = Some(again);
+                Task::none()
+            }
+        }
     }
 }
 
@@ -596,6 +673,160 @@ mod tests {
                 .filter(|e| matches!(e, acadrust::EntityType::Line(_)))
                 .count();
             assert_eq!(lines, 0);
+        });
+    }
+
+    // ── Grip menu ─────────────────────────────────────────────────────
+
+    /// A drawing with one line, selected, its start grip hot at the origin.
+    fn grip_app() -> (OpenCADStudio, Handle) {
+        use acadrust::{entities::Line, types::Vector3, EntityType};
+        let mut app = app();
+        app.snapper.snap_enabled = false;
+        app.snapper.grid_snap_on = false;
+        app.snapper.otrack_enabled = false;
+        app.ortho_mode = false;
+        app.polar_mode = false;
+        let handle = app.tabs[0].scene.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        )));
+        app.tabs[0].scene.selected.insert(handle);
+        app.refresh_selected_grips();
+        app.tabs[0].active_grip = Some(crate::scene::pick::grip::GripEdit::single(
+            handle,
+            0,
+            false,
+            DVec3::ZERO,
+        ));
+        (app, handle)
+    }
+
+    fn move_cursor_to(app: &mut OpenCADStudio, world: DVec3) {
+        let cursor = app.tabs[0]
+            .scene
+            .camera
+            .borrow()
+            .project(world, iced::Rectangle::with_size(iced::Size::new(800.0, 600.0)))
+            .unwrap();
+        let _ = app.on_viewport_move(Point::new(cursor.x, cursor.y));
+    }
+
+    fn line_start(app: &OpenCADStudio, handle: Handle) -> (f64, f64) {
+        match app.tabs[0].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Line(l)) => (l.start.x, l.start.y),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn rmb_on_hot_grip_opens_grip_menu() {
+        with_stack(|| {
+            let (mut app, _) = grip_app();
+            right_click(&mut app);
+            assert!(menu_open(&app));
+            let acts = menu_actions(&app);
+            assert_eq!(acts[0], MenuAction::Enter);
+            assert!(acts.contains(&MenuAction::Grip(GripMenuCmd::Move)));
+            assert!(acts.contains(&MenuAction::Grip(GripMenuCmd::Exit)));
+            assert!(app.tabs[0].active_grip.is_some(), "the grip stays hot under the menu");
+        });
+    }
+
+    #[test]
+    fn grip_menu_move_dispatches_move_with_grip_base() {
+        with_stack(|| {
+            let (mut app, _) = grip_app();
+            right_click(&mut app);
+            let _ = app.update(Message::ContextMenuPick(MenuAction::Grip(GripMenuCmd::Move)));
+            assert!(!menu_open(&app));
+            assert!(app.tabs[0].active_grip.is_none());
+            assert_eq!(active(&app), Some("MOVE"));
+            let prompt = app.tabs[0].active_cmd.as_ref().map(|c| c.prompt()).unwrap_or_default();
+            assert!(!prompt.contains("base point"), "base already consumed: {prompt}");
+            assert_eq!(app.last_point, Some(DVec3::ZERO));
+        });
+    }
+
+    #[test]
+    fn grip_menu_exit_restores_original_geometry() {
+        with_stack(|| {
+            let (mut app, handle) = grip_app();
+            move_cursor_to(&mut app, DVec3::new(3.0, 4.0, 0.0));
+            let (x, y) = line_start(&app, handle);
+            assert!((x - 3.0).abs() < 1e-3 && (y - 4.0).abs() < 1e-3, "drag applied");
+            right_click(&mut app);
+            let _ = app.update(Message::ContextMenuPick(MenuAction::Grip(GripMenuCmd::Exit)));
+            assert!(app.tabs[0].active_grip.is_none());
+            let (x, y) = line_start(&app, handle);
+            assert!(x.abs() < 1e-9 && y.abs() < 1e-9, "Exit restores the original");
+        });
+    }
+
+    #[test]
+    fn grip_menu_undo_snaps_back_but_stays_hot() {
+        with_stack(|| {
+            let (mut app, handle) = grip_app();
+            move_cursor_to(&mut app, DVec3::new(3.0, 4.0, 0.0));
+            right_click(&mut app);
+            let _ = app.update(Message::ContextMenuPick(MenuAction::Grip(GripMenuCmd::Undo)));
+            let (x, y) = line_start(&app, handle);
+            assert!(x.abs() < 1e-9 && y.abs() < 1e-9);
+            let grip = app.tabs[0].active_grip.as_ref().expect("grip still hot");
+            assert_eq!(grip.last_world, grip.origin_world);
+        });
+    }
+
+    #[test]
+    fn grip_menu_copy_leaves_original_and_adds_copy() {
+        with_stack(|| {
+            let (mut app, handle) = grip_app();
+            right_click(&mut app);
+            let _ = app.update(Message::ContextMenuPick(MenuAction::Grip(GripMenuCmd::CopyToggle)));
+            assert!(app.tabs[0].grip_copy);
+            move_cursor_to(&mut app, DVec3::new(3.0, 4.0, 0.0));
+            let _ = app.update(Message::CommandFinalize);
+            let lines: Vec<(f64, f64)> = app.tabs[0]
+                .scene
+                .document
+                .entities()
+                .filter_map(|e| match e {
+                    acadrust::EntityType::Line(l) => Some((l.start.x, l.start.y)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(lines.len(), 2, "{lines:?}");
+            let (x, y) = line_start(&app, handle);
+            assert!(x.abs() < 1e-9 && y.abs() < 1e-9, "original untouched");
+            assert!(lines.iter().any(|&(x, y)| (x - 3.0).abs() < 1e-3 && (y - 4.0).abs() < 1e-3));
+            assert!(app.tabs[0].active_grip.is_some(), "grip re-armed for the next copy");
+            // One undo step removes the copy again.
+            app.undo_steps(1);
+            let count = app.tabs[0]
+                .scene
+                .document
+                .entities()
+                .filter(|e| matches!(e, acadrust::EntityType::Line(_)))
+                .count();
+            assert_eq!(count, 1);
+        });
+    }
+
+    #[test]
+    fn grip_menu_base_point_rebases_without_placing() {
+        with_stack(|| {
+            let (mut app, handle) = grip_app();
+            right_click(&mut app);
+            let _ = app.update(Message::ContextMenuPick(MenuAction::Grip(GripMenuCmd::BasePoint)));
+            assert!(app.tabs[0].grip_base_pending);
+            move_cursor_to(&mut app, DVec3::new(1.0, 1.0, 0.0));
+            let _ = app.update(Message::ViewportLeftPress);
+            let _ = app.update(Message::ViewportLeftRelease);
+            let grip = app.tabs[0].active_grip.as_ref().expect("grip still hot");
+            assert_eq!(grip.origin_world, grip.last_world);
+            assert!(!app.tabs[0].grip_base_pending);
+            let (x, y) = line_start(&app, handle);
+            assert!((x - 1.0).abs() < 1e-3 && (y - 1.0).abs() < 1e-3);
         });
     }
 }

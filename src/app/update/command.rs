@@ -942,6 +942,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 if grip_dyn_locked {
                     return self.update(Message::CommandSubmit);
                 }
+                // Enter while a grip is hot places it where it is (or keeps
+                // it hot when it has not moved) — it must not fall through to
+                // "repeat the last command", which would discard the edit.
+                if self.tabs[i].active_grip.is_some() && self.tabs[i].active_cmd.is_none() {
+                    return self.commit_active_grip_edit();
+                }
 
                 // Normal command Dynamic Input commit.
                 if let Some(task) = self.try_dyn_commit() {

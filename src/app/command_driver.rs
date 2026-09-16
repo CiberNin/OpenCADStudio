@@ -176,6 +176,9 @@ impl OpenCADStudio {
 
     pub(super) fn cancel_active_grip_edit(&mut self) -> bool {
         let i = self.active_tab;
+        // Grip-menu toggles live only as long as the gesture.
+        self.tabs[i].grip_copy = false;
+        self.tabs[i].grip_base_pending = false;
         let had_grip = self.tabs[i].active_grip.take().is_some()
             || self.grip_add_provisional.is_some()
             || !self.grip_preview_handles.is_empty()
