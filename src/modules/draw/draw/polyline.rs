@@ -437,9 +437,7 @@ impl PlineCommand {
         if !value.is_finite() {
             return None;
         }
-        let Some((a, z)) = self.last_local() else {
-            return None;
-        };
+        let (a, z) = self.last_local()?;
         match self.sub {
             Sub::WidthStart { half } => {
                 if value < 0.0 {
@@ -1296,9 +1294,9 @@ mod tests {
     fn width_option_sets_segment_widths_in_entity() {
         let mut cmd = pl(&[(0.0, 0.0)]);
         assert!(matches!(cmd.on_text_input("W"), Some(CmdResult::NeedPoint)));
-        assert!(cmd.prompt().contains("starting width"));
+        assert!(matches!(cmd.sub, Sub::WidthStart { half: false }));
         assert!(matches!(cmd.on_text_input("1"), Some(CmdResult::NeedPoint)));
-        assert!(cmd.prompt().contains("ending width"));
+        assert!(matches!(cmd.sub, Sub::WidthEnd { half: false, .. }));
         assert!(matches!(cmd.on_text_input("2"), Some(CmdResult::NeedPoint)));
         assert!(matches!(cmd.sub, Sub::None));
         let e = entity_of(cmd.on_point(DVec3::new(10.0, 0.0, 0.0)));
@@ -1314,7 +1312,7 @@ mod tests {
     fn halfwidth_doubles_value_and_enter_keeps_default() {
         let mut cmd = pl(&[(0.0, 0.0)]);
         cmd.on_text_input("H");
-        assert!(cmd.prompt().contains("half-width"));
+        assert!(matches!(cmd.sub, Sub::WidthStart { half: true }));
         cmd.on_text_input("0.5");
         // Enter at the ending prompt keeps the starting value.
         assert!(matches!(cmd.on_enter(), CmdResult::NeedPoint));
@@ -1326,7 +1324,7 @@ mod tests {
     fn length_extends_along_last_tangent() {
         let mut cmd = pl(&[(0.0, 0.0), (10.0, 0.0)]);
         cmd.on_text_input("L");
-        assert!(cmd.prompt().contains("length"));
+        assert!(matches!(cmd.sub, Sub::Length));
         let e = entity_of(cmd.on_text_input("5").expect("length consumed"));
         assert_eq!(e.vertices.len(), 3);
         assert!((e.vertices[2].location.x - 15.0).abs() < 1e-9);
@@ -1378,7 +1376,7 @@ mod tests {
         let mut cmd = pl(&[(0.0, 0.0), (10.0, 0.0)]);
         cmd.on_text_input("A");
         cmd.on_text_input("CE");
-        assert!(cmd.prompt().contains("center"));
+        assert!(matches!(cmd.sub, Sub::ArcCenter));
         cmd.on_point(DVec3::new(10.0, 5.0, 0.0));
         assert_eq!(keywords(&cmd), ["A", "L"]);
         let e = entity_of(cmd.on_point(DVec3::new(20.0, 5.0, 0.0)));

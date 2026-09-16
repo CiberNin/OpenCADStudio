@@ -743,7 +743,8 @@ mod tests {
             assert!(app.tabs[0].active_grip.is_none());
             assert_eq!(active(&app), Some("MOVE"));
             let prompt = app.tabs[0].active_cmd.as_ref().map(|c| c.prompt()).unwrap_or_default();
-            assert!(!prompt.contains("base point"), "base already consumed: {prompt}");
+            let base_prompt = crate::tr!("command-move", "base", count = 1i64);
+            assert_ne!(prompt, base_prompt, "base already consumed");
             assert_eq!(app.last_point, Some(DVec3::ZERO));
         });
     }
