@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 
 /// Unit the media is defined in. AutoCAD keeps ISO/JIS sheets in millimetres
 /// and ANSI/ARCH sheets in inches, and the unit is part of the media name.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PaperUnits {
     Millimeters,
     Inches,
@@ -107,6 +107,88 @@ pub enum Orientation {
     Landscape,
 }
 
+/// Unprintable margins of a sheet, in the order AutoCAD stores them. The unit
+/// is whatever the context says — millimetres in a drawing, the sheet's own
+/// unit in a user-defined size.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Margins {
+    pub left: f64,
+    pub bottom: f64,
+    pub right: f64,
+    pub top: f64,
+}
+
+impl Margins {
+    pub const ZERO: Margins = Margins {
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+        top: 0.0,
+    };
+
+    pub const fn uniform(value: f64) -> Self {
+        Margins {
+            left: value,
+            bottom: value,
+            right: value,
+            top: value,
+        }
+    }
+
+    /// The same margins expressed in millimetres when they were given in
+    /// `units`.
+    pub fn to_mm(self, units: PaperUnits) -> Self {
+        Margins {
+            left: units.to_mm(self.left),
+            bottom: units.to_mm(self.bottom),
+            right: units.to_mm(self.right),
+            top: units.to_mm(self.top),
+        }
+    }
+}
+
+/// A sheet the user defined, kept in the application settings the way
+/// AutoCAD keeps custom sizes in a plotter configuration: a name, the
+/// dimensions in the sheet's own unit, and the printable margins.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct CustomPaper {
+    /// Human name, e.g. `Roll 24`; becomes `Roll_24_(…)` in the media name.
+    pub name: String,
+    pub width: f64,
+    pub height: f64,
+    pub units: PaperUnits,
+    /// Unprintable margins in `units`.
+    pub margins: Margins,
+}
+
+impl Default for CustomPaper {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            width: 0.0,
+            height: 0.0,
+            units: PaperUnits::Millimeters,
+            margins: Margins::ZERO,
+        }
+    }
+}
+
+impl CustomPaper {
+    /// The catalogue sheet this definition describes.
+    pub fn paper(&self) -> PaperSize {
+        PaperSize::custom_named(&self.name, self.width, self.height, self.units)
+    }
+
+    pub fn canonical(&self) -> String {
+        self.paper().canonical.into_owned()
+    }
+
+    pub fn margins_mm(&self) -> Margins {
+        self.margins.to_mm(self.units)
+    }
+}
+
 /// One sheet of the catalogue, or a sheet reconstructed from a media name.
 #[derive(Clone, PartialEq, Debug)]
 pub struct PaperSize {
@@ -156,18 +238,43 @@ impl PaperSize {
     /// in the plot dialog (`UserDefinedMetric_(420.00_x_297.00_MM)`). The
     /// dimensions are normalised to portrait so the name stays canonical.
     pub fn custom(width: f64, height: f64, units: PaperUnits) -> Self {
+        let label = match units {
+            PaperUnits::Millimeters => "UserDefinedMetric",
+            PaperUnits::Inches => "UserDefinedInches",
+        };
+        Self::custom_named(label, width, height, units)
+    }
+
+    /// A user-defined sheet under its own name, the way a plotter
+    /// configuration's custom sizes are named (`Roll_24_(609.60_x_1500.00_MM)`).
+    /// A blank name falls back to AutoCAD's generic one; spaces become
+    /// underscores in the media name and parentheses are dropped so the name
+    /// stays parseable.
+    pub fn custom_named(name: &str, width: f64, height: f64, units: PaperUnits) -> Self {
         let (width, height) = if width <= height {
             (width, height)
         } else {
             (height, width)
         };
-        let label = match units {
-            PaperUnits::Millimeters => "UserDefinedMetric",
-            PaperUnits::Inches => "UserDefinedInches",
-        };
+        let cleaned: String = name
+            .trim()
+            .chars()
+            .filter(|c| !matches!(c, '(' | ')'))
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if cleaned.is_empty() {
+            return Self::custom(width, height, units);
+        }
         Self {
-            canonical: Cow::Owned(canonical_name(label, width, height, units)),
-            label: Cow::Borrowed(label),
+            canonical: Cow::Owned(canonical_name(
+                &cleaned.replace(' ', "_"),
+                width,
+                height,
+                units,
+            )),
+            label: Cow::Owned(cleaned),
             series: PaperSeries::Other,
             variant: PaperVariant::Standard,
             width,
@@ -686,6 +793,39 @@ mod tests {
             "UserDefinedMetric (210 × 297.5 mm)"
         );
         assert_eq!(default_paper().canonical, a4().canonical);
+    }
+
+    #[test]
+    fn user_defined_sheets_carry_their_name_and_margins() {
+        let roll = CustomPaper {
+            name: "Roll 24 (long)".into(),
+            width: 1500.0,
+            height: 609.6,
+            units: PaperUnits::Millimeters,
+            margins: Margins {
+                left: 5.0,
+                bottom: 17.0,
+                right: 6.0,
+                top: 18.0,
+            },
+        };
+        assert_eq!(roll.canonical(), "Roll_24_long_(609.60_x_1500.00_MM)");
+        assert_eq!(roll.paper().label, "Roll 24 long");
+        assert_eq!(roll.paper().display(), "Roll 24 long (609.6 × 1500 mm)");
+        // Round-trips through the parser like any AutoCAD name.
+        assert_eq!(
+            resolve(&roll.canonical()).unwrap().portrait_mm(),
+            (609.6, 1500.0)
+        );
+        let arch = CustomPaper {
+            name: String::new(),
+            width: 30.0,
+            height: 42.0,
+            units: PaperUnits::Inches,
+            margins: Margins::uniform(0.25),
+        };
+        assert_eq!(arch.canonical(), "UserDefinedInches_(30.00_x_42.00_Inches)");
+        assert_eq!(arch.margins_mm(), Margins::uniform(6.35));
     }
 
     #[test]

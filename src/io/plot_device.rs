@@ -15,7 +15,8 @@
 //! a fixed table; a CUPS printer reports its media and margins over IPP
 //! (`media-col-database`), which is queried once per printer and cached.
 
-use crate::io::paper_catalog::{self, PaperSize, PaperUnits, PaperVariant};
+pub use crate::io::paper_catalog::Margins;
+use crate::io::paper_catalog::{self, CustomPaper, PaperSize, PaperUnits, PaperVariant};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -73,51 +74,23 @@ impl PlotDevice {
     }
 
     /// Unprintable margins the device imposes on `paper`, in millimetres.
-    pub fn margins_mm(&self, paper: &PaperSize) -> Margins {
+    /// A sheet the user defined carries its own margins for every device,
+    /// the way a custom size in a plotter configuration does; a printer that
+    /// reports the same size still wins, since it knows its hardware.
+    pub fn margins_mm(&self, paper: &PaperSize, custom: &[CustomPaper]) -> Margins {
+        let user_defined = custom
+            .iter()
+            .find(|c| c.canonical() == paper.canonical)
+            .map(CustomPaper::margins_mm);
         match self {
-            PlotDevice::Pdf => pdf_margins_mm(paper),
-            PlotDevice::Printer(name) => printer_margins_mm(name, paper),
+            PlotDevice::Pdf => user_defined.unwrap_or_else(|| pdf_margins_mm(paper)),
+            PlotDevice::Printer(name) => cached_printer_capabilities(name)
+                .and_then(|caps| caps.margins_for(paper))
+                .or(user_defined)
+                .unwrap_or(Margins::ZERO),
             // No device: AutoCAD keeps the margins of the last device or its
             // defaults; without one we show the full sheet as printable.
-            PlotDevice::None => Margins::ZERO,
-        }
-    }
-}
-
-/// Unprintable margins in millimetres, in the order AutoCAD stores them.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Margins {
-    pub left: f64,
-    pub bottom: f64,
-    pub right: f64,
-    pub top: f64,
-}
-
-impl Margins {
-    pub const ZERO: Margins = Margins {
-        left: 0.0,
-        bottom: 0.0,
-        right: 0.0,
-        top: 0.0,
-    };
-
-    pub const fn uniform(value: f64) -> Self {
-        Margins {
-            left: value,
-            bottom: value,
-            right: value,
-            top: value,
-        }
-    }
-
-    /// The same margins expressed in millimetres when they were given in
-    /// `units`.
-    pub fn to_mm(self, units: PaperUnits) -> Self {
-        Margins {
-            left: units.to_mm(self.left),
-            bottom: units.to_mm(self.bottom),
-            right: units.to_mm(self.right),
-            top: units.to_mm(self.top),
+            PlotDevice::None => user_defined.unwrap_or(Margins::ZERO),
         }
     }
 }
@@ -232,12 +205,6 @@ pub fn printer_capabilities(printer: &str) -> Option<Arc<PrinterCapabilities>> {
         cache.insert(printer.to_string(), Arc::clone(&caps));
     }
     Some(caps)
-}
-
-fn printer_margins_mm(printer: &str, paper: &PaperSize) -> Margins {
-    cached_printer_capabilities(printer)
-        .and_then(|caps| caps.margins_for(paper))
-        .unwrap_or(Margins::ZERO)
 }
 
 /// Name of the system default printer, when the platform reports one.
@@ -459,7 +426,8 @@ mod tests {
 
     #[test]
     fn pdf_margins_follow_autocad_per_family_and_variant() {
-        let m = |name: &str| PlotDevice::Pdf.margins_mm(&paper_catalog::resolve(name).unwrap());
+        let m =
+            |name: &str| PlotDevice::Pdf.margins_mm(&paper_catalog::resolve(name).unwrap(), &[]);
         // ISO sheets share one millimetre set regardless of size.
         let iso_standard = Margins {
             left: 5.0,
@@ -517,9 +485,46 @@ mod tests {
             inch(0.03, 0.03, 0.03, 0.03)
         ));
         assert_eq!(
-            PlotDevice::None
-                .margins_mm(&paper_catalog::resolve("ISO_A4_(210.00_x_297.00_MM)").unwrap()),
+            PlotDevice::None.margins_mm(
+                &paper_catalog::resolve("ISO_A4_(210.00_x_297.00_MM)").unwrap(),
+                &[]
+            ),
             Margins::ZERO
+        );
+    }
+
+    #[test]
+    fn user_defined_sheets_bring_their_own_margins() {
+        let roll = CustomPaper {
+            name: "Roll".into(),
+            width: 900.0,
+            height: 1200.0,
+            units: PaperUnits::Millimeters,
+            margins: Margins::uniform(3.0),
+        };
+        let paper = roll.paper();
+        assert_eq!(
+            PlotDevice::Pdf.margins_mm(&paper, &[roll.clone()]),
+            Margins::uniform(3.0)
+        );
+        assert_eq!(
+            PlotDevice::None.margins_mm(&paper, &[roll.clone()]),
+            Margins::uniform(3.0)
+        );
+        // An unknown printer falls back to the user's margins too.
+        assert_eq!(
+            PlotDevice::Printer("Nowhere".into()).margins_mm(&paper, &[roll]),
+            Margins::uniform(3.0)
+        );
+        // Without a definition a custom-looking sheet gets the family set.
+        assert_eq!(
+            PlotDevice::Pdf.margins_mm(&paper, &[]),
+            Margins {
+                left: 5.0,
+                bottom: 17.0,
+                right: 6.0,
+                top: 18.0
+            }
         );
     }
 

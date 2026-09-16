@@ -5,8 +5,10 @@
 //! PDF. Styled to match the other OCS dialogs (dark pills + fields).
 
 use crate::app::Message;
-use crate::io::paper_catalog::{self, PaperSize};
+use crate::io::paper_catalog::{self, CustomPaper, Margins, PaperSize, PaperUnits};
 use crate::io::plot_device::PrinterCapabilities;
+use crate::ui::style::common::muted_style;
+use crate::ui::style::form;
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
     Space,
@@ -75,7 +77,45 @@ impl fmt::Display for PlotChoice {
 
 #[cfg(test)]
 mod tests {
-    use super::PlotChoice;
+    use super::{CustomPaperDraft, CustomPaperError, PlotChoice};
+    use crate::io::paper_catalog::{resolve, Margins, PaperUnits};
+
+    #[test]
+    fn custom_sheet_draft_validates_and_builds() {
+        let mut draft = CustomPaperDraft {
+            name: "  Roll 24  ".into(),
+            width: "1500".into(),
+            height: "609,6".into(),
+            inches: false,
+            margins: ["5".into(), "17".into(), "".into(), "abc".into()],
+            error: None,
+        };
+        let custom = draft.build().expect("valid sheet");
+        assert_eq!(custom.name, "Roll 24");
+        assert_eq!((custom.width, custom.height), (1500.0, 609.6));
+        assert_eq!(custom.units, PaperUnits::Millimeters);
+        // Blank or unparsable margins mean no margin, never a refusal.
+        assert_eq!(custom.margins, Margins { left: 5.0, bottom: 17.0, right: 0.0, top: 0.0 });
+        assert_eq!(custom.canonical(), "Roll_24_(609.60_x_1500.00_MM)");
+        draft.width = "0".into();
+        assert_eq!(draft.build().unwrap_err(), CustomPaperError::Size);
+        draft.width = "x".into();
+        assert_eq!(draft.build().unwrap_err(), CustomPaperError::Size);
+    }
+
+    #[test]
+    fn custom_sheet_draft_seeds_from_a_sheet_in_its_own_unit() {
+        let arch_d = resolve("ARCH_D_(24.00_x_36.00_Inches)").unwrap();
+        let draft = CustomPaperDraft::from_paper(&arch_d, Margins::uniform(6.35));
+        assert_eq!(draft.name, "ARCH D");
+        assert_eq!((draft.width.as_str(), draft.height.as_str()), ("24", "36"));
+        assert!(draft.inches);
+        assert_eq!(draft.margins, ["0.25", "0.25", "0.25", "0.25"]);
+        let a4 = resolve("ISO_A4_(210.00_x_297.00_MM)").unwrap();
+        let draft = CustomPaperDraft::from_paper(&a4, Margins { left: 5.0, bottom: 17.0, right: 6.0, top: 18.0 });
+        assert!(!draft.inches);
+        assert_eq!(draft.margins, ["5", "17", "6", "18"]);
+    }
 
     #[test]
     fn named_view_display_preserves_the_saved_plot_area() {
@@ -119,6 +159,8 @@ pub enum PlotDlgMsg {
     /// the user has since left is ignored.
     PrinterMedia(String, Option<std::sync::Arc<PrinterCapabilities>>),
     Paper(String),
+    /// Edits of the inline "custom paper size" editor under the Size row.
+    CustomPaper(CustomPaperMsg),
     Orientation(String),
     Area(String),
     Scale(String),
@@ -153,6 +195,121 @@ pub enum PlotDlgMsg {
     NameCancel,
 }
 
+/// Which side of the printable-margin row a value belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarginSide {
+    Left,
+    Bottom,
+    Right,
+    Top,
+}
+
+#[derive(Debug, Clone)]
+pub enum CustomPaperMsg {
+    /// Open the editor, seeded from the selected sheet.
+    Open,
+    Cancel,
+    Name(String),
+    Width(String),
+    Height(String),
+    /// Units picked from the dropdown, by their catalogue label.
+    Units(String),
+    Margin(MarginSide, String),
+    /// Add (or replace) the sheet and select it.
+    Add,
+    /// Remove the selected user-defined sheet.
+    Remove,
+}
+
+/// The inline custom-sheet editor's fields, kept as typed text so a half-typed
+/// number does not snap to a value while editing. Everything is in the
+/// draft's own units.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CustomPaperDraft {
+    pub name: String,
+    pub width: String,
+    pub height: String,
+    pub inches: bool,
+    /// Left, bottom, right, top.
+    pub margins: [String; 4],
+    /// Why the last Add was refused, shown under the fields.
+    pub error: Option<CustomPaperError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomPaperError {
+    /// Width or height is not a positive number.
+    Size,
+}
+
+impl CustomPaperDraft {
+    fn units(&self) -> PaperUnits {
+        if self.inches {
+            PaperUnits::Inches
+        } else {
+            PaperUnits::Millimeters
+        }
+    }
+
+    /// Seed the editor from a sheet: its dimensions and unit, and the margins
+    /// given (in millimetres) converted into that unit.
+    pub fn from_paper(paper: &PaperSize, margins_mm: Margins) -> Self {
+        let units = paper.units;
+        let fmt = |v: f64| {
+            let v = units.from_mm(v);
+            if (v - v.round()).abs() < 1e-6 {
+                format!("{}", v.round() as i64)
+            } else {
+                format!("{v:.2}")
+            }
+        };
+        let dim = |v: f64| {
+            if (v - v.round()).abs() < 1e-6 {
+                format!("{}", v.round() as i64)
+            } else {
+                format!("{v:.2}")
+            }
+        };
+        Self {
+            name: paper.label.to_string(),
+            width: dim(paper.width),
+            height: dim(paper.height),
+            inches: units == PaperUnits::Inches,
+            margins: [
+                fmt(margins_mm.left),
+                fmt(margins_mm.bottom),
+                fmt(margins_mm.right),
+                fmt(margins_mm.top),
+            ],
+            error: None,
+        }
+    }
+
+    /// The sheet the fields describe, or the reason they do not describe one.
+    pub fn build(&self) -> Result<CustomPaper, CustomPaperError> {
+        let number = |text: &str| text.trim().replace(',', ".").parse::<f64>().ok();
+        let (Some(width), Some(height)) = (number(&self.width), number(&self.height)) else {
+            return Err(CustomPaperError::Size);
+        };
+        if !(width > 0.0) || !(height > 0.0) || !width.is_finite() || !height.is_finite() {
+            return Err(CustomPaperError::Size);
+        }
+        let margin = |text: &str| number(text).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
+        Ok(CustomPaper {
+            name: self.name.trim().to_string(),
+            width,
+            height,
+            units: self.units(),
+            margins: Margins {
+                left: margin(&self.margins[0]),
+                bottom: margin(&self.margins[1]),
+                right: margin(&self.margins[2]),
+                top: margin(&self.margins[3]),
+            },
+        })
+    }
+}
+
 /// Transient state backing the Plot dialog. Seeded from the layout's plot
 /// settings when the dialog opens; consumed on commit.
 // The persisted fields form the "plot" section of the app config
@@ -173,6 +330,12 @@ pub struct PlotDialogState {
     /// while unknown, when the platform cannot ask, or for PDF output.
     #[serde(skip)]
     pub printer_media: Option<std::sync::Arc<PrinterCapabilities>>,
+    /// Sheets the user defined, offered for every device and remembered
+    /// across sessions.
+    pub custom_papers: Vec<CustomPaper>,
+    /// The inline custom-sheet editor while it is open.
+    #[serde(skip)]
+    pub custom_editor: Option<CustomPaperDraft>,
     /// Chosen printer name, or `None` for the system default.
     pub printer: Option<String>,
     /// Output goes to a PDF file instead of a printer.
@@ -238,6 +401,8 @@ impl Default for PlotDialogState {
             printers: Vec::new(),
             default_printer: None,
             printer_media: None,
+            custom_papers: Vec::new(),
+            custom_editor: None,
             printer: None,
             to_file: false,
             paper: paper_catalog::default_paper().canonical.to_string(),
@@ -318,80 +483,19 @@ fn legacy_fit_to_paper_default() -> bool {
 }
 
 fn btn(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, st| {
-        let palette = theme.palette();
-        let pair = match (accent, st) {
-            (true, button::Status::Hovered | button::Status::Pressed) => palette.primary.strong,
-            (false, button::Status::Hovered | button::Status::Pressed) => {
-                palette.background.strong
-            }
-            (true, _) => palette.primary.base,
-            _ => palette.background.weak,
-        };
-        button::Style {
-        background: Some(Background::Color(pair.color)),
-        text_color: pair.text,
-        border: Border {
-            color: palette.background.neutral.color,
-            width: 1.0,
-            radius: 4.0.into(),
-        },
-        shadow: iced::Shadow::default(),
-        snap: false,
-        }
-    }
-}
-
-fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.palette();
-    let border = match status {
-        text_input::Status::Focused { .. } => palette.primary.base.color,
-        _ => palette.background.neutral.color,
-    };
-    text_input::Style {
-        background: Background::Color(palette.background.base.color),
-        border: Border { color: border, width: 1.0, radius: 3.0.into() },
-        icon: palette.background.base.text,
-        placeholder: palette.background.base.text.scale_alpha(0.48),
-        value: palette.background.base.text,
-        selection: palette.primary.base.color.scale_alpha(0.5),
-    }
-}
-
-fn muted_style(theme: &Theme) -> iced::widget::text::Style {
-    iced::widget::text::Style {
-        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
-    }
+    form::button_style(accent)
 }
 
 fn hdivider<'a>(width: Length) -> Element<'a, Message> {
-    container(Space::new().width(width).height(1))
-        .width(width)
-        .height(1)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.neutral.color
-            )),
-            ..Default::default()
-        })
-        .into()
+    form::hdivider(width)
 }
 
 fn section_label<'a>(s: Cow<'static, str>) -> Element<'a, Message> {
-    text(s).size(11).style(muted_style).into()
+    form::section_label(s)
 }
 
 fn vsep<'a>(height: Length) -> Element<'a, Message> {
-    container(Space::new().width(1).height(height))
-        .width(1)
-        .height(height)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.neutral.color
-            )),
-            ..Default::default()
-        })
-        .into()
+    form::vseparator(height)
 }
 
 fn setup_row<'a>(
@@ -404,7 +508,7 @@ fn setup_row<'a>(
         return text_input("", rename_buf)
             .on_input(|value| Message::PlotDlg(PlotDlgMsg::NameInput(value)))
             .on_submit(Message::PlotDlg(PlotDlgMsg::NameCommit))
-            .style(field_style)
+            .style(form::field_style)
             .size(11)
             .padding([4, 8])
             .width(Fit)
@@ -442,15 +546,7 @@ fn drop_row<'a>(
     ctor: fn(String) -> PlotDlgMsg,
     width: Length,
 ) -> Element<'a, Message> {
-    let pl = iced::widget::pick_list(selected, options, |value| value.to_string())
-        .on_select(move |choice| Message::PlotDlg(ctor(choice.raw)))
-        .text_size(12)
-        .padding([3, 6])
-        .width(width);
-    row![text(label).size(11).style(muted_style).width(92), pl]
-        .spacing(8)
-        .align_y(iced::Center)
-    .into()
+    form::labeled_pick_list(label, options, selected, move |choice| Message::PlotDlg(ctor(choice.raw)), width)
 }
 
 fn drop_row_enabled<'a>(
@@ -461,20 +557,14 @@ fn drop_row_enabled<'a>(
     width: Length,
     enabled: bool,
 ) -> Element<'a, Message> {
-    if enabled {
-        return drop_row(label, options, selected, ctor, width);
-    }
-    row![
-        text(label).size(11).style(muted_style).width(92),
-        crate::ui::read_only::field(
-            selected.map(|choice| choice.to_string()).unwrap_or_default().as_str(),
-            12.0,
-            width,
-        ),
-    ]
-    .spacing(8)
-    .align_y(iced::Center)
-    .into()
+    form::labeled_pick_list_enabled(
+        label,
+        options,
+        selected,
+        move |choice| Message::PlotDlg(ctor(choice.raw)),
+        width,
+        enabled,
+    )
 }
 
 /// A `label : text field` row.
@@ -484,17 +574,7 @@ fn field_row<'a>(
     ctor: fn(String) -> PlotDlgMsg,
     width: u16,
 ) -> Element<'a, Message> {
-    row![
-        text(label).size(11).style(muted_style).width(92),
-        text_input("", value)
-            .on_input(move |s| Message::PlotDlg(ctor(s)))
-            .style(field_style)
-            .size(12)
-            .width(width as f32),
-    ]
-    .spacing(8)
-    .align_y(iced::Center)
-    .into()
+    form::labeled_field(label, value, move |s| Message::PlotDlg(ctor(s)), width as f32)
 }
 
 fn field_row_enabled<'a>(
@@ -504,19 +584,9 @@ fn field_row_enabled<'a>(
     width: u16,
     enabled: bool,
 ) -> Element<'a, Message> {
-    if enabled {
-        return field_row(label, value, ctor, width);
-    }
-    row![
-        text(label).size(11).style(muted_style).width(92),
-        crate::ui::read_only::field(value, 12.0, Length::Fixed(width as f32)),
-    ]
-    .spacing(8)
-    .align_y(iced::Center)
-    .into()
+    form::labeled_field_enabled(label, value, move |s| Message::PlotDlg(ctor(s)), width as f32, enabled)
 }
 
-/// A single option checkbox bound to a `PlotFlag`.
 fn check<'a>(label: Cow<'static, str>, on: bool, flag: PlotFlag) -> Element<'a, Message> {
     checkbox(on)
         .label(label)
@@ -551,6 +621,92 @@ fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 
 fn choices(items: &[&str]) -> Vec<PlotChoice> {
     items.iter().map(|&value| PlotChoice::localized(value)).collect()
+}
+
+/// The inline editor for a user-defined sheet: name, dimensions and unit,
+/// printable margins, Add / Cancel. Numbers stay text until Add validates
+/// them.
+fn custom_paper_editor<'a>(draft: &'a CustomPaperDraft, width: Length) -> Element<'a, Message> {
+    let msg = |m: CustomPaperMsg| Message::PlotDlg(PlotDlgMsg::CustomPaper(m));
+    let units_label = |inches: bool| {
+        if inches {
+            crate::i18n::translate("Inches")
+        } else {
+            crate::i18n::translate("Millimeters")
+        }
+    };
+    let unit_options: Vec<PlotChoice> = vec![
+        PlotChoice::localized("Millimeters"),
+        PlotChoice::localized("Inches"),
+    ];
+    let unit_selected = Some(PlotChoice::localized(if draft.inches { "Inches" } else { "Millimeters" }));
+    let margin_field = |side: MarginSide, index: usize, hint: &'a str| {
+        form::compact_field(hint, &draft.margins[index], move |v| msg(CustomPaperMsg::Margin(side, v)), 56.0)
+    };
+    let error: Element<'_, Message> = match draft.error {
+        Some(CustomPaperError::Size) => text(t!("Enter a positive width and height."))
+            .size(10)
+            .style(|theme: &Theme| iced::widget::text::Style {
+                color: Some(theme.palette().danger.base.color),
+            })
+            .into(),
+        None => Space::new().height(0).into(),
+    };
+    let unit_hint = text(units_label(draft.inches)).size(10).style(muted_style);
+    container(
+        column![
+            section_label(t!("Custom paper size")),
+            form::labeled_field(t!("Name"), &draft.name, move |v| msg(CustomPaperMsg::Name(v)), 220.0),
+            row![
+                form::labeled_field(t!("Width"), &draft.width, move |v| msg(CustomPaperMsg::Width(v)), 70.0),
+                form::labeled_field(t!("Height"), &draft.height, move |v| msg(CustomPaperMsg::Height(v)), 70.0),
+            ]
+            .spacing(12),
+            form::labeled_pick_list(
+                t!("Units"),
+                unit_options,
+                unit_selected,
+                move |choice| msg(CustomPaperMsg::Units(choice.raw)),
+                Length::Fixed(140.0),
+            ),
+            row![
+                text(t!("Printable margins")).size(11).style(muted_style).width(form::LABEL_WIDTH),
+                margin_field(MarginSide::Left, 0, "L"),
+                margin_field(MarginSide::Bottom, 1, "B"),
+                margin_field(MarginSide::Right, 2, "R"),
+                margin_field(MarginSide::Top, 3, "T"),
+                unit_hint,
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            error,
+            row![
+                Space::new().width(Length::Fill),
+                button(text(t!("Cancel")).size(11))
+                    .on_press(msg(CustomPaperMsg::Cancel))
+                    .style(btn(false))
+                    .padding([4, 10]),
+                button(text(t!("Add")).size(11))
+                    .on_press(msg(CustomPaperMsg::Add))
+                    .style(btn(true))
+                    .padding([4, 12]),
+            ]
+            .spacing(6),
+        ]
+        .spacing(6),
+    )
+    .padding(8)
+    .width(width)
+    .style(|theme: &Theme| container::Style {
+        background: Some(Background::Color(theme.palette().background.weak.color)),
+        border: Border {
+            color: theme.palette().background.neutral.color,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 pub fn view_window(
@@ -599,7 +755,7 @@ pub fn view_window(
                 text_input("", rename_buf)
                     .on_input(|value| Message::PlotDlg(PlotDlgMsg::NameInput(value)))
                     .on_submit(Message::PlotDlg(PlotDlgMsg::NameCommit))
-                    .style(field_style)
+                    .style(form::field_style)
                     .size(11)
                     .padding([4, 8])
                     .width(Length::Fill),
@@ -708,10 +864,21 @@ pub fn view_window(
         Some(caps) => caps.media.iter().map(|media| PlotChoice::paper(&media.paper)).collect(),
         None => paper_catalog::catalog().iter().map(PlotChoice::paper).collect(),
     };
+    // User-defined sheets come last, after whatever the device offers.
+    for custom in &s.custom_papers {
+        let choice = PlotChoice::paper(&custom.paper());
+        if !paper_opts.contains(&choice) {
+            paper_opts.push(choice);
+        }
+    }
     let paper_sel = PlotChoice::paper(&selected_paper);
     if !paper_opts.contains(&paper_sel) {
         paper_opts.insert(0, paper_sel.clone());
     }
+    let selected_is_custom = s
+        .custom_papers
+        .iter()
+        .any(|custom| custom.canonical() == selected_paper.canonical);
     let paper_source_note: Element<'_, Message> = if printer_sheets.is_some() {
         text(t!("Sheet sizes and printable areas reported by the printer."))
             .size(10)
@@ -768,9 +935,36 @@ pub fn view_window(
     );
 
     // ── Paper, area, offset, scale ────────────────────────────────────────
+    // Size row with the custom-sheet controls; the editor unfolds below it.
+    let mut size_row = row![
+        drop_row(t!("Size"), paper_opts, Some(paper_sel), PlotDlgMsg::Paper, Length::Fill),
+    ]
+    .spacing(6)
+    .align_y(iced::Center);
+    if s.custom_editor.is_none() {
+        size_row = size_row.push(
+            button(text(t!("Custom…")).size(11))
+                .on_press(Message::PlotDlg(PlotDlgMsg::CustomPaper(CustomPaperMsg::Open)))
+                .style(btn(false))
+                .padding([4, 8]),
+        );
+        if selected_is_custom {
+            size_row = size_row.push(
+                button(text(t!("Remove")).size(11))
+                    .on_press(Message::PlotDlg(PlotDlgMsg::CustomPaper(CustomPaperMsg::Remove)))
+                    .style(btn(false))
+                    .padding([4, 8]),
+            );
+        }
+    }
+    let custom_editor: Element<'_, Message> = match &s.custom_editor {
+        Some(draft) => custom_paper_editor(draft, width),
+        None => Space::new().height(0).into(),
+    };
     let paper_panel = panel(column![
         section_label(t!("Paper")),
-        drop_row(t!("Size"), paper_opts, Some(paper_sel), PlotDlgMsg::Paper, width),
+        size_row,
+        custom_editor,
         paper_source_note,
         paper_note,
     ].spacing(7));

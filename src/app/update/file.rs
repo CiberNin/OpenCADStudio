@@ -197,7 +197,7 @@ fn margins_for_settings(
     if paper_unchanged(d, stored) && stored_device == device {
         return stored.margins;
     }
-    let margins = device.margins_mm(&plot_dialog_paper(d));
+    let margins = device.margins_mm(&plot_dialog_paper(d), &d.custom_papers);
     acadrust::objects::PaperMargin::new(margins.left, margins.bottom, margins.right, margins.top)
 }
 
@@ -3855,6 +3855,86 @@ impl OpenCADStudio {
         )
     }
 
+    /// The inline custom-sheet editor of the Plot dialog. A sheet is added
+    /// to (or replaced in) the persisted list under its media name and
+    /// selected at once; the list is saved immediately so it survives a
+    /// crash the way a plotter configuration would.
+    fn on_custom_paper_msg(&mut self, msg: crate::ui::window::plot::CustomPaperMsg) {
+        use crate::ui::window::plot::{CustomPaperDraft, CustomPaperMsg as C, MarginSide};
+        let d = &mut self.plot_dialog;
+        match msg {
+            C::Open => {
+                let paper = plot_dialog_paper(d);
+                let existing = d
+                    .custom_papers
+                    .iter()
+                    .find(|custom| custom.canonical() == paper.canonical);
+                let margins = match existing {
+                    Some(custom) => custom.margins_mm(),
+                    None => plot_dialog_device(d).margins_mm(&paper, &d.custom_papers),
+                };
+                let mut draft = CustomPaperDraft::from_paper(&paper, margins);
+                // A catalogue sheet is only the starting size; the new sheet
+                // gets its own name (AutoCAD's generic one when left blank).
+                if existing.is_none() {
+                    draft.name.clear();
+                }
+                d.custom_editor = Some(draft);
+            }
+            C::Cancel => d.custom_editor = None,
+            C::Name(value) => Self::edit_custom_draft(d, |draft| draft.name = value),
+            C::Width(value) => Self::edit_custom_draft(d, |draft| draft.width = value),
+            C::Height(value) => Self::edit_custom_draft(d, |draft| draft.height = value),
+            C::Units(value) => Self::edit_custom_draft(d, |draft| draft.inches = value == "Inches"),
+            C::Margin(side, value) => Self::edit_custom_draft(d, |draft| {
+                let index = match side {
+                    MarginSide::Left => 0,
+                    MarginSide::Bottom => 1,
+                    MarginSide::Right => 2,
+                    MarginSide::Top => 3,
+                };
+                draft.margins[index] = value;
+            }),
+            C::Add => {
+                let Some(draft) = d.custom_editor.as_mut() else {
+                    return;
+                };
+                match draft.build() {
+                    Ok(custom) => {
+                        let canonical = custom.canonical();
+                        d.custom_papers.retain(|existing| existing.canonical() != canonical);
+                        d.custom_papers.push(custom);
+                        d.custom_editor = None;
+                        d.paper = canonical;
+                        let (w, h) = plot_dialog_sheet_mm(d);
+                        d.paper_width_mm = w;
+                        d.paper_height_mm = h;
+                        self.save_config();
+                    }
+                    Err(error) => draft.error = Some(error),
+                }
+            }
+            C::Remove => {
+                let selected = plot_dialog_paper(d).canonical.into_owned();
+                let before = d.custom_papers.len();
+                d.custom_papers.retain(|custom| custom.canonical() != selected);
+                if d.custom_papers.len() != before {
+                    self.save_config();
+                }
+            }
+        }
+    }
+
+    fn edit_custom_draft(
+        d: &mut crate::ui::window::plot::PlotDialogState,
+        edit: impl FnOnce(&mut crate::ui::window::plot::CustomPaperDraft),
+    ) {
+        if let Some(draft) = d.custom_editor.as_mut() {
+            edit(draft);
+            draft.error = None;
+        }
+    }
+
     fn normalize_common_plot_dialog(&mut self) {
         self.plot_dialog.center = true;
         self.plot_dialog.offset_x = "0.0".into();
@@ -3893,6 +3973,10 @@ impl OpenCADStudio {
                 if !d.to_file && d.printer.as_deref() == Some(printer.as_str()) {
                     d.printer_media = caps;
                 }
+                Task::none()
+            }
+            M::CustomPaper(msg) => {
+                self.on_custom_paper_msg(msg);
                 Task::none()
             }
             M::PrinterProperties => {
@@ -5075,6 +5159,65 @@ mod plot_paper_tests {
         let caps = std::sync::Arc::new(crate::io::plot_device::PrinterCapabilities::default());
         let _ = app.on_plot_dlg(PlotDlgMsg::PrinterMedia("OCS Test Printer".into(), Some(caps)));
         assert!(app.plot_dialog.printer_media.is_none());
+    }
+
+    #[test]
+    fn a_custom_sheet_is_added_selected_persisted_and_written_with_its_margins() {
+        use crate::ui::window::plot::{CustomPaperMsg as C, MarginSide};
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::Printer(crate::ui::window::plot::OUT_PDF.into()));
+        let custom = |m: C| PlotDlgMsg::CustomPaper(m);
+        let _ = app.on_plot_dlg(custom(C::Open));
+        // Seeded from the selected ISO A4 on the PDF driver, nameless.
+        let draft = app.plot_dialog.custom_editor.clone().expect("editor open");
+        assert_eq!((draft.width.as_str(), draft.height.as_str()), ("210", "297"));
+        assert_eq!(draft.margins, ["5", "17", "6", "18"]);
+        assert!(draft.name.is_empty());
+        let _ = app.on_plot_dlg(custom(C::Name("Roll 24".into())));
+        let _ = app.on_plot_dlg(custom(C::Width("1500".into())));
+        let _ = app.on_plot_dlg(custom(C::Height("609.6".into())));
+        let _ = app.on_plot_dlg(custom(C::Margin(MarginSide::Left, "3".into())));
+        let _ = app.on_plot_dlg(custom(C::Margin(MarginSide::Top, "4".into())));
+        let _ = app.on_plot_dlg(custom(C::Add));
+        assert!(app.plot_dialog.custom_editor.is_none(), "Add closes the editor");
+        assert_eq!(app.plot_dialog.paper, "Roll_24_(609.60_x_1500.00_MM)");
+        assert_eq!(super::plot_dialog_sheet_mm(&app.plot_dialog), (1500.0, 609.6));
+        assert_eq!(app.current_config().plot.custom_papers.len(), 1, "persisted in the plot config");
+        let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
+        let ps = app.tabs[app.active_tab].scene.plot_settings_for("Layout1").unwrap();
+        assert_eq!(ps.paper_size, "Roll_24_(609.60_x_1500.00_MM)");
+        assert_eq!((ps.paper_width, ps.paper_height), (1500.0, 609.6));
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(3.0, 17.0, 6.0, 4.0));
+        // Re-adding the same size replaces the definition instead of duplicating it.
+        let _ = app.on_plot_dlg(custom(C::Open));
+        assert_eq!(app.plot_dialog.custom_editor.as_ref().map(|d| d.name.as_str()), Some("Roll 24"));
+        let _ = app.on_plot_dlg(custom(C::Margin(MarginSide::Left, "9".into())));
+        let _ = app.on_plot_dlg(custom(C::Add));
+        assert_eq!(app.plot_dialog.custom_papers.len(), 1);
+        assert_eq!(app.plot_dialog.custom_papers[0].margins.left, 9.0);
+        // Remove drops the definition; the sheet itself stays selectable.
+        let _ = app.on_plot_dlg(custom(C::Remove));
+        assert!(app.plot_dialog.custom_papers.is_empty());
+        assert_eq!(app.plot_dialog.paper, "Roll_24_(609.60_x_1500.00_MM)");
+    }
+
+    #[test]
+    fn an_invalid_custom_sheet_is_refused_with_a_reason() {
+        use crate::ui::window::plot::{CustomPaperError, CustomPaperMsg as C};
+        let mut app = app_with_printer_named_sheet();
+        let _ = app.on_plot_dialog_open();
+        let _ = app.on_plot_dlg(PlotDlgMsg::CustomPaper(C::Open));
+        let _ = app.on_plot_dlg(PlotDlgMsg::CustomPaper(C::Width("-5".into())));
+        let _ = app.on_plot_dlg(PlotDlgMsg::CustomPaper(C::Add));
+        let draft = app.plot_dialog.custom_editor.as_ref().expect("editor stays open");
+        assert_eq!(draft.error, Some(CustomPaperError::Size));
+        assert!(app.plot_dialog.custom_papers.is_empty());
+        // Typing again clears the message.
+        let _ = app.on_plot_dlg(PlotDlgMsg::CustomPaper(C::Width("500".into())));
+        assert!(app.plot_dialog.custom_editor.as_ref().unwrap().error.is_none());
+        let _ = app.on_plot_dlg(PlotDlgMsg::CustomPaper(C::Cancel));
+        assert!(app.plot_dialog.custom_editor.is_none());
     }
 
     #[test]
