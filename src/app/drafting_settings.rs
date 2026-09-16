@@ -25,7 +25,8 @@ impl DraftingSettingsState {
             osnap_on: app.snapper.snap_enabled,
             otrack_on: app.snapper.otrack_enabled,
             snap_modes: app.snapper.enabled.clone(),
-            osnap3d_on: false,
+            osnap3d_on: app.snapper.snap3d_enabled,
+            snap3d_modes: app.snapper.enabled3d.clone(),
             dyn_input_on: app.dyn_input,
             quick_props_on: app.quick_properties,
             selection_cycling_on: app.selection_cycling,
@@ -73,6 +74,8 @@ impl OpenCADStudio {
         self.snapper.snap_enabled = state.osnap_on;
         self.snapper.otrack_enabled = state.otrack_on;
         self.snapper.enabled = state.snap_modes.clone();
+        self.snapper.snap3d_enabled = state.osnap3d_on;
+        self.snapper.enabled3d = state.snap3d_modes.clone();
         self.dyn_input = state.dyn_input_on;
         self.quick_properties = state.quick_props_on;
         self.selection_cycling = state.selection_cycling_on;
@@ -104,6 +107,7 @@ mod tests {
             otrack_on: false,
             snap_modes: rustc_hash::FxHashSet::default(),
             osnap3d_on: false,
+            snap3d_modes: rustc_hash::FxHashSet::default(),
             dyn_input_on: false,
             quick_props_on: false,
             selection_cycling_on: false,
@@ -139,6 +143,7 @@ mod tests {
             otrack_on: false,
             snap_modes: rustc_hash::FxHashSet::default(),
             osnap3d_on: false,
+            snap3d_modes: rustc_hash::FxHashSet::default(),
             dyn_input_on: false,
             quick_props_on: false,
             selection_cycling_on: false,
@@ -186,6 +191,10 @@ mod tests {
 
         let mut modded = base.clone();
         modded.osnap3d_on = true;
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.snap3d_modes.insert(crate::snap::SnapType::Vertex);
         assert!(modded.is_dirty(&base));
 
         let mut modded = base.clone();

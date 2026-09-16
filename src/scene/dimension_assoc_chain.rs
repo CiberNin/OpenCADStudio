@@ -36,9 +36,9 @@ pub(crate) mod osnap {
 
 /// Translate a live snap mode into the `AcDb::OsnapMode` we persist.
 ///
-/// Modes with no ObjectARX equivalent (grid, object pick) map to
-/// [`osnap::NONE`]; a reference carrying `NONE` resolves by marker/parameter
-/// alone.
+/// Modes with no ObjectARX equivalent (grid, object pick, 3D solid snaps) map
+/// to [`osnap::NONE`]; a reference carrying `NONE` resolves by
+/// marker/parameter alone.
 pub(crate) fn osnap_type_for(snap: crate::snap::SnapType) -> u8 {
     use crate::snap::SnapType as S;
     match snap {
@@ -54,7 +54,9 @@ pub(crate) fn osnap_type_for(snap: crate::snap::SnapType) -> u8 {
         S::Nearest | S::Extension => osnap::NEAR,
         S::ApparentIntersection => osnap::APPARENT_INT,
         S::Parallel => osnap::PARA,
-        S::Grid | S::ObjectPick => osnap::NONE,
+        S::Grid | S::ObjectPick | S::Vertex | S::EdgeMidpoint | S::FaceCenter | S::Knot | S::FacePerpendicular | S::NearestFace => {
+            osnap::NONE
+        }
     }
 }
 

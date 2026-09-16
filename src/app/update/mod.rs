@@ -26,6 +26,7 @@ fn is_modal_blocked_key_msg(msg: &Message) -> bool {
             | Message::MTextCaretMove(_)
             | Message::DeleteSelected
             | Message::ToggleSnapEnabled
+            | Message::ToggleSnap3dEnabled
             | Message::ToggleGrid
             | Message::ToggleOrtho
             | Message::ToggleGridSnap
@@ -3702,6 +3703,11 @@ impl OpenCADStudio {
                 self.persist_settings_if_changed();
                 Task::none()
             }
+            Message::ToggleSnap3dEnabled => {
+                self.snapper.toggle_snap3d();
+                self.sync_vport_display(self.active_tab);
+                Task::none()
+            }
             Message::ToggleGridSnap => {
                 self.snapper.toggle_grid_snap();
                 self.sync_vport_display(self.active_tab);
@@ -4558,6 +4564,14 @@ impl OpenCADStudio {
                 if let Some(state) = &mut self.drafting_settings_state {
                     if !state.snap_modes.remove(&snap_type) {
                         state.snap_modes.insert(snap_type);
+                    }
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleSnapMode3d(snap_type) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    if !state.snap3d_modes.remove(&snap_type) {
+                        state.snap3d_modes.insert(snap_type);
                     }
                 }
                 Task::none()

@@ -1,6 +1,6 @@
 use crate::app::settings::IsoPlane;
 use crate::app::Message;
-use crate::snap::{SnapType, ALL_SNAP_MODES};
+use crate::snap::{SnapType, ALL_3D_SNAP_MODES, ALL_SNAP_MODES};
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 use std::borrow::Cow;
@@ -44,6 +44,7 @@ pub struct DraftingSettingsState {
     pub snap_modes: rustc_hash::FxHashSet<SnapType>,
     // 3D Object Snap
     pub osnap3d_on: bool,
+    pub snap3d_modes: rustc_hash::FxHashSet<SnapType>,
     // Dynamic Input
     pub dyn_input_on: bool,
     // Quick Properties
@@ -71,6 +72,7 @@ impl DraftingSettingsState {
             || self.otrack_on != saved.otrack_on
             || self.snap_modes != saved.snap_modes
             || self.osnap3d_on != saved.osnap3d_on
+            || self.snap3d_modes != saved.snap3d_modes
             || self.dyn_input_on != saved.dyn_input_on
             || self.quick_props_on != saved.quick_props_on
             || self.selection_cycling_on != saved.selection_cycling_on
@@ -471,44 +473,26 @@ pub fn view_window<'a>(
             Message::DraftingSettingsToggle3dOsnap,
         );
 
-        let placeholder_group = group(
-            crate::t!("3D Object Snap modes"),
-            column![
-                row![checkbox(false).size(14), text(crate::t!("Vertex")).size(11)]
-                    .spacing(7)
-                    .align_y(iced::Center),
+        // Implemented 3D modes follow the same checkbox pattern as the
+        // Object Snap tab, driven by ALL_3D_SNAP_MODES.
+        let mut modes_col = column![].spacing(6);
+        for &(snap_type, _, label) in ALL_3D_SNAP_MODES {
+            let is_checked = state.snap3d_modes.contains(&snap_type);
+            modes_col = modes_col.push(
                 row![
-                    checkbox(false).size(14),
-                    text(crate::t!("Midpoint on edge")).size(11),
+                    checkbox(is_checked)
+                        .on_toggle(move |_| Message::DraftingSettingsToggleSnapMode3d(snap_type))
+                        .size(14),
+                    text(crate::t!(label)).size(11),
                 ]
                 .spacing(7)
                 .align_y(iced::Center),
-                row![
-                    checkbox(false).size(14),
-                    text(crate::t!("Center of face")).size(11),
-                ]
-                .spacing(7)
-                .align_y(iced::Center),
-                row![checkbox(false).size(14), text(crate::t!("Knot")).size(11)]
-                    .spacing(7)
-                    .align_y(iced::Center),
-                row![
-                    checkbox(false).size(14),
-                    text(crate::t!("Perpendicular to face")).size(11),
-                ]
-                .spacing(7)
-                .align_y(iced::Center),
-                row![
-                    checkbox(false).size(14),
-                    text(crate::t!("Nearest to face")).size(11),
-                ]
-                .spacing(7)
-                .align_y(iced::Center),
-            ]
-            .spacing(6),
-        );
+            );
+        }
 
-        column![osnap3d_toggle, Space::new().height(4), placeholder_group]
+        let modes_group = group(crate::t!("3D Object Snap modes"), modes_col);
+
+        column![osnap3d_toggle, Space::new().height(4), modes_group]
             .spacing(10)
             .width(Fill)
     };

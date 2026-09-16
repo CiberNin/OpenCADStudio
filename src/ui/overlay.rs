@@ -1580,6 +1580,68 @@ impl canvas::Program<Message> for SelectionCanvas {
                     frame.stroke(&h, stroke.clone());
                     frame.stroke(&v, stroke);
                 }
+                SnapType::Vertex => {
+                    // Filled square: the solid rhyme of Endpoint's hollow box.
+                    let h = 5.0_f32;
+                    frame.fill(
+                        &canvas::Path::rectangle(
+                            Point::new(sp.x - h, sp.y - h),
+                            Size::new(h * 2.0, h * 2.0),
+                        ),
+                        marker,
+                    );
+                }
+                SnapType::EdgeMidpoint => {
+                    // Filled triangle: the solid rhyme of Midpoint's outline.
+                    let r = 6.0_f32;
+                    let path = canvas::Path::new(|b| {
+                        b.move_to(Point::new(sp.x, sp.y - r));
+                        b.line_to(Point::new(sp.x + r * 0.866, sp.y + r * 0.5));
+                        b.line_to(Point::new(sp.x - r * 0.866, sp.y + r * 0.5));
+                        b.close();
+                    });
+                    frame.fill(&path, marker);
+                }
+                SnapType::FaceCenter => {
+                    // Filled disc: the solid rhyme of Center's outline.
+                    frame.fill(&canvas::Path::circle(sp, 5.5_f32), marker);
+                }
+                SnapType::Knot => {
+                    // Filled diamond: distinct from Quadrant's outline.
+                    let r = 5.5_f32;
+                    let path = canvas::Path::new(|b| {
+                        b.move_to(Point::new(sp.x, sp.y - r));
+                        b.line_to(Point::new(sp.x + r, sp.y));
+                        b.line_to(Point::new(sp.x, sp.y + r));
+                        b.line_to(Point::new(sp.x - r, sp.y));
+                        b.close();
+                    });
+                    frame.fill(&path, marker);
+                }
+                SnapType::FacePerpendicular => {
+                    // Right-angle hook like the 2D marker, plus a filled foot
+                    // dot marking the face contact.
+                    let r = 6.0_f32;
+                    let p = canvas::Path::new(|b| {
+                        b.move_to(Point::new(sp.x - r, sp.y - r));
+                        b.line_to(Point::new(sp.x - r, sp.y + r));
+                        b.line_to(Point::new(sp.x + r, sp.y + r));
+                    });
+                    frame.stroke(&p, stroke.clone());
+                    frame.fill(&canvas::Path::circle(sp, 2.0_f32), marker);
+                }
+                SnapType::NearestFace => {
+                    // Filled bowtie: the solid rhyme of Nearest's outline.
+                    let r = 5.5_f32;
+                    let path = canvas::Path::new(|b| {
+                        b.move_to(Point::new(sp.x - r, sp.y - r));
+                        b.line_to(Point::new(sp.x + r, sp.y - r));
+                        b.line_to(Point::new(sp.x - r, sp.y + r));
+                        b.line_to(Point::new(sp.x + r, sp.y + r));
+                        b.close();
+                    });
+                    frame.fill(&path, marker);
+                }
             }
         }
 

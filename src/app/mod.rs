@@ -2580,6 +2580,8 @@ pub enum Message {
     CommandEscape,
     /// Toggle the global snap on/off (OSNAP button body click).
     ToggleSnapEnabled,
+    /// Toggle 3D object snap on/off — F4.
+    ToggleSnap3dEnabled,
     /// Toggle grid-snap on/off — F9 / SNAP status-bar button.
     ToggleGridSnap,
     /// Enable or disable isometric drafting.
@@ -2752,6 +2754,7 @@ pub enum Message {
     DraftingSettingsToggleOsnap,
     DraftingSettingsToggleOtrack,
     DraftingSettingsToggleSnapMode(crate::snap::SnapType),
+    DraftingSettingsToggleSnapMode3d(crate::snap::SnapType),
     DraftingSettingsSnapSelectAll,
     DraftingSettingsSnapClearAll,
     DraftingSettingsToggle3dOsnap,

@@ -67,6 +67,43 @@ pub(crate) fn nurbs3(spline: &Spline) -> Option<NurbsCurve3> {
     Some(curve.with_periodicity(spline.flags.closed || spline.flags.periodic))
 }
 
+/// NURBS knot locations on a control-point spline, evaluated on its own
+/// curve: distinct interior knot values (the clamped ends already snap as
+/// endpoints). Fit-method splines invent their knots at the fit nodes, which
+/// already snap as endpoints, so they contribute nothing — re-offering them
+/// would double every marker.
+pub(crate) fn spline_knot_points(spline: &Spline) -> Vec<glam::DVec3> {
+    const MAX_KNOT_SNAPS: usize = 1024;
+    if uses_fit_method(spline) {
+        return Vec::new();
+    }
+    let Some(curve) = nurbs3(spline) else {
+        return Vec::new();
+    };
+    let (from, to) = curve.domain();
+    if !(from.is_finite() && to.is_finite()) || !(to > from) {
+        return Vec::new();
+    }
+    let span = to - from;
+    let mut knots: Vec<f64> = curve
+        .knots()
+        .iter()
+        .copied()
+        .filter(|k| k.is_finite() && *k > from + span * 1e-9 && *k < to - span * 1e-9)
+        .collect();
+    knots.sort_by(f64::total_cmp);
+    knots.dedup();
+    if knots.len() > MAX_KNOT_SNAPS {
+        let step = knots.len().div_ceil(MAX_KNOT_SNAPS);
+        knots = knots.into_iter().step_by(step).collect();
+    }
+    knots
+        .into_iter()
+        .map(|k| glam::DVec3::from_array(curve.point_at_knot(k)))
+        .filter(|p| p.is_finite())
+        .collect()
+}
+
 pub(crate) fn replace_with_nurbs(spline: &mut Spline, curve: &NurbsCurve3) {
     spline.degree = curve.degree() as i32;
     spline.knots = curve.knots().to_vec();
@@ -134,6 +171,11 @@ fn to_render(spl: &Spline) -> RenderEntity {
                     crate::scene::model::wire_model::SnapHint::Endpoint,
                 )
             }));
+            snap_pts.extend(
+                spline_knot_points(spl)
+                    .into_iter()
+                    .map(|p| (p, crate::scene::model::wire_model::SnapHint::Knot)),
+            );
             let key_vertices = if planar.is_some() {
                 Vec::new()
             } else {
@@ -179,6 +221,11 @@ fn to_render(spl: &Spline) -> RenderEntity {
                     )
                 }));
             }
+            points.extend(
+                spline_knot_points(spl)
+                    .into_iter()
+                    .map(|p| (p, crate::scene::model::wire_model::SnapHint::Knot)),
+            );
             (points, Vec::new())
         }
         // A spline through points in space is not a planar curve, so the
@@ -1119,6 +1166,45 @@ impl crate::entities::traits::Transformable for Spline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knot_points_evaluate_distinct_interior_knots() {
+        let mut spline = Spline::default();
+        spline.degree = 3;
+        spline.control_points = vec![
+            acadrust::types::Vector3::new(0.0, 0.0, 0.0),
+            acadrust::types::Vector3::new(1.0, 2.0, 0.0),
+            acadrust::types::Vector3::new(3.0, 3.0, 1.0),
+            acadrust::types::Vector3::new(5.0, 2.0, 0.0),
+            acadrust::types::Vector3::new(6.0, 0.0, 1.0),
+        ];
+        spline.knots = vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0];
+        let pts = spline_knot_points(&spline);
+        assert_eq!(pts.len(), 1, "one interior knot value: {pts:?}");
+        let curve = nurbs3(&spline).expect("control-point spline builds");
+        let expected = curve.point_at_knot(0.5);
+        let got = [pts[0].x, pts[0].y, pts[0].z];
+        let err = ((got[0] - expected[0]).powi(2)
+            + (got[1] - expected[1]).powi(2)
+            + (got[2] - expected[2]).powi(2))
+        .sqrt();
+        assert!(err < 1e-9, "knot point off the curve: {err}");
+    }
+
+    #[test]
+    fn fit_method_splines_emit_no_knot_snaps() {
+        // Interpolated curves invent their own knots at the fit nodes, which
+        // already snap as endpoints — re-offering them as knots would double
+        // every marker.
+        let mut spline = Spline::default();
+        spline.degree = 3;
+        spline.fit_points = vec![
+            acadrust::types::Vector3::new(0.0, 0.0, 0.0),
+            acadrust::types::Vector3::new(4.0, 0.0, 1.0),
+            acadrust::types::Vector3::new(4.0, 3.0, 2.0),
+        ];
+        assert!(spline_knot_points(&spline).is_empty());
+    }
 
     #[test]
     fn fit_bounds_accept_closed_curves_with_unset_tangents() {

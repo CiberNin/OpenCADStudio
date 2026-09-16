@@ -163,6 +163,333 @@ pub(crate) fn tessellate_entity(
     wires
 }
 
+impl Scene {
+    /// True for the modeler solid families whose wire path is an empty shell
+    /// (their geometry lives in the mesh pipeline): B-rep corners for those
+    /// come from the mesh edge list instead of wire points.
+    fn is_solid_shell_entity(entity: &EntityType) -> bool {
+        matches!(
+            entity,
+            EntityType::Solid3D(_)
+                | EntityType::Region(_)
+                | EntityType::Body(_)
+                | EntityType::Surface(_)
+        )
+    }
+
+    /// B-rep snap points for a solid: edge endpoints as `Vertex` hints and
+    /// edge centres as `EdgeMidpoint` hints (both from the tessellated edge
+    /// list), plus face centres as `FaceCenter` hints (from the kernel B-rep
+    /// faces). Empty for non-solids and for solids with no usable data.
+    pub(crate) fn solid_snap_points(
+        &self,
+        handle: Handle,
+    ) -> Vec<(glam::DVec3, crate::scene::model::wire_model::SnapHint)> {
+        use crate::scene::model::wire_model::SnapHint;
+        let Some(entity) = self.document.get_entity(handle) else {
+            return Vec::new();
+        };
+        if !Self::is_solid_shell_entity(entity) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if let Some(set) = self
+            .meshes
+            .get(&handle)
+            .or_else(|| self.block_meshes.get(&handle))
+        {
+            let (edges, lows) = set.geometry_edges();
+            let mut seen = HashSet::default();
+            for (a, b) in
+                crate::scene::model::mesh_model::solid_edge_segments(edges, lows)
+            {
+                for (point, hint) in [(a, SnapHint::Vertex), (b, SnapHint::Vertex)] {
+                    let key = [point.x.to_bits(), point.y.to_bits(), point.z.to_bits()];
+                    if seen.insert(key) {
+                        out.push((point, hint));
+                    }
+                }
+                out.push(((a + b) * 0.5, SnapHint::EdgeMidpoint));
+            }
+        }
+        out.extend(
+            Self::solid_face_centers(entity, self.solid_models.get(&handle))
+                .into_iter()
+                .map(|p| (p, SnapHint::FaceCenter)),
+        );
+        out
+    }
+
+    /// Face centres for a solid entity: kernel B-rep faces averaged over
+    /// their boundary loops. Prefers the cached kernel body (no re-parse);
+    /// falls back to parsing the entity's ACIS data, which shares the cost
+    /// profile of the mesh build at the same epoch. No body ⇒ no centres.
+    fn solid_face_centers(
+        entity: &EntityType,
+        cached: Option<&cadkernel::brep::Body>,
+    ) -> Vec<glam::DVec3> {
+        use crate::scene::convert::solid3d_tess::{kernel_body, kernel_region_body};
+        use crate::scene::model::solid_model::face_centers;
+        if let Some(body) = cached {
+            return face_centers(body)
+                .into_iter()
+                .map(glam::DVec3::from_array)
+                .collect();
+        }
+        match entity {
+            EntityType::Solid3D(s) => kernel_body(s),
+            EntityType::Region(r) => kernel_region_body(r),
+            _ => None,
+        }
+        .map(|body| face_centers(&body))
+        .unwrap_or_default()
+        .into_iter()
+        .map(glam::DVec3::from_array)
+        .collect()
+    }
+
+    /// Attach solid B-rep snaps to the entity's shell wire (the empty wire
+    /// carrying only the insertion snap). History/construction wires keep
+    /// their own points and are left alone; non-solids are untouched.
+    /// Idempotent: a wire already carrying 3D snaps is skipped, so shared
+    /// memo entries can pass through every assembly path safely.
+    pub(crate) fn attach_solid_snaps(&self, handle: Handle, wires: &mut Vec<WireModel>) {
+        use crate::scene::model::wire_model::SnapHint;
+        let points = self.solid_snap_points(handle);
+        if points.is_empty() {
+            return;
+        }
+        for wire in wires.iter_mut() {
+            if !wire.points.is_empty() {
+                continue;
+            }
+            if wire.snap_pts.iter().any(|(_, hint)| {
+                matches!(
+                    hint,
+                    SnapHint::Vertex
+                        | SnapHint::EdgeMidpoint
+                        | SnapHint::FaceCenter
+                        | SnapHint::Knot
+                )
+            }) {
+                continue;
+            }
+            wire.snap_pts.extend(points.iter().copied());
+        }
+    }
+
+    /// Live solid-face snaps for a command point: Nearest-to-face (screen
+    /// nearest point on a mesh triangle) and Perpendicular-to-face (foot from
+    /// `base` onto a triangle). Mesh triangles carry no B-rep face grouping,
+    /// so faces are individual triangles here — the pre-baked `FaceCenter`
+    /// hints (true B-rep faces) are the separate discrete counterpart.
+    ///
+    /// Top-level model meshes only: block-local sets live in a different
+    /// space, and xclipped views are not honored (the wire channel the
+    /// pre-baked 3D hints ride is clipped; this direct mesh read is not).
+    /// Worst case in those views is a snap with no geometry behind it —
+    /// never a corrupt point.
+    pub(crate) fn solid_face_snaps(
+        &self,
+        cursor_screen: iced::Point,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        aperture_px: f32,
+        base: Option<glam::DVec3>,
+        want_perp: bool,
+        want_nearest: bool,
+    ) -> Option<crate::snap::SnapResult> {
+        use crate::snap::{
+            closest_point_on_tri_2d, foot_on_triangle, snap_better, snap_priority,
+            snap_tier, SnapType,
+        };
+        if !want_perp && !want_nearest {
+            return None;
+        }
+        if !(aperture_px.is_finite() && aperture_px > 0.0) {
+            return None;
+        }
+        let perp_base = want_perp.then(|| base).flatten();
+        let project = |world: glam::DVec3| {
+            let ndc = view_rot.project_point3((world - eye).as_vec3());
+            [
+                (ndc.x + 1.0) * 0.5 * bounds.width,
+                (1.0 - ndc.y) * 0.5 * bounds.height,
+            ]
+        };
+        let finite_screen = |s: [f32; 2]| s[0].is_finite() && s[1].is_finite();
+        let in_bounds = |s: [f32; 2]| {
+            s[0] >= 0.0 && s[0] <= bounds.width && s[1] >= 0.0 && s[1] <= bounds.height
+        };
+        let radius2 = aperture_px * aperture_px;
+        let cursor = [cursor_screen.x, cursor_screen.y];
+        // (tier, d2, sub, eye-depth², handle, hit): engine ordering, then
+        // nearer-to-eye (coincident faces share pixels — the top face must
+        // beat the bottom one), then the handle as a final deterministic
+        // tie-break (mesh iteration order is not stable).
+        let mut best: Option<(u8, f32, u8, f64, u64, crate::snap::SnapResult)> = None;
+        let mut consider = |snap_type: SnapType,
+                            world: glam::DVec3,
+                            screen: [f32; 2],
+                            d2: f32,
+                            handle: Handle| {
+            if !(d2 < radius2) || !in_bounds(screen) {
+                return;
+            }
+            let (tier, sub) = (snap_tier(snap_type), snap_priority(snap_type));
+            let depth2 = (world - eye).length_squared();
+            let better = match &best {
+                None => true,
+                Some((bt, bd2, bs, bdepth2, bh, _)) => {
+                    snap_better(tier, d2, sub, (*bt, *bd2, *bs))
+                        || (tier == *bt
+                            && (d2 - *bd2).abs() <= 1e-4
+                            && sub == *bs
+                            && (depth2 < *bdepth2
+                                || (depth2 == *bdepth2 && handle.value() < *bh)))
+                }
+            };
+            if better {
+                best = Some((
+                    tier,
+                    d2,
+                    sub,
+                    depth2,
+                    handle.value(),
+                    crate::snap::SnapResult {
+                        world,
+                        screen: iced::Point::new(screen[0], screen[1]),
+                        snap_type,
+                        tangent_obj: None,
+                        extension_base: None,
+                        extension_base2: None,
+                        extension_origin: None,
+                        extension_dir: None,
+                        viewport: None,
+                        source: Some(
+                            crate::command::DimensionAssociationSource::inferred(handle),
+                        ),
+                        secondary_source: None,
+                        model_point: None,
+                    },
+                ));
+            }
+        };
+        for (handle, set) in self.meshes.iter() {
+            let Some(lod) = set.geometry_lods().first() else {
+                continue;
+            };
+            if lod.indices.len() < 3 {
+                continue;
+            }
+            // Screen-space cull from the mesh bounds before touching triangles.
+            let (mut x0, mut y0) = (f32::INFINITY, f32::INFINITY);
+            let (mut x1, mut y1) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+            for corner in [
+                [set.world_aabb[0], set.world_aabb[1], set.z_aabb[0]],
+                [set.world_aabb[2], set.world_aabb[1], set.z_aabb[0]],
+                [set.world_aabb[0], set.world_aabb[3], set.z_aabb[0]],
+                [set.world_aabb[2], set.world_aabb[3], set.z_aabb[0]],
+                [set.world_aabb[0], set.world_aabb[1], set.z_aabb[1]],
+                [set.world_aabb[2], set.world_aabb[1], set.z_aabb[1]],
+                [set.world_aabb[0], set.world_aabb[3], set.z_aabb[1]],
+                [set.world_aabb[2], set.world_aabb[3], set.z_aabb[1]],
+            ] {
+                let s = project(glam::DVec3::new(
+                    corner[0] as f64,
+                    corner[1] as f64,
+                    corner[2] as f64,
+                ));
+                if !finite_screen(s) {
+                    continue;
+                }
+                x0 = x0.min(s[0]);
+                y0 = y0.min(s[1]);
+                x1 = x1.max(s[0]);
+                y1 = y1.max(s[1]);
+            }
+            if cursor[0] < x0 - aperture_px
+                || cursor[0] > x1 + aperture_px
+                || cursor[1] < y0 - aperture_px
+                || cursor[1] > y1 + aperture_px
+            {
+                continue;
+            }
+            for tri in lod.indices.chunks_exact(3) {
+                let mut v = [glam::DVec3::ZERO; 3];
+                let mut ok = true;
+                for (slot, index) in v.iter_mut().zip(tri.iter()) {
+                    let (Some(high), low) = (
+                        lod.verts.get(*index as usize),
+                        lod.verts_low.get(*index as usize).copied().unwrap_or([0.0; 3]),
+                    ) else {
+                        ok = false;
+                        break;
+                    };
+                    *slot = glam::DVec3::new(
+                        high[0] as f64 + low[0] as f64,
+                        high[1] as f64 + low[1] as f64,
+                        high[2] as f64 + low[2] as f64,
+                    );
+                    if !slot.is_finite() {
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                let [a, b, c] = v;
+                let (sa, sb, sc) = (project(a), project(b), project(c));
+                if !(finite_screen(sa) && finite_screen(sb) && finite_screen(sc)) {
+                    continue;
+                }
+                // Per-triangle screen reject before any 3D work.
+                let (tx0, ty0) = (
+                    sa[0].min(sb[0]).min(sc[0]),
+                    sa[1].min(sb[1]).min(sc[1]),
+                );
+                let (tx1, ty1) = (
+                    sa[0].max(sb[0]).max(sc[0]),
+                    sa[1].max(sb[1]).max(sc[1]),
+                );
+                if cursor[0] < tx0 - aperture_px
+                    || cursor[0] > tx1 + aperture_px
+                    || cursor[1] < ty0 - aperture_px
+                    || cursor[1] > ty1 + aperture_px
+                {
+                    continue;
+                }
+                if want_nearest {
+                    let (q, d2, w) = closest_point_on_tri_2d(cursor, sa, sb, sc);
+                    if d2 < radius2 {
+                        let world = a * w[0] as f64 + b * w[1] as f64 + c * w[2] as f64;
+                        consider(SnapType::NearestFace, world, q, d2, *handle);
+                    }
+                }
+                if let Some(base3d) = perp_base {
+                    if let Some(foot) = foot_on_triangle(base3d, a, b, c) {
+                        let sf = project(foot);
+                        if finite_screen(sf) {
+                            let dx = sf[0] - cursor[0];
+                            let dy = sf[1] - cursor[1];
+                            consider(
+                                SnapType::FacePerpendicular,
+                                foot,
+                                sf,
+                                dx * dx + dy * dy,
+                                *handle,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, _, _, _, _, hit)| hit)
+    }
+}
+
 /// Result of `Scene::entity_index()`. The wire path queries `tree` for
 /// view-rect candidates and also always emits `unbounded_handles`
 /// (entities with no usable bbox — legacy `UNBOUNDED_AABB` sentinel).
@@ -5954,7 +6281,7 @@ impl Scene {
                 continue;
             }
             visible_changed.insert(*h);
-            let raw = tessellate_entity(
+            let mut raw = tessellate_entity(
                 &self.document,
                 &empty_sel,
                 style_viewport.or(self.active_viewport),
@@ -5967,6 +6294,10 @@ impl Scene {
                 None,
                 anno_scale_override.is_some(),
             );
+            // Solid B-rep corners snap via the mesh edge list (their wire
+            // path is an empty shell). Enrich before the memo/assembly split
+            // so both share the same snap-bearing wires.
+            self.attach_solid_snaps(*h, &mut raw);
             memo_updates.push((*h, Arc::new(raw.clone())));
             let mut faded = raw;
             self.apply_refedit_fade(&mut faded, bg);
@@ -9905,9 +10236,15 @@ impl Scene {
             let mut out = hit_wires;
             {
                 let mut memo = memo_cell.borrow_mut();
-                for (h, a) in &miss_pairs {
+                for (h, a) in miss_pairs {
+                    // Uniquely owned (just built above): enrich solid shells
+                    // with B-rep vertex snaps before the memo/assembly split.
+                    let mut wires =
+                        Arc::try_unwrap(a).unwrap_or_else(|a| a.as_ref().clone());
+                    self.attach_solid_snaps(h, &mut wires);
+                    let a = Arc::new(wires);
                     out.extend(a.iter().cloned());
-                    memo.insert(*h, Arc::clone(a));
+                    memo.insert(h, Arc::clone(&a));
                 }
             }
             materialize_ms = crate::perf::elapsed_ms(t_materialize);
@@ -10874,7 +11211,7 @@ vis_index={:.1} visible_probe={:.1}",
         let (bg, anno, annotation_scale_handle, blk_cache, paper) = self.tessellation_context();
         // tessellate_one is used for one-off lookups (hit test, properties).
         // Skip culling here so the caller always gets the full geometry.
-        tessellate_entity(
+        let mut wires = tessellate_entity(
             &self.document,
             &self.selected,
             self.active_viewport,
@@ -10886,7 +11223,11 @@ vis_index={:.1} visible_probe={:.1}",
             None,
             None,
             paper,
-        )
+        );
+        // Same solid-corner snaps as the resident paths, so one-off consumers
+        // (overlay changed-wires, edit previews) agree with hit-test/snap.
+        self.attach_solid_snaps(e.common().handle, &mut wires);
+        wires
     }
 
     fn model_space_block_handle(&self) -> Handle {

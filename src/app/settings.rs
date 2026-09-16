@@ -193,7 +193,9 @@ const SNAP_ORDER: &[SnapType] = &[
 ];
 
 /// `$OSMODE` bit for each running object-snap mode.
-/// `None` for OCS-only snaps (Grid, ObjectPick) that have no standard bit.
+/// `None` for OCS-only snaps (Grid, ObjectPick) and the 3D solid snaps
+/// (Vertex, EdgeMidpoint, FaceCenter, Knot, FacePerpendicular, NearestFace),
+/// which live in the separate 3D set and have no standard bit.
 fn snap_bit(s: SnapType) -> Option<i32> {
     Some(match s {
         SnapType::Endpoint => 1,
@@ -209,7 +211,14 @@ fn snap_bit(s: SnapType) -> Option<i32> {
         SnapType::ApparentIntersection => 2048,
         SnapType::Extension => 4096,
         SnapType::Parallel => 8192,
-        SnapType::Grid | SnapType::ObjectPick => return None,
+        SnapType::Grid
+        | SnapType::ObjectPick
+        | SnapType::Vertex
+        | SnapType::EdgeMidpoint
+        | SnapType::FaceCenter
+        | SnapType::Knot
+        | SnapType::FacePerpendicular
+        | SnapType::NearestFace => return None,
     })
 }
 

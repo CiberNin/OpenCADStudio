@@ -627,6 +627,14 @@ pub fn osnap(snap: crate::snap::SnapType) -> &'static [u8] {
         S::Grid => OSNAP_GRID,
         // Not shown in the snap menu; fall back to a neutral marker.
         S::ObjectPick => OSNAP_NEAREST,
+        // 3D modes have no dedicated menu glyphs yet; reuse the closest 2D
+        // shapes (hollow diamond ≈ vertex, hollow triangle ≈ edge midpoint).
+        S::Vertex => OSNAP_NODE,
+        S::EdgeMidpoint => OSNAP_MIDPOINT,
+        S::FaceCenter => OSNAP_CENTER,
+        S::Knot => OSNAP_NODE,
+        S::FacePerpendicular => OSNAP_PERPENDICULAR,
+        S::NearestFace => OSNAP_NEAREST,
     }
 }
 

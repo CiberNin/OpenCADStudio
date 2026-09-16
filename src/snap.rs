@@ -43,6 +43,39 @@ pub enum SnapType {
     Grid,
     /// Object acquisition (domain-object pick, e.g. network structure) — orange marker.
     ObjectPick,
+    /// B-rep corner of a 3D solid. Part of the separate 3D object-snap
+    /// system (`Snapper::snap3d_enabled` + `enabled3d`): the 2D master toggle
+    /// and mode set never catch it.
+    Vertex,
+    /// Centre of a 3D solid B-rep edge. Same separate 3D system as `Vertex`.
+    EdgeMidpoint,
+    /// Centre of a 3D solid B-rep face (loop-vertex average; exact for
+    /// planar faces). Same separate 3D system.
+    FaceCenter,
+    /// NURBS knot location on a spline entity. Same separate 3D system.
+    Knot,
+    /// Foot of the perpendicular from the command base point onto a solid
+    /// face. Same separate 3D system.
+    FacePerpendicular,
+    /// Nearest point on a solid face to the cursor. Same separate 3D system.
+    NearestFace,
+}
+
+impl SnapType {
+    /// True for the separate 3D object-snap system (F4 master + `enabled3d`
+    /// set). The single source of truth — every master-gating check must use
+    /// this rather than listing variants, so new 3D modes stay independent.
+    pub fn is_3d(self) -> bool {
+        matches!(
+            self,
+            SnapType::Vertex
+                | SnapType::EdgeMidpoint
+                | SnapType::FaceCenter
+                | SnapType::Knot
+                | SnapType::FacePerpendicular
+                | SnapType::NearestFace
+        )
+    }
 }
 
 /// Ordered list used by the popup and snap engine.
@@ -63,6 +96,20 @@ pub const ALL_SNAP_MODES: &[(SnapType, &str, &str)] = &[
     // NOTE: Grid is intentionally NOT an object-snap mode. Grid snap is a
     // separate system (`Snapper::grid_snap_on`) so object snap never catches a
     // grid point; it is toggled on its own and handled directly in `snap()`.
+];
+
+/// 3D object-snap modes: solid B-rep features with their own master toggle
+/// (`Snapper::snap3d_enabled`, F4) and mode set (`Snapper::enabled3d`),
+/// configured on the Drafting Settings "3D Object Snap" tab. Deliberately
+/// absent from [`ALL_SNAP_MODES`] so the 2D Select All / Clear All, the snap
+/// popup and `$OSMODE` persistence never touch them.
+pub const ALL_3D_SNAP_MODES: &[(SnapType, &str, &str)] = &[
+    (SnapType::Vertex, "◈", "Vertex"),
+    (SnapType::EdgeMidpoint, "▽", "Midpoint on edge"),
+    (SnapType::FaceCenter, "◉", "Center of face"),
+    (SnapType::Knot, "⬥", "Knot"),
+    (SnapType::FacePerpendicular, "⟂", "Perpendicular to face"),
+    (SnapType::NearestFace, "✦", "Nearest to face"),
 ];
 
 // ── Snap result ───────────────────────────────────────────────────────────
@@ -144,6 +191,11 @@ pub struct Snapper {
     pub snap_enabled: bool,
     /// Which snap modes are configured (used when `snap_enabled` is true).
     pub enabled: HashSet<SnapType>,
+    /// 3D object-snap master toggle (F4). Independent of the 2D master:
+    /// when false, solid B-rep snaps never fire but `enabled3d` is kept.
+    pub snap3d_enabled: bool,
+    /// Which 3D snap modes are configured (used when `snap3d_enabled`).
+    pub enabled3d: HashSet<SnapType>,
     /// Grid snap on/off — a system fully separate from object snap. When on,
     /// `snap()` can pick the nearest grid corner; object snap never does.
     pub grid_snap_on: bool,
@@ -216,9 +268,20 @@ impl Default for Snapper {
         enabled.insert(SnapType::Quadrant);
         enabled.insert(SnapType::Intersection);
         enabled.insert(SnapType::Nearest);
+        let mut enabled3d = HashSet::default();
+        enabled3d.insert(SnapType::Vertex);
+        enabled3d.insert(SnapType::EdgeMidpoint);
+        enabled3d.insert(SnapType::FaceCenter);
+        enabled3d.insert(SnapType::Knot);
+        enabled3d.insert(SnapType::FacePerpendicular);
+        // Nearest-to-face stays off by default: on dense curved solids it
+        // would catch nearly every cursor position, masking the discrete
+        // vertex/edge/face snaps. Opt in via the 3D Object Snap tab.
         Self {
             snap_enabled: false,
             enabled,
+            snap3d_enabled: true,
+            enabled3d,
             grid_snap_on: false,
             grid_spacing: 1.0,
             snap_spacing_x: 10.0,
@@ -387,6 +450,28 @@ impl Snapper {
 
     pub fn toggle_grid_snap(&mut self) {
         self.grid_snap_on = !self.grid_snap_on;
+    }
+
+    /// 3D object snap on/off (F4) — independent of the 2D object-snap master
+    /// and mode set. Only gates the solid B-rep snaps (`Vertex`,
+    /// `EdgeMidpoint`).
+    pub fn snap3d(&self) -> bool {
+        self.snap3d_enabled
+    }
+
+    pub fn toggle_snap3d(&mut self) {
+        self.snap3d_enabled = !self.snap3d_enabled;
+    }
+
+    /// Whether 3D snap mode `t` can fire: master on and mode configured.
+    pub fn is_on_3d(&self, t: SnapType) -> bool {
+        self.snap3d_enabled && self.enabled3d.contains(&t)
+    }
+
+    pub fn toggle_3d(&mut self, t: SnapType) {
+        if !self.enabled3d.remove(&t) {
+            self.enabled3d.insert(t);
+        }
     }
 
     pub fn toggle(&mut self, t: SnapType) {
@@ -1021,6 +1106,8 @@ impl Snapper {
             grid_spacing: self.grid_spacing,
             snap_spacing_x: self.snap_spacing_x,
             snap_spacing_y: self.snap_spacing_y,
+            snap3d_enabled: false,
+            enabled3d: HashSet::default(),
             osnap_radius_px: self.osnap_radius_px,
             otrack_enabled: false,
             tracking_points: Vec::new(),
@@ -1154,9 +1241,10 @@ impl Snapper {
             }
         }
 
-        // Object snaps are gated by the object-snap master toggle. With it off
-        // only the grid result (if any) stands.
-        if !self.snap_enabled {
+        // The 2D object-snap master gates the 2D passes below. With it off,
+        // the grid result (if any) and the independent 3D system still stand.
+        // (`try_pt` drops 2D candidates itself when the master is off.)
+        if !self.snap_enabled && !self.snap3d_enabled {
             return best;
         }
 
@@ -1245,6 +1333,11 @@ impl Snapper {
                           snap_type: SnapType,
                           src: Option<DimensionAssociationSource>,
                           secondary: Option<DimensionAssociationSource>| {
+            // Masters are per-system: 2D candidates need the 2D master, 3D
+            // solid candidates answer only to the F4 master.
+            if !snap_type.is_3d() && !self.snap_enabled {
+                return;
+            }
             let screen = world_to_screen(world, view_rot, eye, bounds);
             if !in_bounds(screen) {
                 return;
@@ -1258,7 +1351,20 @@ impl Snapper {
                 return;
             }
             let (tier, sub) = (snap_tier(snap_type), snap_priority(snap_type));
-            if snap_better(tier, d2, sub, (best_rank, best_d2, best_sub)) {
+            // Coincident 3D features share pixels (top and bottom face
+            // centres coincide in plan view): break exact ties by eye depth
+            // so the nearer one wins instead of whichever was evaluated
+            // first. 2D geometry is coplanar, so this never triggers there.
+            let depth_tie = snap_type.is_3d()
+                && tier == best_rank
+                && (d2 - best_d2).abs() <= 1e-4
+                && sub == best_sub
+                && best.is_some_and(|prev| {
+                    (world - eye).length_squared() < (prev.world - eye).length_squared()
+                });
+            if depth_tie
+                || snap_better(tier, d2, sub, (best_rank, best_d2, best_sub))
+            {
                 best_rank = tier;
                 best_sub = sub;
                 best_d2 = d2;
@@ -1283,15 +1389,27 @@ impl Snapper {
         let mut try_snap_hint = |world: DVec3,
                                  hint: SnapHint,
                                  src: Option<DimensionAssociationSource>| {
-            let snap_type = match hint {
-                SnapHint::Center => SnapType::Center,
-                SnapHint::Node => SnapType::Node,
-                SnapHint::Quadrant => SnapType::Quadrant,
-                SnapHint::Insertion => SnapType::Insertion,
-                SnapHint::Midpoint => SnapType::Midpoint,
-                SnapHint::Endpoint => SnapType::Endpoint,
+            // 3D hints run on the separate 3D master + mode set; everything
+            // else stays on the 2D master + mode set.
+            let (snap_type, on) = match hint {
+                SnapHint::Center => (SnapType::Center, self.is_on(SnapType::Center)),
+                SnapHint::Node => (SnapType::Node, self.is_on(SnapType::Node)),
+                SnapHint::Quadrant => (SnapType::Quadrant, self.is_on(SnapType::Quadrant)),
+                SnapHint::Insertion => (SnapType::Insertion, self.is_on(SnapType::Insertion)),
+                SnapHint::Midpoint => (SnapType::Midpoint, self.is_on(SnapType::Midpoint)),
+                SnapHint::Endpoint => (SnapType::Endpoint, self.is_on(SnapType::Endpoint)),
+                SnapHint::Vertex => (SnapType::Vertex, self.is_on_3d(SnapType::Vertex)),
+                SnapHint::EdgeMidpoint => (
+                    SnapType::EdgeMidpoint,
+                    self.is_on_3d(SnapType::EdgeMidpoint),
+                ),
+                SnapHint::FaceCenter => (
+                    SnapType::FaceCenter,
+                    self.is_on_3d(SnapType::FaceCenter),
+                ),
+                SnapHint::Knot => (SnapType::Knot, self.is_on_3d(SnapType::Knot)),
             };
-            if self.is_on(snap_type) {
+            if on {
                 try_pt(world, snap_type, src, None);
             }
         };
@@ -1857,7 +1975,9 @@ impl Snapper {
         // ── Tangent ────────────────────────────────────────────────────────
         // Operates directly on tangent_geoms geometry — independent of the
         // wire.points rendering structure so polyline segments work correctly.
-        if self.is_on(SnapType::Tangent) {
+        // 2D master applies (the shared `try_pt` gate does not cover this
+        // direct-evaluation pass).
+        if self.snap_enabled && self.is_on(SnapType::Tangent) {
             let mut eval_tangent = |wire: &WireModel| {
                 for tg in &wire.tangent_geoms {
                     let (world_pt, d2) = match tg {
@@ -2097,7 +2217,8 @@ impl Snapper {
         // cursor is near such a curve, offer its centre, ranked by how close
         // the cursor is to the curve. Runs here, after `try_pt`'s borrow ends,
         // so it can update the candidate state directly. (#152)
-        if self.is_on(SnapType::Center) {
+        // 2D master applies (this direct-evaluation pass bypasses `try_pt`).
+        if self.snap_enabled && self.is_on(SnapType::Center) {
             let mut offer = |wire: &WireModel, curve_d2: f32| {
                 let Some(center) = wire
                     .snap_pts
@@ -2225,7 +2346,7 @@ impl Snapper {
 /// among them — a circle's Center must not mask its Quadrants just by rank
 /// (#420). Continuous snaps keep their individual lower tiers, preserving the
 /// #118 guarantee that they never suppress a discrete snap in the aperture.
-fn snap_tier(t: SnapType) -> u8 {
+pub(crate) fn snap_tier(t: SnapType) -> u8 {
     match t {
         SnapType::Endpoint
         | SnapType::Intersection
@@ -2234,7 +2355,17 @@ fn snap_tier(t: SnapType) -> u8 {
         | SnapType::Center
         | SnapType::Node
         | SnapType::Quadrant
-        | SnapType::Insertion => 0,
+        | SnapType::Insertion
+        // Solid B-rep snaps are discrete like the 2D ones above.
+        | SnapType::Vertex
+        | SnapType::EdgeMidpoint
+        | SnapType::FaceCenter
+        | SnapType::Knot => 0,
+        // The face-continuous modes slot alongside their 2D analogues —
+        // without these arms the sub-priority fallback would rank them
+        // below Grid.
+        SnapType::FacePerpendicular => 9,
+        SnapType::NearestFace => 13,
         other => snap_priority(other),
     }
 }
@@ -2266,7 +2397,7 @@ pub fn merge_snap(
 /// candidates are effectively equidistant (coincident features) the classic
 /// sub-priority — so an Endpoint still beats an Intersection sitting on the
 /// exact same point. Distances are screen-px²; 4.0 ≈ a 2 px coincidence band.
-fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
+pub(crate) fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
     let (bt, bd2, bsub) = best;
     if tier != bt {
         return tier < bt;
@@ -2277,7 +2408,7 @@ fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
     sub < bsub
 }
 
-fn snap_priority(t: SnapType) -> u8 {
+pub(crate) fn snap_priority(t: SnapType) -> u8 {
     match t {
         SnapType::Endpoint => 0,
         SnapType::Intersection => 1,
@@ -2294,6 +2425,15 @@ fn snap_priority(t: SnapType) -> u8 {
         SnapType::Extension => 12,
         SnapType::Nearest => 13,
         SnapType::Grid => 14,
+        // 3D discretes sort after the 2D ones so a coincident 2D feature wins
+        // the tie-break; distance still decides first (`snap_better`). The
+        // face-continuous modes slot alongside their 2D analogues.
+        SnapType::Vertex => 15,
+        SnapType::EdgeMidpoint => 16,
+        SnapType::FaceCenter => 17,
+        SnapType::Knot => 18,
+        SnapType::FacePerpendicular => 19,
+        SnapType::NearestFace => 20,
     }
 }
 
@@ -3005,6 +3145,113 @@ fn dist2(a: Point, b: Point) -> f32 {
     dx * dx + dy * dy
 }
 
+/// Closest point on the 2D triangle (a, b, c) to `p`: the point, its squared
+/// distance, and its barycentric weights for (a, b, c) so callers can lift
+/// the result back to 3D. Used to land Nearest-to-face on a projected mesh
+/// triangle.
+pub(crate) fn closest_point_on_tri_2d(
+    p: [f32; 2],
+    a: [f32; 2],
+    b: [f32; 2],
+    c: [f32; 2],
+) -> ([f32; 2], f32, [f32; 3]) {
+    let close = |q: [f32; 2], w: [f32; 3]| {
+        let dx = p[0] - q[0];
+        let dy = p[1] - q[1];
+        (q, dx * dx + dy * dy, w)
+    };
+    // Barycentric region tests (Real-Time Collision Detection §5.1.5).
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ac = [c[0] - a[0], c[1] - a[1]];
+    let ap = [p[0] - a[0], p[1] - a[1]];
+    let d1 = ab[0] * ap[0] + ab[1] * ap[1];
+    let d2 = ac[0] * ap[0] + ac[1] * ap[1];
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return close(a, [1.0, 0.0, 0.0]);
+    }
+    let bp = [p[0] - b[0], p[1] - b[1]];
+    let d3 = ab[0] * bp[0] + ab[1] * bp[1];
+    let d4 = ac[0] * bp[0] + ac[1] * bp[1];
+    if d3 >= 0.0 && d4 <= d3 {
+        return close(b, [0.0, 1.0, 0.0]);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return close([a[0] + v * ab[0], a[1] + v * ab[1]], [1.0 - v, v, 0.0]);
+    }
+    let cp = [p[0] - c[0], p[1] - c[1]];
+    let d5 = ab[0] * cp[0] + ab[1] * cp[1];
+    let d6 = ac[0] * cp[0] + ac[1] * cp[1];
+    if d6 >= 0.0 && d5 <= d6 {
+        return close(c, [0.0, 0.0, 1.0]);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return close([a[0] + w * ac[0], a[1] + w * ac[1]], [1.0 - w, 0.0, w]);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return close(
+            [b[0] + w * (c[0] - b[0]), b[1] + w * (c[1] - b[1])],
+            [0.0, 1.0 - w, w],
+        );
+    }
+    // Inside: barycentric interpolation.
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    close(
+        [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w],
+        [1.0 - v - w, v, w],
+    )
+}
+
+/// Foot of the perpendicular from `base` onto the triangle (a, b, c):
+/// `None` for degenerate triangles, a base already in the face plane
+/// (perpendicular undefined), or a foot landing outside the triangle.
+pub(crate) fn foot_on_triangle(
+    base: glam::DVec3,
+    a: glam::DVec3,
+    b: glam::DVec3,
+    c: glam::DVec3,
+) -> Option<glam::DVec3> {
+    let ab = b - a;
+    let ac = c - a;
+    let n = ab.cross(ac);
+    let n2 = n.length_squared();
+    if !(n2 > 1e-24) {
+        return None;
+    }
+    let dist = (base - a).dot(n) / n2.sqrt();
+    if dist.abs() <= 1e-9 {
+        return None;
+    }
+    let foot = base - n * ((base - a).dot(n) / n2);
+    // Inside test via barycentric areas (tolerant sliver at the rim).
+    let v0 = c - a;
+    let v1 = b - a;
+    let v2 = foot - a;
+    let d00 = v0.dot(v0);
+    let d01 = v0.dot(v1);
+    let d11 = v1.dot(v1);
+    let d20 = v2.dot(v0);
+    let d21 = v2.dot(v1);
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() <= 1e-24 {
+        return None;
+    }
+    let v = (d11 * d20 - d01 * d21) / denom;
+    let w = (d00 * d21 - d01 * d20) / denom;
+    if v >= -1e-9 && w >= -1e-9 && v + w <= 1.0 + 1e-9 {
+        Some(foot)
+    } else {
+        None
+    }
+}
+
 /// The nearest line / polyline segment under the cursor as (unit direction,
 /// world point on it), within `aperture_px` in screen space, or None.
 /// Tessellated curves (circle / arc / ellipse) are skipped — they carry a
@@ -3138,6 +3385,68 @@ fn t_on_segment(p: Point, a: Point, b: Point) -> f32 {
 #[cfg(test)]
 mod ext_tests {
     use super::*;
+
+    #[test]
+    fn closest_point_on_triangle_2d_handles_inside_edge_and_vertex() {
+        let (a, b, c) = ([0.0f32, 0.0], [10.0, 0.0], [0.0, 10.0]);
+        // Interior → itself, with barycentric weights for (a, b, c).
+        let (q, d2, w) = closest_point_on_tri_2d([2.0, 2.0], a, b, c);
+        assert!((q[0] - 2.0).abs() < 1e-6 && (q[1] - 2.0).abs() < 1e-6);
+        assert!(d2 < 1e-12);
+        assert!((w[0] - 0.6).abs() < 1e-6 && (w[1] - 0.2).abs() < 1e-6 && (w[2] - 0.2).abs() < 1e-6);
+        // Outside near an edge → foot on the edge.
+        let (q, d2, w) = closest_point_on_tri_2d([5.0, -3.0], a, b, c);
+        assert!((q[0] - 5.0).abs() < 1e-6 && q[1].abs() < 1e-6);
+        assert!((d2 - 9.0).abs() < 1e-6);
+        assert!(w[2].abs() < 1e-6, "edge AB carries no C weight: {w:?}");
+        // Outside near a vertex → the vertex.
+        let (q, d2, _) = closest_point_on_tri_2d([-4.0, -3.0], a, b, c);
+        assert!(q[0].abs() < 1e-6 && q[1].abs() < 1e-6);
+        assert!((d2 - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn foot_on_triangle_needs_off_plane_base_and_inside_landing() {
+        let (a, b, c) = (
+            DVec3::new(0.0, 0.0, 5.0),
+            DVec3::new(10.0, 0.0, 5.0),
+            DVec3::new(0.0, 10.0, 5.0),
+        );
+        // Base below the face interior → foot straight above it.
+        let foot = foot_on_triangle(DVec3::new(2.0, 3.0, 0.0), a, b, c)
+            .expect("interior foot");
+        assert!((foot - DVec3::new(2.0, 3.0, 5.0)).length() < 1e-9);
+        // Base outside the triangle's span → the foot misses it.
+        assert!(foot_on_triangle(DVec3::new(9.0, 9.0, 0.0), a, b, c).is_none());
+        // Base already in the face plane → perpendicular undefined.
+        assert!(foot_on_triangle(DVec3::new(2.0, 3.0, 5.0), a, b, c).is_none());
+    }
+
+    #[test]
+    fn snap3d_master_and_set_gate_independently_of_2d() {
+        let mut s = Snapper::default();
+        // Defaults: master on; every 3D mode configured except
+        // Nearest-to-face, which would mask the discrete snaps.
+        assert!(s.is_on_3d(SnapType::Vertex));
+        assert!(s.is_on_3d(SnapType::EdgeMidpoint));
+        assert!(!s.is_on_3d(SnapType::NearestFace));
+        // The 2D master has no say over 3D modes.
+        s.snap_enabled = false;
+        assert!(s.is_on_3d(SnapType::Vertex));
+        // Per-mode toggle.
+        s.toggle_3d(SnapType::Vertex);
+        assert!(!s.is_on_3d(SnapType::Vertex));
+        assert!(s.is_on_3d(SnapType::EdgeMidpoint));
+        // Master toggle gates the whole 3D system, keeping the set.
+        s.toggle_snap3d();
+        assert!(!s.is_on_3d(SnapType::EdgeMidpoint));
+        assert!(s.enabled3d.contains(&SnapType::EdgeMidpoint));
+        s.toggle_snap3d();
+        assert!(s.is_on_3d(SnapType::EdgeMidpoint));
+        // 3D modes never leak into the 2D set.
+        assert!(!s.is_on(SnapType::Vertex));
+        assert!(!s.is_on(SnapType::EdgeMidpoint));
+    }
 
     #[test]
     fn tracking_active_covers_otrack_and_extension() {
