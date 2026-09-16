@@ -424,8 +424,14 @@ jobs:
 
       - name: Ad-hoc code-sign the bundle
         run: |
-          codesign --force --deep --sign - --timestamp=none OpenCADStudio.app
-          codesign --verify --strict --verbose=2 OpenCADStudio.app
+          codesign --force --sign - --timestamp=none OpenCADStudio.app/Contents/MacOS/OpenCADStudio-App
+          codesign --force --sign - --timestamp=none \
+            --entitlements crates/dwg-thumbnailer/macos/entitlements.plist \
+            OpenCADStudio.app/Contents/PlugIns/DWGThumbnail.appex
+          codesign --force --sign - --timestamp=none OpenCADStudio.app
+          codesign --verify --deep --strict --verbose=2 OpenCADStudio.app
+          codesign -d --entitlements - OpenCADStudio.app/Contents/PlugIns/DWGThumbnail.appex \
+            | python3 -c 'import plistlib, sys; assert plistlib.load(sys.stdin.buffer).get("com.apple.security.app-sandbox") is True'
 
       - name: Create .dmg
         run: |
