@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } objektů
         }]:
     .target = MOVE Zadejte cíl [základ { $x },{ $y }]:
+    .displacement = MOVE  Zadejte posunutí:
 
 command-copy =
     .array-count = COPY Enter počet položek do pole:
@@ -258,6 +259,8 @@ command-copy =
             [one] zatím { $count } kopie
            *[other] zatím { $count } kopií
         } | Pole | Enter=hotovo | základna { $x },{ $y }]:
+    .displacement = COPY  Zadejte posunutí:
+    .mode = COPY  Zadejte režim kopírování [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Zalomený poloměr

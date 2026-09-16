@@ -245,6 +245,7 @@ command-move =
            *[other] { $count } objecten
         }]:
     .target = MOVE  Geef de bestemming op  [basis { $x },{ $y }]:
+    .displacement = MOVE  Geef verplaatsing op:
 
 command-copy =
     .array-count = COPY Voer het aantal items in de reeks in:
@@ -259,6 +260,8 @@ command-copy =
             [one] { $count } kopie tot nu toe
            *[other] { $count } kopieën tot nu toe
         } | Reeks | Enter=gereed | basis { $x },{ $y }]:
+    .displacement = COPY  Geef verplaatsing op:
+    .mode = COPY  Geef kopieermodus op [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Geknikte straal

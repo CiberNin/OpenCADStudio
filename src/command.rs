@@ -2667,6 +2667,12 @@ pub trait CadCommand: Send {
     /// Default: no-op.
     fn inject_picked_entity(&mut self, _entity: acadrust::EntityType) {}
 
+    /// The host undid one document step on the command's behalf
+    /// (`CmdResult::UndoDocument`) and the command stays active. Commands
+    /// that cache document entities (FILLET, CHAMFER) refresh them here so
+    /// the next pick sees the restored geometry. Default: no-op.
+    fn on_document_undone(&mut self, _document: &acadrust::CadDocument) {}
+
     /// Supply the tessellated surface area associated with the picked entity.
     /// Commands that measure mesh-backed objects can opt in without owning the
     /// scene's render cache.

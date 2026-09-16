@@ -249,6 +249,7 @@ command-move =
            *[other] { $count } كائن
         }]:
     .target = MOVE  حدد الوجهة  [الأساس { $x },{ $y }]:
+    .displacement = MOVE  حدد الإزاحة:
 
 command-copy =
     .array-count = COPY  أدخل عدد عناصر المصفوفة:
@@ -271,6 +272,8 @@ command-copy =
             [many] { $count } نسخة حتى الآن
            *[other] { $count } نسخة حتى الآن
         } | مصفوفة | Enter=إنهاء | الأساس { $x },{ $y }]:
+    .displacement = COPY  حدد الإزاحة:
+    .mode = COPY  أدخل خيار وضع النسخ [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = نصف قطر منكسر

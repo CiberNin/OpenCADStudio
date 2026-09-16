@@ -245,6 +245,7 @@ command-move =
            *[other] { $count } обекта
         }]:
     .target = MOVE  Посочи местоназначение  [база { $x },{ $y }]:
+    .displacement = MOVE  Задайте преместване:
 
 command-copy =
     .array-count = COPY  Въведи брой елементи за масив:
@@ -259,6 +260,8 @@ command-copy =
             [one] { $count } копие досега
            *[other] { $count } копия досега
         } | Масив | Enter=готово | база { $x },{ $y }]:
+    .displacement = COPY  Задайте преместване:
+    .mode = COPY  Въведете режим на копиране [Single/Multiple] <Multiple>:
 common =
     .jogged-radius = Радиус с чупка
     .none-use-shortcuts-set-key-command =   (няма — използвай: SHORTCUTS SET <клавиш> <команда>)

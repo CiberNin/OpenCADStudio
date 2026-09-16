@@ -246,6 +246,7 @@ command-move =
            *[many] { $count } объектов
         }]:
     .target = MOVE  Укажите точку назначения  [база { $x },{ $y }]:
+    .displacement = MOVE  Укажите перемещение:
 
 command-copy =
     .array-count = COPY  Введите число элементов массива:
@@ -262,6 +263,8 @@ command-copy =
             [few] создано { $count } копии
            *[many] создано { $count } копий
         } | Массив | Enter=готово | база { $x },{ $y }]:
+    .displacement = COPY  Укажите перемещение:
+    .mode = COPY  Задайте режим копирования [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Радиус с изломом

@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } 객체
         }]:
     .target = MOVE 대상 지정 [기본 { $x },{ $y }]:
+    .displacement = MOVE  변위 지정:
 
 command-copy =
     .array-count = COPY Enter 배열할 항목 수:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } 지금까지 복사
            *[other] { $count } 지금까지의 사본
         } | 배열 | Enter=완료 | 베이스 { $x },{ $y }]:
+    .displacement = COPY  변위 지정:
+    .mode = COPY  복사 모드 옵션 입력 [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = 꺾인 반지름

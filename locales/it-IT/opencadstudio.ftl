@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } oggetti
         }]:
     .target = MOVE Specificare la destinazione [base { $x },{ $y }]:
+    .displacement = MOVE  Specificare spostamento:
 
 command-copy =
     .array-count = COPY Enter numero di elementi da mettere in serie:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } copia finora
            *[other] { $count } copie finora
         } | Serie | Enter=completato | base { $x },{ $y }]:
+    .displacement = COPY  Specificare spostamento:
+    .mode = COPY  Specificare modalità di copia [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Raggio spezzato

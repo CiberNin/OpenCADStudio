@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } objektit
         }]:
     .target = MOVE Määritä kohde [tukikohta { $x },{ $y }]:
+    .displacement = MOVE  Määritä siirtymä:
 
 command-copy =
     .array-count = COPY Enter taulukon kohteiden määrä:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } kopio tähän mennessä
            *[other] { $count } kopiot tähän mennessä
         } | taulukko | Enter=valmis | pohja { $x },{ $y }]:
+    .displacement = COPY  Määritä siirtymä:
+    .mode = COPY  Valitse kopiointitila [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Katkaistu säde

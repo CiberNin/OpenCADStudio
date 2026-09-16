@@ -241,12 +241,15 @@ area =
 command-move =
     .base = MOVE  आधार बिंदु निर्दिष्ट करें  [{ $count } ऑब्जेक्ट]:
     .target = MOVE  गंतव्य निर्दिष्ट करें  [आधार { $x },{ $y }]:
+    .displacement = MOVE  विस्थापन निर्दिष्ट करें:
 
 command-copy =
     .array-count = COPY  ऐरे में आइटमों की संख्या दर्ज करें:
     .base = COPY  आधार बिंदु निर्दिष्ट करें  [{ $count } ऑब्जेक्ट]:
     .array-target = COPY  { $count }-आइटम ऐरे के लिए दूसरा बिंदु निर्दिष्ट करें  [आधार { $x },{ $y }]:
     .target = COPY  गंतव्य निर्दिष्ट करें  [अब तक { $count } प्रतियाँ | ऐरे | Enter=पूर्ण | आधार { $x },{ $y }]:
+    .displacement = COPY  विस्थापन निर्दिष्ट करें:
+    .mode = COPY  कॉपी मोड विकल्प दर्ज करें [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = मोड़ वाला त्रिज्या माप

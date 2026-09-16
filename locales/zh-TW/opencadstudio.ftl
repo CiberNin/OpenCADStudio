@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } 個物件
         }]：
     .target = MOVE  指定目標點  [基點 { $x },{ $y }]：
+    .displacement = MOVE  指定位移:
 
 command-copy =
     .array-count = COPY  輸入陣列項目數：
@@ -258,6 +259,8 @@ command-copy =
             [one] 目前 { $count } 個複本
            *[other] 目前 { $count } 個複本
         } | 陣列 | Enter=完成 | 基準點 { $x },{ $y }]：
+    .displacement = COPY  指定位移:
+    .mode = COPY  輸入複製模式選項 [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = 折彎半徑

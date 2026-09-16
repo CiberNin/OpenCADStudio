@@ -245,6 +245,7 @@ command-move =
            *[other] { $count } objets
         }] :
     .target = MOVE  Spécifiez la destination  [base { $x },{ $y }] :
+    .displacement = MOVE  Spécifiez le déplacement :
 
 command-copy =
     .array-count = COPY  Saisissez le nombre d'éléments du réseau :
@@ -259,6 +260,8 @@ command-copy =
             [one] { $count } copie jusqu'ici
            *[other] { $count } copies jusqu'ici
         } | Réseau | Entrée=terminer | base { $x },{ $y }] :
+    .displacement = COPY  Spécifiez le déplacement :
+    .mode = COPY  Entrez le mode de copie [Single/Multiple] <Multiple> :
 
 common =
     .jogged-radius = Rayon raccourci

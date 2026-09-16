@@ -245,6 +245,7 @@ command-move =
            *[other] { $count } Objekte
         }]:
     .target = MOVE  Zielpunkt angeben  [Basis { $x },{ $y }]:
+    .displacement = MOVE  Verschiebung angeben:
 
 command-copy =
     .array-count = COPY  Anzahl der Elemente im Array eingeben:
@@ -259,6 +260,8 @@ command-copy =
             [one] bisher { $count } Kopie
            *[other] bisher { $count } Kopien
         } | Array | Eingabe=fertig | Basis { $x },{ $y }]:
+    .displacement = COPY  Verschiebung angeben:
+    .mode = COPY  Kopiermodus eingeben [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Geknickter Radius

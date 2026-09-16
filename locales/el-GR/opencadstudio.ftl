@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } αντικείμενα
         }]:
     .target = MOVE  Ορίστε προορισμό  [βάση { $x },{ $y }]:
+    .displacement = MOVE  Ορίστε μετατόπιση:
 
 command-copy =
     .array-count = COPY  Δώστε πλήθος στοιχείων διάταξης:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } αντίγραφο μέχρι τώρα
            *[other] { $count } αντίγραφα μέχρι τώρα
         } | Διάταξη | Enter=τέλος | βάση { $x },{ $y }]:
+    .displacement = COPY  Ορίστε μετατόπιση:
+    .mode = COPY  Επιλέξτε λειτουργία αντιγραφής [Single/Multiple] <Multiple>:
 
 common =
     .revolve-created-objects-failed-sources = REVOLVE: δημιουργήθηκαν __ocs_arg_created__ αντικείμενα· __ocs_arg_failed__ αρχικά αντικείμενα δεν μπόρεσαν να περιστραφούν.

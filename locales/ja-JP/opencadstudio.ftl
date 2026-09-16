@@ -242,6 +242,7 @@ command-move =
     .base =
         MOVE  基点を指定  [{ $count } 個のオブジェクト]:
     .target = MOVE  移動先を指定  [基点 { $x },{ $y }]:
+    .displacement = MOVE  変位を指定:
 
 command-copy =
     .array-count = COPY  配列複写する項目数を入力:
@@ -249,6 +250,8 @@ command-copy =
         COPY  基点を指定  [{ $count } 個のオブジェクト]:
     .array-target = COPY  { $count } 項目の配列複写の2点目を指定  [基点 { $x },{ $y }]:
     .target = COPY  移動先を指定  [これまでに { $count } 個複写 | 配列 | Enter=完了 | 基点 { $x },{ $y }]:
+    .displacement = COPY  変位を指定:
+    .mode = COPY  コピーモードを入力 [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = 折れ曲がり半径

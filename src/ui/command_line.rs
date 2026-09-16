@@ -71,15 +71,28 @@ fn mcp_status(enabled: bool, busy: bool) -> (&'static str, Color) {
 }
 
 /// Drop a prompt's "[A / B / …]" option listing — used for the pinned line
-/// when the same options render as clickable buttons beside it. Collapses the
-/// leftover double spaces and the orphaned " :" the removal leaves behind.
-fn strip_option_listing(s: &str) -> String {
+/// when the same options render as clickable buttons beside it. Only a
+/// bracket group that reads as a listing goes (several choices, or a single
+/// choice that is one of `options`); an informational group such as
+/// "[3 objects]" or "[base 1.0,2.0]" stays. Collapses the leftover double
+/// spaces and the orphaned " :" the removal leaves behind.
+fn strip_option_listing(s: &str, options: &[CmdOption]) -> String {
     let Some(a) = s.find('[') else {
         return s.to_string();
     };
     let Some(off) = s[a..].find(']') else {
         return s.to_string();
     };
+    let inner = s[a + 1..a + off].trim();
+    let is_listing = inner.contains('/')
+        || inner.contains('|')
+        || inner.contains('=')
+        || options.iter().any(|o| {
+            o.label.eq_ignore_ascii_case(inner) || o.keyword.eq_ignore_ascii_case(inner)
+        });
+    if !is_listing {
+        return s.to_string();
+    }
     let mut out = format!("{}{}", &s[..a], &s[a + off + 1..]);
     while out.contains("  ") {
         out = out.replace("  ", " ");
@@ -638,7 +651,7 @@ impl CommandLine {
                 // already name every choice, so the prompt's own "[A / B / …]"
                 // listing is dropped here (the history log keeps the full text).
                 if entry.pinned && !self.step_options.is_empty() {
-                    let shown = strip_option_listing(&entry.text);
+                    let shown = strip_option_listing(&entry.text, &self.step_options);
                     let mut r = row![entry_text(shown)].spacing(6).align_y(iced::Center);
                     for opt in &self.step_options {
                         let btn = button(text(opt.label.to_uppercase()).size(11))

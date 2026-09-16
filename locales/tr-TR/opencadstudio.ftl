@@ -238,12 +238,15 @@ area =
 command-move =
     .base = MOVE  Temel noktayı belirtin  [{ $count } nesne]:
     .target = MOVE  Hedef noktayı belirtin  [temel { $x },{ $y }]:
+    .displacement = MOVE  Yer değiştirmeyi belirtin:
 
 command-copy =
     .array-count = COPY  Dizideki öğe sayısını girin:
     .base = COPY  Temel noktayı belirtin  [{ $count } nesne]:
     .array-target = COPY  { $count } öğeli dizi için ikinci noktayı belirtin  [temel { $x },{ $y }]:
     .target = COPY  Hedef noktayı belirtin  [şimdiye kadar { $count } kopya | Dizi | Enter=tamam | temel { $x },{ $y }]:
+    .displacement = COPY  Yer değiştirmeyi belirtin:
+    .mode = COPY  Kopyalama modu seçin [Single/Multiple] <Multiple>:
 
 common =
     .none-use-shortcuts-set-key-command = (none – use: SHORTCUTS SET <key> <command>)

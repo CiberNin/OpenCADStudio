@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } objektumok
         }]:
     .target = MOVE Adja meg a rendeltetési helyet [bázis { $x },{ $y }]:
+    .displacement = MOVE  Adja meg az eltolást:
 
 command-copy =
     .array-count = COPY Enter a tömbben lévő elemek száma:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } példány eddig
            *[other] { $count } példányok eddig
         } | tömb | Enter=kész | alap { $x },{ $y }]:
+    .displacement = COPY  Adja meg az eltolást:
+    .mode = COPY  Adja meg a másolási módot [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Tört sugarú méret

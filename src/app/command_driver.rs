@@ -6599,6 +6599,12 @@ impl OpenCADStudio {
                         }
                     }
                 }
+                {
+                    let tab = &mut self.tabs[i];
+                    if let Some(command) = tab.active_cmd.as_mut() {
+                        command.on_document_undone(&tab.scene.document);
+                    }
+                }
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                 if let Some(p) = prompt {
                     self.command_line.push_info(&p);

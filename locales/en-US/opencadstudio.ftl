@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } objects
         }]:
     .target = MOVE  Specify destination  [base { $x },{ $y }]:
+    .displacement = MOVE  Specify displacement:
 
 command-copy =
     .array-count = COPY  Enter number of items to array:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } copy so far
            *[other] { $count } copies so far
         } | Array | Enter=done | base { $x },{ $y }]:
+    .displacement = COPY  Specify displacement:
+    .mode = COPY  Enter a copy mode option [Single/Multiple] <Multiple>:
 
 common =
     .none-use-shortcuts-set-key-command =   (none — use: SHORTCUTS SET <key> <command>)

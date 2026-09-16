@@ -245,6 +245,7 @@ command-move =
            *[other] { $count } objetos
         }]:
     .target = MOVE  Especifique el destino  [base { $x },{ $y }]:
+    .displacement = MOVE  Precise desplazamiento:
 
 command-copy =
     .array-count = COPY  Introduzca el número de elementos de la matriz:
@@ -259,6 +260,8 @@ command-copy =
             [one] { $count } copia hasta ahora
            *[other] { $count } copias hasta ahora
         } | Matriz | Enter=terminar | base { $x },{ $y }]:
+    .displacement = COPY  Precise desplazamiento:
+    .mode = COPY  Indique modo de copia [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Radio con recodo

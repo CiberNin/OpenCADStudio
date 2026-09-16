@@ -244,6 +244,7 @@ command-move =
            *[other] { $count } obiekty
         }]:
     .target = MOVE Określ miejsce docelowe [podstawa { $x },{ $y }]:
+    .displacement = MOVE  Określ przesunięcie:
 
 command-copy =
     .array-count = COPY Enter liczba elementów do tablicy:
@@ -258,6 +259,8 @@ command-copy =
             [one] { $count } kopia do tej pory
            *[other] { $count } kopii do tej pory
         } | Tablica | Enter=gotowe | baza { $x },{ $y }]:
+    .displacement = COPY  Określ przesunięcie:
+    .mode = COPY  Podaj tryb kopiowania [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Promień łamany

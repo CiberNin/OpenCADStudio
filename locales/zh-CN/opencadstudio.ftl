@@ -240,12 +240,15 @@ area =
 command-move =
     .base = MOVE  指定基点  [{ $count } 个对象]：
     .target = MOVE  指定目标点  [基点 { $x },{ $y }]：
+    .displacement = MOVE  指定位移:
 
 command-copy =
     .array-count = COPY  输入阵列项目数：
     .base = COPY  指定基点  [{ $count } 个对象]：
     .array-target = COPY  为 { $count } 项阵列指定第二点  [基点 { $x },{ $y }]：
     .target = COPY  指定目标点  [已复制 { $count } 个 | 阵列 | 回车=完成 | 基点 { $x },{ $y }]：
+    .displacement = COPY  指定位移:
+    .mode = COPY  输入复制模式选项 [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = 折弯半径

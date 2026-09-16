@@ -245,6 +245,7 @@ command-move =
            *[other] { $count } objetos
         }]:
     .target = MOVE  Especifique o destino  [base { $x },{ $y }]:
+    .displacement = MOVE  Especifique o deslocamento:
 
 command-copy =
     .array-count = COPY  Informe a quantidade de itens da matriz:
@@ -259,6 +260,8 @@ command-copy =
             [one] { $count } cópia até agora
            *[other] { $count } cópias até agora
         } | Matriz | Enter=concluir | base { $x },{ $y }]:
+    .displacement = COPY  Especifique o deslocamento:
+    .mode = COPY  Informe o modo de cópia [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Raio com desvio
