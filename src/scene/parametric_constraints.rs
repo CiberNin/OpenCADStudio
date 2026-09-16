@@ -83,21 +83,29 @@ impl ParametricRef {
     }
 }
 
-/// Point references temporarily pinned while solving a native grip edit.
-/// Both endpoints of an edited line are exact inputs: the opposite endpoint
-/// stays fixed while the grabbed endpoint follows the cursor.
+/// Grabbed points are exact kernel inputs; the solver anchors the remaining
+/// endpoint coordinates according to the line's directional constraints.
 pub(crate) fn grip_solve_anchor_refs(
     entity: &acadrust::EntityType,
     handle: Handle,
     grip_id: usize,
 ) -> Vec<ParametricRef> {
     match entity {
-        acadrust::EntityType::Line(_) if grip_id <= 1 => vec![
-            ParametricRef::point(handle, 0),
-            ParametricRef::point(handle, 1),
-        ],
+        acadrust::EntityType::Line(_) if grip_id <= 1 => {
+            vec![ParametricRef::point(handle, grip_id as i32)]
+        }
         acadrust::EntityType::LwPolyline(polyline) if grip_id < polyline.vertices.len() => {
             vec![ParametricRef::point(handle, grip_id as i32)]
+        }
+        acadrust::EntityType::LwPolyline(polyline) => {
+            let segment = grip_id - polyline.vertices.len();
+            if polyline.vertices.get(segment).is_some_and(|vertex| vertex.bulge.abs() < 1e-9)
+                && (segment + 1 < polyline.vertices.len() || polyline.is_closed)
+            {
+                vec![ParametricRef::segment(handle, segment)]
+            } else {
+                Vec::new()
+            }
         }
         acadrust::EntityType::Polyline2D(polyline) if grip_id < polyline.vertices.len() => {
             vec![ParametricRef::point(handle, grip_id as i32)]

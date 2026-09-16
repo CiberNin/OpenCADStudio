@@ -1766,6 +1766,37 @@ fn retained_radius(entity: &EntityType) -> Option<f64> {
     }
 }
 
+/// Propagate explicit axis constraints through parallel/perpendicular relations.
+fn constrained_line_axes(set: &ParametricConstraintSet) -> HashMap<ParametricRef, bool> {
+    let mut axes = HashMap::new();
+    for c in set.constraints.iter().filter(|c| c.enabled) {
+        if let [reference] = c.refs.as_slice() {
+            if matches!(c.kind, ConstraintKind::Horizontal | ConstraintKind::Vertical) {
+                axes.insert(*reference, c.kind == ConstraintKind::Vertical);
+            }
+        }
+    }
+    loop {
+        let before = axes.len();
+        for c in set.constraints.iter().filter(|c| c.enabled) {
+            if !matches!(c.kind, ConstraintKind::Parallel | ConstraintKind::Perpendicular | ConstraintKind::Colinear) {
+                continue;
+            }
+            let [a, b] = c.refs.as_slice() else { continue };
+            let perpendicular = c.kind == ConstraintKind::Perpendicular;
+            if let Some(axis) = axes.get(a).copied() {
+                axes.entry(*b).or_insert(axis ^ perpendicular);
+            }
+            if let Some(axis) = axes.get(b).copied() {
+                axes.entry(*a).or_insert(axis ^ perpendicular);
+            }
+        }
+        if before == axes.len() {
+            return axes;
+        }
+    }
+}
+
 /// Rebuilds `set`'s entire `cadkernel_constraints::System` from current document
 /// geometry, solves it, and returns the resulting entity states for every
 /// handle whose registered coordinates actually moved beyond floating-point
@@ -1793,6 +1824,7 @@ fn solve_scope(
     };
     let mut sys = System::new();
     let mut cache: HashMap<Handle, EntityGeom> = HashMap::new();
+    let line_axes = if retain_lengths { HashMap::new() } else { constrained_line_axes(set) };
     // Tracks which system-level `cadkernel_constraints` constraint(s) came from which
     // `ParametricConstraint` — a `SubSystem`'s redundant-row indices (from
     // `cadkernel_constraints::diagnosis`) are local to that partition's own constraint
@@ -1804,6 +1836,23 @@ fn solve_scope(
     let mut owner: Vec<(Rc<dyn Constraint>, ConstraintId)> = Vec::new();
 
     for c in &set.constraints {
+        if c.enabled && matches!(c.kind, ConstraintKind::Parallel | ConstraintKind::Perpendicular)
+            && c.refs.len() == 2 && c.refs.iter().all(|r| line_axes.contains_key(r))
+            && (line_axes[&c.refs[0]] ^ line_axes[&c.refs[1]]) == (c.kind == ConstraintKind::Perpendicular)
+            && refs_share_supported_plane(document, &c.refs)
+            && c.refs.iter().all(|reference| {
+                match resolve_ref(document, &mut sys, &mut cache, *reference) {
+                    Some(EntityGeom::Line(_)) => true,
+                    Some(geometry @ EntityGeom::Polyline { .. }) => reference.segment_index()
+                        .and_then(|index| geometry.line_segment(index)).is_some(),
+                    _ => false,
+                }
+            })
+        {
+            // Implied axis equations below replace normalized angle equations,
+            // which become ill-conditioned when a dragged edge crosses zero.
+            continue;
+        }
         let tangent_side = retained_tangent_side(document, retained_before, c);
         let tangent_point = (c.kind == ConstraintKind::Tangent && c.refs.len() == 2
             && c.refs[0].entity != c.refs[1].entity
@@ -1835,6 +1884,126 @@ fn solve_scope(
         .any(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth);
     if cache.is_empty() && !has_smooth {
         return None;
+    }
+
+    let mut anchors = driven_refs.to_vec();
+    if !retain_lengths {
+        let mut axis_lines: Vec<_> = line_axes.into_iter().filter_map(|(reference, vertical)| {
+            let geometry = cache.get(&reference.entity)?;
+            let line = match geometry {
+                EntityGeom::Line(line) => *line,
+                EntityGeom::Polyline { .. } => geometry.line_segment(reference.segment_index()?)?,
+                _ => return None,
+            };
+            Some((reference, line, vertical))
+        }).collect();
+        axis_lines.sort_by_key(|(reference, _, _)| (reference.entity.value(), reference.marker));
+        let driven_points: Vec<_> = driven_refs.iter().filter_map(|reference|
+            resolve_constraint_point(document, &mut sys, &mut cache, *reference)).collect();
+        let coincident: Vec<_> = set.constraints.iter().filter(|c|
+            c.enabled && c.kind == ConstraintKind::Coincident).filter_map(|c| {
+                let [a, b] = c.refs.as_slice() else { return None };
+                Some((resolve_constraint_point(document, &mut sys, &mut cache, *a)?,
+                    resolve_constraint_point(document, &mut sys, &mut cache, *b)?))
+            }).collect();
+        let point_group = |point| {
+            let mut points = vec![point];
+            let mut cursor = 0;
+            while cursor < points.len() {
+                for (a, b) in &coincident {
+                    let next = if points[cursor] == *a { Some(*b) }
+                        else if points[cursor] == *b { Some(*a) } else { None };
+                    if let Some(next) = next.filter(|next| !points.contains(next)) {
+                        points.push(next);
+                    }
+                }
+                cursor += 1;
+            }
+            points
+        };
+        let perpendicular: Vec<_> = set.constraints.iter().filter(|c|
+            c.enabled && c.kind == ConstraintKind::Perpendicular && c.refs.len() == 2).collect();
+        let mut retained_axes = HashSet::new();
+        for point in &driven_points {
+            let group = point_group(*point);
+            let incident: Vec<_> = axis_lines.iter().filter(|(_, line, _)|
+                group.contains(&line.p1) || group.contains(&line.p2)).collect();
+            if incident.is_empty() {
+                continue;
+            }
+            let common_corner = perpendicular.iter().any(|c| c.refs.iter()
+                .all(|reference| incident.iter().any(|(r, _, _)| r == reference)));
+            if common_corner && retain_size {
+                // The shared right-angle corner carries its two legs together.
+                retained_axes.extend([false, true]);
+                continue;
+            }
+            let free_legs: Vec<_> = incident.iter().copied().filter(|(reference, _, _)|
+                perpendicular.iter().any(|c| c.refs.contains(reference))).collect();
+            let editable = if free_legs.is_empty() { &incident } else { &free_legs };
+            retained_axes.extend([false, true].into_iter().filter(|axis|
+                !editable.iter().any(|(_, _, vertical)| vertical == axis)));
+            for (reference, line, vertical) in editable.iter().copied() {
+                let opposite = if group.contains(&line.p1) { line.p2 } else { line.p1 };
+                if !driven_points.contains(&opposite) {
+                    let parameter = if *vertical { opposite.y } else { opposite.x };
+                    // Only the along-edge coordinate stays fixed. The normal
+                    // coordinate follows the grabbed point through the kernel.
+                    if let Some(original) = retained_before.get(&reference.entity) {
+                        let points = super::dimension_assoc::source_points(original);
+                        let start = reference.segment_index().unwrap_or(0);
+                        let index = if opposite == line.p1 { start } else { (start + 1) % points.len().max(1) };
+                        if let Some(point) = points.get(index) {
+                            sys.store_mut().set(parameter, if *vertical { point.y } else { point.x });
+                        }
+                    }
+                    sys.store_mut().set_driven(parameter, true);
+                }
+            }
+        }
+        for (reference, line, vertical) in &axis_lines {
+            // These implied linear equations remain defined even while an
+            // edge crosses zero length; cross-product equations do not.
+            let (a, b) = if *vertical { (line.p1.x, line.p2.x) } else { (line.p1.y, line.p2.y) };
+            sys.add_constraint(Rc::new(Equal::new(a, b, 1.0)));
+            let paired_edge_is_dragged = set.constraints.iter().any(|c| {
+                c.enabled && c.kind == ConstraintKind::Parallel && c.refs.contains(reference)
+                    && c.refs.iter().any(|other| other != reference && driven_refs.contains(other))
+            });
+            if paired_edge_is_dragged && !driven_refs.contains(reference) {
+                // Moving a whole edge changes its separation from the opposite
+                // parallel edge, whose normal coordinate remains the reference.
+                if let Some(original) = retained_before.get(&reference.entity) {
+                    let points = super::dimension_assoc::source_points(original);
+                    if let Some(point) = points.get(reference.segment_index().unwrap_or(0)) {
+                        sys.store_mut().set(a, if *vertical { point.x } else { point.y });
+                        sys.store_mut().set_driven(a, true);
+                    }
+                }
+            }
+            if retain_size && retained_axes.contains(vertical) {
+                let Some(original) = retained_before.get(&reference.entity) else { continue };
+                let points = super::dimension_assoc::source_points(original);
+                let index = reference.segment_index().unwrap_or(0);
+                let (Some(a), Some(b)) = (points.get(index), points.get(index + 1).or_else(|| points.first()))
+                    else { continue };
+                let (a_param, b_param, delta) = if *vertical {
+                    (line.p1.y, line.p2.y, b.y - a.y)
+                } else {
+                    (line.p1.x, line.p2.x, b.x - a.x)
+                };
+                let target = sys.add_param(delta, true);
+                sys.add_constraint(Rc::new(Difference::new(a_param, b_param, target)));
+            }
+        }
+        for reference in driven_refs {
+            if matches!(document.get_entity(reference.entity), Some(EntityType::Line(_)))
+                && matches!(reference.marker, Some(0 | 1))
+                && !axis_lines.iter().any(|(line_ref, _, _)| line_ref.entity == reference.entity)
+            {
+                anchors.push(ParametricRef::point(reference.entity, 1 - reference.marker.unwrap()));
+            }
+        }
     }
 
     // Grip edits retain radii while connected lines resize to meet their
@@ -2000,7 +2169,7 @@ fn solve_scope(
     // geometry parameters as driven keeps them exact and out of the solver's
     // free-variable list; an approximate equality equation would still allow
     // visible drift after repeated grip frames.
-    for reference in driven_refs {
+    for reference in &anchors {
         if !set
             .constraints
             .iter()
@@ -2008,7 +2177,12 @@ fn solve_scope(
         {
             continue;
         }
-        let params_to_pin = if reference.marker.is_some() && reference.segment_index().is_none() {
+        let params_to_pin = if let Some(index) = reference.segment_index() {
+            resolve_ref(document, &mut sys, &mut cache, *reference)
+                .and_then(|geometry| geometry.line_segment(index))
+                .map(|line| vec![line.p1.x, line.p1.y, line.p2.x, line.p2.y])
+                .unwrap_or_default()
+        } else if reference.marker.is_some() {
             resolve_constraint_point(document, &mut sys, &mut cache, *reference)
                 .map(|point| vec![point.x, point.y])
                 .unwrap_or_default()
@@ -2724,6 +2898,46 @@ mod tests {
     use super::Scene;
     use acadrust::entities::EntityType;
     use acadrust::types::Vector3;
+
+    #[test]
+    fn perpendicular_line_grips_distinguish_shared_corner_and_free_ends() {
+        use acadrust::entities::Line;
+        for (vertical, marker) in [(false, 0), (false, 1), (true, 1)] {
+            let mut scene = Scene::new();
+            let a = scene.add_entity(EntityType::Line(Line::from_points(
+                Vector3::ZERO, Vector3::new(4.0, 0.0, 0.0))));
+            let b = scene.add_entity(EntityType::Line(Line::from_points(
+                Vector3::ZERO, Vector3::new(0.0, 2.0, 0.0))));
+            let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+            set.add(ConstraintKind::Horizontal, vec![ParametricRef::whole(a)], None);
+            set.add(ConstraintKind::Perpendicular, vec![ParametricRef::whole(a), ParametricRef::whole(b)], None);
+            set.add(ConstraintKind::Coincident, vec![ParametricRef::point(a, 0), ParametricRef::point(b, 0)], None);
+            let originals = [a, b].map(|handle| (handle, scene.document.get_entity(handle).unwrap().clone()));
+            let handle = if vertical { b } else { a };
+            let target = Vector3::new(6.0, 3.0, 0.0);
+            let Some(EntityType::Line(line)) = scene.document.get_entity_mut(handle) else { panic!("line") };
+            if marker == 0 { line.start = target; } else { line.end = target; }
+            let solved = scene.solve_parametric_constraints_preview(
+                &[handle], &[ParametricRef::point(handle, marker)], true, &originals);
+            for (handle, entity) in solved {
+                *scene.document.get_entity_mut(handle).unwrap() = entity;
+            }
+            let expected = if marker == 0 {
+                [[target, Vector3::new(10.0, 3.0, 0.0)], [target, Vector3::new(6.0, 5.0, 0.0)]]
+            } else if vertical {
+                [[Vector3::new(6.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0)],
+                 [Vector3::new(6.0, 0.0, 0.0), target]]
+            } else {
+                [[Vector3::new(0.0, 3.0, 0.0), target],
+                 [Vector3::new(0.0, 3.0, 0.0), Vector3::new(0.0, 5.0, 0.0)]]
+            };
+            for (handle, points) in [a, b].into_iter().zip(expected) {
+                let Some(EntityType::Line(line)) = scene.document.get_entity(handle) else { panic!("line") };
+                assert!((line.start - points[0]).length() < 1e-7, "{vertical}/{marker}: {line:?}");
+                assert!((line.end - points[1]).length() < 1e-7, "{vertical}/{marker}: {line:?}");
+            }
+        }
+    }
 
     #[test]
     fn validation_rejects_unsupported_entity_shapes_and_planes() {

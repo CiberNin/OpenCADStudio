@@ -6236,7 +6236,7 @@ mod selection_preview_tests {
     }
 
     #[test]
-    fn constrained_polyline_vertex_grip_reshapes_instead_of_translating() {
+    fn constrained_rectangle_grips_distinguish_perpendicular_corner_and_free_ends() {
         use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef, ParametricScope};
         use acadrust::{entities::LwPolyline, types::Vector2, EntityType};
 
@@ -6248,6 +6248,7 @@ mod selection_preview_tests {
         app.snapper.otrack_enabled = false;
         app.ortho_mode = false;
         app.polar_mode = false;
+        app.constraint_solve_mode = true;
         app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
         let mut rectangle = LwPolyline::from_points(vec![
             Vector2::new(0.0, 0.0),
@@ -6262,6 +6263,14 @@ mod selection_preview_tests {
         set.add(ConstraintKind::Parallel, vec![ParametricRef::segment(handle, 1), ParametricRef::segment(handle, 3)], None);
         set.add(ConstraintKind::Perpendicular, vec![ParametricRef::segment(handle, 3), ParametricRef::segment(handle, 2)], None);
         set.add(ConstraintKind::Horizontal, vec![ParametricRef::segment(handle, 2)], None);
+        let handle = if let Ok(path) = std::env::var("OCS_GRIP_TEST_DRAWING") {
+            let result = app.automation_op(&serde_json::json!({"op":"open","path":path}).to_string());
+            assert_eq!(result["ok"], true, "{result}");
+            app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+            Handle::new(0x556)
+        } else {
+            handle
+        };
         let vertices = |app: &OpenCADStudio| {
             let EntityType::LwPolyline(polyline) =
                 app.tabs[i].scene.document.get_entity(handle).unwrap()
@@ -6271,27 +6280,82 @@ mod selection_preview_tests {
             polyline.vertices.iter().map(|vertex| vertex.location).collect::<Vec<_>>()
         };
         let before = vertices(&app);
-        app.tabs[i].active_grip = Some(GripEdit::single(handle, 0, false, glam::DVec3::ZERO));
+        let height = before[3].y - before[0].y;
+        let width = before[1].x - before[0].x;
+        for grip_id in 0..8 {
+        let vertex = if grip_id < 4 { before[grip_id] }
+            else { (before[grip_id - 4] + before[(grip_id - 3) % 4]) * 0.5 };
+        let origin = glam::DVec3::new(vertex.x, vertex.y, 0.0);
+        app.tabs[i].active_grip = Some(GripEdit::single(handle, grip_id, grip_id >= 4, origin));
+        for offset in [[-1.0, height], [-1.0, 3.0], [-2.0, 6.0], [-2.0, 6.0], [1.0, -4.0]] {
+            let target = origin + glam::DVec3::new(offset[0], offset[1], 0.0);
+            let cursor = app.tabs[i].scene.camera.borrow().project(target,
+                iced::Rectangle::with_size(iced::Size::new(800.0, 600.0))).unwrap();
+            let _ = app.on_viewport_move(Point::new(cursor.x, cursor.y));
+            let after = vertices(&app);
+            let (left, right, bottom, top) = match grip_id {
+                0 => (target.x, target.x + width, target.y, before[3].y),
+                1 => (before[0].x, target.x, target.y, before[3].y),
+                2 => (before[0].x, target.x, target.y - height, target.y),
+                3 => (target.x, target.x + width, target.y - height, target.y),
+                4 => (before[0].x + offset[0], before[1].x + offset[0], target.y, before[3].y),
+                5 => (before[0].x, target.x, before[0].y + offset[1], before[3].y + offset[1]),
+                6 => (before[0].x + offset[0], before[1].x + offset[0], before[0].y, target.y),
+                7 => (target.x, before[1].x, before[0].y + offset[1], before[3].y + offset[1]),
+                _ => unreachable!(),
+            };
+            let expected = [Vector2::new(left, bottom), Vector2::new(right, bottom),
+                Vector2::new(right, top), Vector2::new(left, top)];
+            for (actual, expected) in after.iter().zip(expected) {
+                assert!((*actual - expected).length_squared() < 1e-10,
+                    "grip {grip_id}: rectangle collapsed or drifted: {after:?}, expected {expected:?}");
+            }
+        }
+        let preview = vertices(&app);
+        let _ = app.on_viewport_left_release();
+        assert_eq!(vertices(&app), preview);
+        app.undo_steps(1);
+        assert_eq!(vertices(&app), before);
+        app.redo_steps(1);
+        assert_eq!(vertices(&app), preview);
+        app.undo_steps(1);
+        }
+    }
 
-        let _ = app.on_viewport_move(Point::new(460.0, 220.0));
+    #[test]
+    fn axis_constrained_line_grip_changes_length_and_translates_normal_to_axis() {
+        use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef, ParametricScope};
+        use acadrust::{entities::Line, types::Vector3, EntityType};
 
-        let after = vertices(&app);
-        let dragged = after[0] - before[0];
-        assert!(dragged.length_squared() > 1.0e-12);
-        assert!(after.iter().zip(&before).skip(1).any(|(after, before)|
-            (*after - *before - dragged).length_squared() > 1.0e-12));
-        let segments = [
-            after[1] - after[0],
-            after[2] - after[1],
-            after[3] - after[2],
-            after[0] - after[3],
-        ];
-        let cross = |a: Vector2, b: Vector2| a.x * b.y - a.y * b.x;
-        let dot = |a: Vector2, b: Vector2| a.x * b.x + a.y * b.y;
-        assert!(cross(segments[0], segments[2]).abs() < 1.0e-6);
-        assert!(cross(segments[1], segments[3]).abs() < 1.0e-6);
-        assert!(dot(segments[3], segments[2]).abs() < 1.0e-6);
-        assert!(segments[2].y.abs() < 1.0e-6);
+        for vertical in [false, true] {
+            let mut app = OpenCADStudio::new_for_test();
+            app.automation_op(r#"{"op":"new"}"#);
+            let i = app.active_tab;
+            app.snapper.snap_enabled = false;
+            app.snapper.grid_snap_on = false;
+            app.snapper.otrack_enabled = false;
+            app.ortho_mode = false;
+            app.polar_mode = false;
+            app.constraint_solve_mode = true;
+            app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+            let end = if vertical { Vector3::new(0.0, 4.0, 0.0) } else { Vector3::new(4.0, 0.0, 0.0) };
+            let handle = app.tabs[i].scene.add_entity(EntityType::Line(Line::from_points(Vector3::ZERO, end)));
+            app.tabs[i].scene.parametric_constraint_set_mut(ParametricScope::ModelSpace).add(
+                if vertical { ConstraintKind::Vertical } else { ConstraintKind::Horizontal },
+                vec![ParametricRef::whole(handle)], None);
+            app.tabs[i].active_grip = Some(GripEdit::single(handle, 0, false, glam::DVec3::ZERO));
+            for target in [glam::DVec3::new(-1.0, 3.0, 0.0), glam::DVec3::new(2.0, -2.0, 0.0)] {
+                let cursor = app.tabs[i].scene.camera.borrow().project(target,
+                    iced::Rectangle::with_size(iced::Size::new(800.0, 600.0))).unwrap();
+                let _ = app.on_viewport_move(Point::new(cursor.x, cursor.y));
+                let EntityType::Line(line) = app.tabs[i].scene.document.get_entity(handle).unwrap()
+                    else { panic!("line") };
+                let opposite = if vertical { Vector3::new(target.x, end.y, 0.0) }
+                    else { Vector3::new(end.x, target.y, 0.0) };
+                assert!((line.start - Vector3::new(target.x, target.y, 0.0)).length() < 1e-5);
+                assert!((line.end - opposite).length() < 1e-5, "{line:?}");
+            }
+        }
     }
 
     #[test]
