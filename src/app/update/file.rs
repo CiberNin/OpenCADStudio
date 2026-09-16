@@ -5002,7 +5002,7 @@ mod plot_paper_tests {
         let ps = app.tabs[app.active_tab].scene.plot_settings_for("Layout1").unwrap();
         assert_eq!(ps.printer_name, "DWG To PDF.pc3");
         // A changed device takes the PDF driver's printable area for the sheet.
-        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(5.0, 5.0, 5.0, 5.0));
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(5.0, 17.0, 6.0, 18.0));
     }
 
     #[test]
@@ -5043,18 +5043,18 @@ mod plot_paper_tests {
         let mut ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
         ps.printer_name = "DWG To PDF.pc3".into();
         ps.paper_size = "ISO_A4_(210.00_x_297.00_MM)".into();
-        ps.margins = acadrust::objects::PaperMargin::new(5.0, 5.0, 5.0, 5.0);
+        ps.margins = acadrust::objects::PaperMargin::new(5.0, 17.0, 6.0, 18.0);
         assert!(app.tabs[i].scene.set_layout_plot_settings("Layout1", &ps));
         let _ = app.on_plot_dialog_open();
         let _ = app.on_plot_dlg(PlotDlgMsg::Paper("ISO_full_bleed_A4_(210.00_x_297.00_MM)".into()));
         let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
         let ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
         assert_eq!(ps.paper_size, "ISO_full_bleed_A4_(210.00_x_297.00_MM)");
-        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(0.0, 0.0, 0.0, 0.0));
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(0.0, 1.0, 0.0, 1.0));
         let _ = app.on_plot_dlg(PlotDlgMsg::Paper("ISO_A3_(297.00_x_420.00_MM)".into()));
         let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
         let ps = app.tabs[i].scene.plot_settings_for("Layout1").unwrap();
-        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(5.0, 5.0, 5.0, 5.0));
+        assert_eq!(ps.margins, acadrust::objects::PaperMargin::new(5.0, 17.0, 6.0, 18.0));
         assert_eq!((ps.paper_width, ps.paper_height), (420.0, 297.0));
     }
 

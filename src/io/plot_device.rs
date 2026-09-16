@@ -109,26 +109,68 @@ impl Margins {
             top: value,
         }
     }
+
+    /// The same margins expressed in millimetres when they were given in
+    /// `units`.
+    pub fn to_mm(self, units: PaperUnits) -> Self {
+        Margins {
+            left: units.to_mm(self.left),
+            bottom: units.to_mm(self.bottom),
+            right: units.to_mm(self.right),
+            top: units.to_mm(self.top),
+        }
+    }
 }
 
 // ── PDF driver ────────────────────────────────────────────────────────────
 
-/// Margins of AutoCAD's `DWG To PDF.pc3` sheets.
-///
-/// Full-bleed sheets print edge to edge by definition. The standard and
-/// expand values are provisional — the driver's own printable areas have to
-/// be read off AutoCAD's Plotter Configuration Editor (Modify Standard Paper
-/// Sizes) and copied here; until then a symmetric inset keeps the printable
-/// rectangle visibly distinct from the sheet.
-const PDF_STANDARD_MARGIN_MM: f64 = 5.0;
-const PDF_EXPAND_MARGIN_MM: f64 = 2.0;
+/// Unprintable margins of AutoCAD's `DWG To PDF.pc3` sheets, as its Plotter
+/// Configuration Editor lists them (Modify Standard Paper Sizes). They depend
+/// on the sheet family and variant, not on the individual size: every ISO
+/// sheet shares one set in millimetres, every ANSI / ARCH sheet one set in
+/// inches. Order inside each set is left, bottom, right, top.
+const PDF_MM_STANDARD: Margins = Margins {
+    left: 5.0,
+    bottom: 17.0,
+    right: 6.0,
+    top: 18.0,
+};
+const PDF_MM_EXPAND: Margins = Margins {
+    left: 5.0,
+    bottom: 10.0,
+    right: 6.0,
+    top: 11.0,
+};
+const PDF_MM_FULL_BLEED: Margins = Margins {
+    left: 0.0,
+    bottom: 1.0,
+    right: 0.0,
+    top: 1.0,
+};
+const PDF_IN_STANDARD: Margins = Margins {
+    left: 0.23,
+    bottom: 0.70,
+    right: 0.23,
+    top: 0.70,
+};
+const PDF_IN_EXPAND: Margins = Margins {
+    left: 0.23,
+    bottom: 0.42,
+    right: 0.23,
+    top: 0.42,
+};
+const PDF_IN_FULL_BLEED: Margins = Margins::uniform(0.03);
 
 fn pdf_margins_mm(paper: &PaperSize) -> Margins {
-    match paper.variant {
-        PaperVariant::FullBleed => Margins::ZERO,
-        PaperVariant::Expand => Margins::uniform(PDF_EXPAND_MARGIN_MM),
-        PaperVariant::Standard => Margins::uniform(PDF_STANDARD_MARGIN_MM),
-    }
+    let set = match (paper.units, paper.variant) {
+        (PaperUnits::Millimeters, PaperVariant::Standard) => PDF_MM_STANDARD,
+        (PaperUnits::Millimeters, PaperVariant::Expand) => PDF_MM_EXPAND,
+        (PaperUnits::Millimeters, PaperVariant::FullBleed) => PDF_MM_FULL_BLEED,
+        (PaperUnits::Inches, PaperVariant::Standard) => PDF_IN_STANDARD,
+        (PaperUnits::Inches, PaperVariant::Expand) => PDF_IN_EXPAND,
+        (PaperUnits::Inches, PaperVariant::FullBleed) => PDF_IN_FULL_BLEED,
+    };
+    set.to_mm(paper.units)
 }
 
 // ── System printers ───────────────────────────────────────────────────────
@@ -416,14 +458,69 @@ mod tests {
     }
 
     #[test]
-    fn pdf_margins_depend_on_the_sheet_variant() {
-        let a4 = paper_catalog::resolve("ISO_A4_(210.00_x_297.00_MM)").unwrap();
-        let bleed = paper_catalog::resolve("ISO_full_bleed_A4_(210.00_x_297.00_MM)").unwrap();
-        let expand = paper_catalog::resolve("ISO_expand_A4_(210.00_x_297.00_MM)").unwrap();
-        assert_eq!(PlotDevice::Pdf.margins_mm(&a4), Margins::uniform(5.0));
-        assert_eq!(PlotDevice::Pdf.margins_mm(&bleed), Margins::ZERO);
-        assert_eq!(PlotDevice::Pdf.margins_mm(&expand), Margins::uniform(2.0));
-        assert_eq!(PlotDevice::None.margins_mm(&a4), Margins::ZERO);
+    fn pdf_margins_follow_autocad_per_family_and_variant() {
+        let m = |name: &str| PlotDevice::Pdf.margins_mm(&paper_catalog::resolve(name).unwrap());
+        // ISO sheets share one millimetre set regardless of size.
+        let iso_standard = Margins {
+            left: 5.0,
+            bottom: 17.0,
+            right: 6.0,
+            top: 18.0,
+        };
+        assert_eq!(m("ISO_A4_(210.00_x_297.00_MM)"), iso_standard);
+        assert_eq!(m("ISO_A0_(841.00_x_1189.00_MM)"), iso_standard);
+        assert_eq!(
+            m("ISO_expand_A4_(210.00_x_297.00_MM)"),
+            Margins {
+                left: 5.0,
+                bottom: 10.0,
+                right: 6.0,
+                top: 11.0
+            }
+        );
+        assert_eq!(
+            m("ISO_full_bleed_A4_(210.00_x_297.00_MM)"),
+            Margins {
+                left: 0.0,
+                bottom: 1.0,
+                right: 0.0,
+                top: 1.0
+            }
+        );
+        // Inch sheets are listed in inches and stored in millimetres.
+        let close = |a: Margins, b: Margins| {
+            (a.left - b.left).abs() < 1e-9
+                && (a.bottom - b.bottom).abs() < 1e-9
+                && (a.right - b.right).abs() < 1e-9
+                && (a.top - b.top).abs() < 1e-9
+        };
+        let inch = |l: f64, b: f64, r: f64, t: f64| Margins {
+            left: l * 25.4,
+            bottom: b * 25.4,
+            right: r * 25.4,
+            top: t * 25.4,
+        };
+        assert!(close(
+            m("ANSI_A_(8.50_x_11.00_Inches)"),
+            inch(0.23, 0.70, 0.23, 0.70)
+        ));
+        assert!(close(
+            m("ARCH_D_(24.00_x_36.00_Inches)"),
+            inch(0.23, 0.70, 0.23, 0.70)
+        ));
+        assert!(close(
+            m("ARCH_expand_D_(24.00_x_36.00_Inches)"),
+            inch(0.23, 0.42, 0.23, 0.42)
+        ));
+        assert!(close(
+            m("ANSI_full_bleed_B_(11.00_x_17.00_Inches)"),
+            inch(0.03, 0.03, 0.03, 0.03)
+        ));
+        assert_eq!(
+            PlotDevice::None
+                .margins_mm(&paper_catalog::resolve("ISO_A4_(210.00_x_297.00_MM)").unwrap()),
+            Margins::ZERO
+        );
     }
 
     #[test]
