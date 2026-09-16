@@ -1766,10 +1766,42 @@ fn retained_radius(entity: &EntityType) -> Option<f64> {
     }
 }
 
+/// Visit vertices and segments in stored drawing order, including the closing edge last.
+fn polyline_ref_order(
+    document: &acadrust::CadDocument,
+    reference: ParametricRef,
+) -> Option<(u64, usize)> {
+    if !matches!(document.get_entity(reference.entity),
+        Some(EntityType::LwPolyline(_) | EntityType::Polyline2D(_)))
+    {
+        return None;
+    }
+    let position = if let Some(index) = reference.segment_index()
+        .or_else(|| reference.segment_midpoint_index())
+    {
+        2 * index + 1
+    } else {
+        2 * usize::try_from(reference.marker?).ok()?
+    };
+    Some((reference.entity.value(), position))
+}
+
+fn constraints_in_drawing_order<'a>(
+    document: &acadrust::CadDocument,
+    set: &'a ParametricConstraintSet,
+) -> Vec<&'a ParametricConstraint> {
+    let mut constraints: Vec<_> = set.constraints.iter().collect();
+    // A relation is visited when its last referenced element is reached.
+    // Keep reference roles and persisted constraint IDs unchanged.
+    constraints.sort_by_cached_key(|constraint| constraint.refs.iter()
+        .filter_map(|reference| polyline_ref_order(document, *reference)).max());
+    constraints
+}
+
 /// Propagate explicit axis constraints through parallel/perpendicular relations.
-fn constrained_line_axes(set: &ParametricConstraintSet) -> HashMap<ParametricRef, bool> {
+fn constrained_line_axes(constraints: &[&ParametricConstraint]) -> HashMap<ParametricRef, bool> {
     let mut axes = HashMap::new();
-    for c in set.constraints.iter().filter(|c| c.enabled) {
+    for c in constraints.iter().filter(|c| c.enabled) {
         if let [reference] = c.refs.as_slice() {
             if matches!(c.kind, ConstraintKind::Horizontal | ConstraintKind::Vertical) {
                 axes.insert(*reference, c.kind == ConstraintKind::Vertical);
@@ -1778,7 +1810,7 @@ fn constrained_line_axes(set: &ParametricConstraintSet) -> HashMap<ParametricRef
     }
     loop {
         let before = axes.len();
-        for c in set.constraints.iter().filter(|c| c.enabled) {
+        for c in constraints.iter().filter(|c| c.enabled) {
             if !matches!(c.kind, ConstraintKind::Parallel | ConstraintKind::Perpendicular | ConstraintKind::Colinear) {
                 continue;
             }
@@ -1797,17 +1829,9 @@ fn constrained_line_axes(set: &ParametricConstraintSet) -> HashMap<ParametricRef
     }
 }
 
-/// Rebuilds `set`'s entire `cadkernel_constraints::System` from current document
-/// geometry, solves it, and returns the resulting entity states for every
-/// handle whose registered coordinates actually moved beyond floating-point
-/// noise, plus the scope's total remaining degrees of freedom and any
-/// redundant/conflicting constraints, resolved
-/// back to the `ConstraintId`s a `ConflictResolverPanel` can name and offer
-/// to remove. `None` if nothing in the scope could be built (no constraint
-/// resolved to anything). DOF/conflicts are still returned even when every
-/// subsystem fails to solve (rank is a structural property of the Jacobian,
-/// not of whether Dogleg converged) — only the geometry write-back is gated
-/// on a successful solve.
+/// Solve the scope through the kernel and return changed geometry plus diagnostics.
+/// Failed solves still return DOF/conflicts, but never write back geometry.
+/// Returns `None` when no supported geometry or smooth constraint can be built.
 fn solve_scope(
     document: &acadrust::CadDocument,
     drawing_params: &ParameterTable,
@@ -1824,18 +1848,12 @@ fn solve_scope(
     };
     let mut sys = System::new();
     let mut cache: HashMap<Handle, EntityGeom> = HashMap::new();
-    let line_axes = if retain_lengths { HashMap::new() } else { constrained_line_axes(set) };
-    // Tracks which system-level `cadkernel_constraints` constraint(s) came from which
-    // `ParametricConstraint` — a `SubSystem`'s redundant-row indices (from
-    // `cadkernel_constraints::diagnosis`) are local to that partition's own constraint
-    // list, not `set.constraints`' indices, and several kinds contribute
-    // more than one system-level constraint per `ParametricConstraint` (see
-    // `build_constraint`'s doc comment). `Rc::ptr_eq` against this after
-    // partitioning resolves a row back to the `ConstraintId` the UI
-    // actually names.
+    let constraints = constraints_in_drawing_order(document, set);
+    let line_axes = if retain_lengths { HashMap::new() } else { constrained_line_axes(&constraints) };
+    // Map partition-local kernel rows back to persistent constraint IDs by Rc identity.
     let mut owner: Vec<(Rc<dyn Constraint>, ConstraintId)> = Vec::new();
 
-    for c in &set.constraints {
+    for c in &constraints {
         if c.enabled && matches!(c.kind, ConstraintKind::Parallel | ConstraintKind::Perpendicular)
             && c.refs.len() == 2 && c.refs.iter().all(|r| line_axes.contains_key(r))
             && (line_axes[&c.refs[0]] ^ line_axes[&c.refs[1]]) == (c.kind == ConstraintKind::Perpendicular)
@@ -1857,7 +1875,7 @@ fn solve_scope(
         let tangent_point = (c.kind == ConstraintKind::Tangent && c.refs.len() == 2
             && c.refs[0].entity != c.refs[1].entity
             && c.refs.iter().all(|r| r.marker.is_none()))
-            .then(|| set.constraints.iter().find_map(|connection| {
+            .then(|| constraints.iter().find_map(|connection| {
                 (connection.enabled && connection.kind == ConstraintKind::Coincident
                     && connection.refs.len() == 2
                     && connection.refs.iter().all(|r| matches!(r.marker, Some(0 | 1)))
@@ -1878,9 +1896,7 @@ fn solve_scope(
         }
     }
 
-    let has_smooth = set
-        .constraints
-        .iter()
+    let has_smooth = constraints.iter()
         .any(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth);
     if cache.is_empty() && !has_smooth {
         return None;
@@ -1897,10 +1913,10 @@ fn solve_scope(
             };
             Some((reference, line, vertical))
         }).collect();
-        axis_lines.sort_by_key(|(reference, _, _)| (reference.entity.value(), reference.marker));
+        axis_lines.sort_by_key(|(reference, _, _)| (reference.entity.value(), reference.segment_index()));
         let driven_points: Vec<_> = driven_refs.iter().filter_map(|reference|
             resolve_constraint_point(document, &mut sys, &mut cache, *reference)).collect();
-        let coincident: Vec<_> = set.constraints.iter().filter(|c|
+        let coincident: Vec<_> = constraints.iter().filter(|c|
             c.enabled && c.kind == ConstraintKind::Coincident).filter_map(|c| {
                 let [a, b] = c.refs.as_slice() else { return None };
                 Some((resolve_constraint_point(document, &mut sys, &mut cache, *a)?,
@@ -1921,7 +1937,7 @@ fn solve_scope(
             }
             points
         };
-        let perpendicular: Vec<_> = set.constraints.iter().filter(|c|
+        let perpendicular: Vec<_> = constraints.iter().filter(|c|
             c.enabled && c.kind == ConstraintKind::Perpendicular && c.refs.len() == 2).collect();
         let mut retained_axes = HashSet::new();
         for point in &driven_points {
@@ -1966,7 +1982,7 @@ fn solve_scope(
             // edge crosses zero length; cross-product equations do not.
             let (a, b) = if *vertical { (line.p1.x, line.p2.x) } else { (line.p1.y, line.p2.y) };
             sys.add_constraint(Rc::new(Equal::new(a, b, 1.0)));
-            let paired_edge_is_dragged = set.constraints.iter().any(|c| {
+            let paired_edge_is_dragged = constraints.iter().any(|c| {
                 c.enabled && c.kind == ConstraintKind::Parallel && c.refs.contains(reference)
                     && c.refs.iter().any(|other| other != reference && driven_refs.contains(other))
             });
@@ -2898,6 +2914,123 @@ mod tests {
     use super::Scene;
     use acadrust::entities::EntityType;
     use acadrust::types::Vector3;
+
+    #[test]
+    fn polyline_constraint_order_follows_stored_vertices_for_open_and_closed_polylines() {
+        use acadrust::entities::{LwPolyline, LwVertex, Polyline2D, Vertex2D};
+        for closed in [false, true] {
+            let mut scene = Scene::new();
+            let points = [(8.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)];
+            let mut light = LwPolyline::new();
+            light.vertices = points.iter().map(|&(x, y)| LwVertex::from_coords(x, y)).collect();
+            light.is_closed = closed;
+            let mut heavy = Polyline2D::new();
+            heavy.vertices = points.iter().map(|&(x, y)| Vertex2D::new(Vector3::new(x, y, 0.0))).collect();
+            heavy.flags.set_closed(closed);
+            for entity in [EntityType::LwPolyline(light), EntityType::Polyline2D(heavy)] {
+                let handle = scene.add_entity(entity);
+                let mut refs = vec![
+                    ParametricRef::point(handle, 0),
+                    ParametricRef::segment(handle, 0),
+                    ParametricRef::point(handle, 1),
+                    ParametricRef::segment_midpoint(handle, 1),
+                    ParametricRef::point(handle, 2),
+                    ParametricRef::segment(handle, 2),
+                    ParametricRef::point(handle, 3),
+                ];
+                if closed {
+                    refs.push(ParametricRef::segment(handle, 3));
+                }
+                let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
+                for reference in refs.iter().rev() {
+                    set.add(ConstraintKind::Fixed, vec![*reference], None);
+                }
+                let ordered = super::constraints_in_drawing_order(&scene.document, &set);
+                assert_eq!(ordered.iter().map(|c| c.refs[0]).collect::<Vec<_>>(), refs);
+                assert_eq!(super::polyline_ref_order(&scene.document, ParametricRef::segment(handle, 1)),
+                    super::polyline_ref_order(&scene.document, ParametricRef::segment_midpoint(handle, 1)));
+                assert_eq!(set.constraints[0].refs[0], *refs.last().unwrap(), "persistent order must not change");
+            }
+        }
+    }
+
+    #[test]
+    fn polyline_relations_follow_the_last_edge_without_swapping_reference_roles() {
+        let mut scene = Scene::new();
+        let mut polyline = acadrust::entities::LwPolyline::new();
+        polyline.vertices = [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)]
+            .into_iter().map(|(x, y)| acadrust::entities::LwVertex::from_coords(x, y)).collect();
+        polyline.is_closed = true;
+        let handle = scene.add_entity(EntityType::LwPolyline(polyline));
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
+        for (a, b) in [(3, 0), (1, 2), (1, 0)] {
+            set.add(ConstraintKind::Perpendicular,
+                vec![ParametricRef::segment(handle, a), ParametricRef::segment(handle, b)], None);
+        }
+        let ordered = super::constraints_in_drawing_order(&scene.document, &set);
+        assert_eq!(ordered.iter().map(|c| c.id).collect::<Vec<_>>(), vec![2, 1, 0]);
+        for constraint in ordered {
+            assert_eq!(constraint.refs, set.constraints[constraint.id as usize].refs);
+        }
+    }
+
+    #[test]
+    fn non_polyline_constraint_order_is_unchanged() {
+        let mut scene = Scene::new();
+        let line = scene.add_entity(EntityType::Line(acadrust::entities::Line::from_points(
+            Vector3::ZERO, Vector3::new(4.0, 0.0, 0.0))));
+        let mut set = ParametricConstraintSet::new(ParametricScope::ModelSpace);
+        for marker in [1, 0] {
+            set.add(ConstraintKind::Fixed, vec![ParametricRef::point(line, marker)], None);
+        }
+        set.add(ConstraintKind::Horizontal, vec![ParametricRef::whole(line)], None);
+        let ordered = super::constraints_in_drawing_order(&scene.document, &set);
+        assert_eq!(ordered.iter().map(|c| c.id).collect::<Vec<_>>(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn polyline_preview_satisfies_the_same_constraints_regardless_of_insertion_order() {
+        for closed in [false, true] {
+            let mut results = Vec::new();
+            for reverse in [false, true] {
+                let mut scene = Scene::new();
+                let mut polyline = acadrust::entities::LwPolyline::new();
+                polyline.vertices = [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)]
+                    .into_iter().map(|(x, y)| acadrust::entities::LwVertex::from_coords(x, y)).collect();
+                polyline.is_closed = closed;
+                let handle = scene.add_entity(EntityType::LwPolyline(polyline));
+                let mut constraints = vec![
+                    (ConstraintKind::Horizontal, vec![ParametricRef::segment(handle, 0)]),
+                    (ConstraintKind::Perpendicular, vec![ParametricRef::segment(handle, 0), ParametricRef::segment(handle, 1)]),
+                    (ConstraintKind::Parallel, vec![ParametricRef::segment(handle, 0), ParametricRef::segment(handle, 2)]),
+                ];
+                if closed {
+                    constraints.push((ConstraintKind::Perpendicular,
+                        vec![ParametricRef::segment(handle, 2), ParametricRef::segment(handle, 3)]));
+                }
+                if reverse { constraints.reverse(); }
+                let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+                for (kind, refs) in constraints { set.add(kind, refs, None); }
+                let before = scene.document.get_entity(handle).unwrap().clone();
+                let Some(EntityType::LwPolyline(polyline)) = scene.document.get_entity_mut(handle) else { panic!("polyline") };
+                polyline.vertices[0].location = acadrust::types::Vector2::new(-1.0, -2.0);
+                let solved = scene.solve_parametric_constraints_preview(
+                    &[handle], &[ParametricRef::point(handle, 0)], true, &[(handle, before)]);
+                let entity = &solved.iter().find(|(h, _)| *h == handle).expect("connected vertices must move").1;
+                let EntityType::LwPolyline(polyline) = entity else { panic!("polyline") };
+                let points: Vec<_> = polyline.vertices.iter().map(|v| v.location).collect();
+                assert_eq!(points[0], acadrust::types::Vector2::new(-1.0, -2.0));
+                assert!((points[0].y - points[1].y).abs() < 1e-7);
+                assert!((points[1].x - points[2].x).abs() < 1e-7);
+                assert!((points[2].y - points[3].y).abs() < 1e-7);
+                if closed { assert!((points[3].x - points[0].x).abs() < 1e-7); }
+                results.push(points);
+            }
+            for (a, b) in results[0].iter().zip(&results[1]) {
+                assert!((a.x - b.x).abs() < 1e-7 && (a.y - b.y).abs() < 1e-7);
+            }
+        }
+    }
 
     #[test]
     fn perpendicular_line_grips_distinguish_shared_corner_and_free_ends() {
