@@ -1477,6 +1477,16 @@ pub enum CmdResult {
         /// Undo-history label, e.g. `"Horizontal constraint"`.
         label: &'static str,
     },
+    /// Adds an ordered perpendicular relation. The first picked direction and
+    /// the second direction's start point stay fixed during the initial solve;
+    /// those temporary anchors are not persisted as geometric constraints.
+    AddPerpendicularConstraint {
+        first: crate::scene::parametric_constraints::ParametricRef,
+        second: crate::scene::parametric_constraints::ParametricRef,
+        first_fixed: crate::scene::parametric_constraints::ParametricRef,
+        second_start: crate::scene::parametric_constraints::ParametricRef,
+        label: &'static str,
+    },
     /// Opens the Auto Constrain settings dialog from the selection prompt.
     OpenAutoConstrainSettings,
     /// Adds an ordered Coincident relation.  Point/point selections create a
@@ -2726,6 +2736,7 @@ mod constraint_registry_tests {
             "VCONSTRAINT",
             "PCONSTRAINT",
             "QCONSTRAINT",
+            "GCPERPENDICULAR",
             "ECONSTRAINT",
             "TCONSTRAINT",
             "NCONSTRAINT",

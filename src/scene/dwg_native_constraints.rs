@@ -43,6 +43,7 @@ struct EntityNodes {
     geometry_node_id: i32,
     points: FxHashMap<i32, i32>,
     segments: FxHashMap<usize, i32>,
+    axes: FxHashMap<i32, i32>,
 }
 
 /// Builds one scope's `Assoc2dConstraintGroup` graph incrementally,
@@ -396,6 +397,52 @@ impl<'a> GroupBuilder<'a> {
         Some(node_id)
     }
 
+    /// Returns a derived line node for a text baseline or ellipse axis. These
+    /// are real native curve nodes tied to the source entity dependency, so
+    /// the selected direction survives save/reopen instead of collapsing to
+    /// the entity insertion/center point.
+    fn directional_axis_node(&mut self, reference: ParametricRef) -> Option<i32> {
+        let marker = reference.marker?;
+        reference.directional_axis()?;
+        if let Some(node_id) = self
+            .entities
+            .get(&reference.entity)
+            .and_then(|entity| entity.axes.get(&marker))
+        {
+            return Some(*node_id);
+        }
+        let entity = self.document.get_entity(reference.entity)?;
+        let [start, end] =
+            super::parametric_constraints::directional_axis_endpoints(entity, reference)?;
+        let delta = end - start;
+        if delta.length_squared() <= 1.0e-24 {
+            return None;
+        }
+        let node_id = self.alloc_node_id();
+        self.push_node(
+            node_id,
+            "AcConstrainedBoundedLine",
+            AssocConstraintNodeData::BoundedLine {
+                geometry_dependency: Handle::NULL,
+                geometry_node_id: node_id,
+                point: start,
+                direction: delta.normalize(),
+                is_ray: false,
+                start_point: start,
+                end_point: end,
+            },
+        );
+        self.entities
+            .entry(reference.entity)
+            .or_default()
+            .axes
+            .insert(marker, node_id);
+        if !self.referenced_entities.contains(&reference.entity) {
+            self.referenced_entities.push(reference.entity);
+        }
+        Some(node_id)
+    }
+
     /// Returns the point-node id for a line endpoint or curve center,
     /// creating it the first time the marker is referenced.
     fn point_node(&mut self, handle: Handle, marker: i32) -> Option<i32> {
@@ -498,6 +545,9 @@ impl<'a> GroupBuilder<'a> {
     /// The node id `ParametricRef` resolves to: a point node for a marked
     /// reference, the whole geometry node otherwise.
     fn ref_node(&mut self, r: ParametricRef) -> Option<i32> {
+        if r.directional_axis().is_some() {
+            return self.directional_axis_node(r);
+        }
         if r.segment_midpoint_index().is_some() {
             return self.point_node(r.entity, r.marker?);
         }
@@ -1553,6 +1603,10 @@ fn dependency_entity(
             ),
             AssocConstraintNodeData::Point { .. },
         ) => true,
+        (
+            Some(EntityType::Text(_) | EntityType::MText(_) | EntityType::Ellipse(_)),
+            AssocConstraintNodeData::BoundedLine { .. },
+        ) => true,
         (Some(EntityType::Line(_)), AssocConstraintNodeData::BoundedLine { is_ray, .. }) => !is_ray,
         (
             Some(EntityType::LwPolyline(_) | EntityType::Polyline2D(_)),
@@ -1641,6 +1695,52 @@ fn polyline_segment_reference(
             score(*first).total_cmp(&score(*second))
         })
         .map(|index| ParametricRef::segment(entity, index))
+}
+
+fn directional_axis_reference(
+    document: &CadDocument,
+    entity: Handle,
+    data: &AssocConstraintNodeData,
+    work_plane: &[Vector3; 3],
+) -> Option<ParametricRef> {
+    let AssocConstraintNodeData::BoundedLine {
+        start_point,
+        end_point,
+        ..
+    } = data
+    else {
+        return None;
+    };
+    match document.get_entity(entity)? {
+        EntityType::Text(_) | EntityType::MText(_) => {
+            Some(ParametricRef::text_baseline(entity))
+        }
+        EntityType::Ellipse(ellipse) => {
+            let [origin, axis_x, axis_y] = *work_plane;
+            let normal = Vector3::new(
+                axis_x.y * axis_y.z - axis_x.z * axis_y.y,
+                axis_x.z * axis_y.x - axis_x.x * axis_y.z,
+                axis_x.x * axis_y.y - axis_x.y * axis_y.x,
+            );
+            let to_world = |point: Vector3| {
+                origin + axis_x * point.x + axis_y * point.y + normal * point.z
+            };
+            let direction = (to_world(*end_point) - to_world(*start_point)).normalize();
+            let major = ellipse.major_axis.normalize();
+            let ellipse_normal = ellipse.normal.normalize();
+            let minor = Vector3::new(
+                ellipse_normal.y * major.z - ellipse_normal.z * major.y,
+                ellipse_normal.z * major.x - ellipse_normal.x * major.z,
+                ellipse_normal.x * major.y - ellipse_normal.y * major.x,
+            );
+            if direction.dot(&minor).abs() > direction.dot(&major).abs() {
+                Some(ParametricRef::ellipse_minor_axis(entity))
+            } else {
+                Some(ParametricRef::ellipse_major_axis(entity))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn numeric_value(value: &AssocEvalVariant) -> Option<f64> {
@@ -1927,6 +2027,14 @@ pub(super) fn native_constraint_set(
             if let Some(entity) = dependency_entity(document, dependency, &node.data) {
                 let reference =
                     polyline_segment_reference(document, entity, &node.data, &group.work_plane)
+                        .or_else(|| {
+                            directional_axis_reference(
+                                document,
+                                entity,
+                                &node.data,
+                                &group.work_plane,
+                            )
+                        })
                         .unwrap_or_else(|| {
                             if matches!(node.data, AssocConstraintNodeData::Point { .. }) {
                                 ParametricRef::point(entity, 0)
@@ -2337,7 +2445,7 @@ fn materialize_scope(
             continue;
         };
         if entity_nodes.geometry_node_id == 0 {
-            if entity_nodes.segments.is_empty() {
+            if entity_nodes.segments.is_empty() && entity_nodes.axes.is_empty() {
                 continue;
             }
         }
@@ -2346,6 +2454,7 @@ fn materialize_scope(
         for node_id in std::iter::once(entity_nodes.geometry_node_id)
             .filter(|node_id| *node_id != 0)
             .chain(entity_nodes.segments.values().copied())
+            .chain(entity_nodes.axes.values().copied())
         {
             if let Some(node) = nodes.iter_mut().find(|node| node.node_id == node_id) {
                 set_geometry_dependency(&mut node.data, dep_handle);

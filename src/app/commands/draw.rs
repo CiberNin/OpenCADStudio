@@ -1362,7 +1362,46 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "PCONSTRAINT" | "QCONSTRAINT" | "ECONSTRAINT" | "TCONSTRAINT" | "LCONSTRAINT"
+            "QCONSTRAINT" | "GCPERPENDICULAR" => {
+                use crate::command::CmdResult;
+                use crate::modules::parametric::PerpendicularConstraintCommand;
+
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    let command = PerpendicularConstraintCommand::new();
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                } else if handles.len() != 2 {
+                    self.command_line
+                        .push_output("Select exactly two perpendicular-compatible objects.");
+                } else {
+                    let picks = handles
+                        .iter()
+                        .filter_map(|handle| {
+                            let entity = self.tabs[i].scene.document.get_entity(*handle)?;
+                            PerpendicularConstraintCommand::preselected_reference(entity, *handle)
+                        })
+                        .collect::<Vec<_>>();
+                    if picks.len() == 2 && picks[0].reference != picks[1].reference {
+                        return Some(self.apply_cmd_result(CmdResult::AddPerpendicularConstraint {
+                            first: picks[0].reference,
+                            second: picks[1].reference,
+                            first_fixed: picks[0].fixed_reference,
+                            second_start: picks[1].start_reference,
+                            label: "Perpendicular constraint",
+                        }));
+                    }
+                    self.tabs[i].scene.deselect_all();
+                    self.command_line.push_error(
+                        "Invalid selection for Perpendicular. Select a line segment, polyline segment, text, MText, major or minor axis of ellipse or elliptical arc.",
+                    );
+                    let command = PerpendicularConstraintCommand::new();
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                }
+            }
+
+            "PCONSTRAINT" | "ECONSTRAINT" | "TCONSTRAINT" | "LCONSTRAINT"
             | "NRCONSTRAINT" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
@@ -1379,9 +1418,6 @@ impl OpenCADStudio {
                     use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
                     let (kind, label) = match cmd {
                         "PCONSTRAINT" => (ConstraintKind::Parallel, "Parallel constraint"),
-                        "QCONSTRAINT" => {
-                            (ConstraintKind::Perpendicular, "Perpendicular constraint")
-                        }
                         "TCONSTRAINT" => (ConstraintKind::Tangent, "Tangent constraint"),
                         "LCONSTRAINT" => (ConstraintKind::Colinear, "Colinear constraint"),
                         "NRCONSTRAINT" => (ConstraintKind::Normal, "Normal constraint"),
