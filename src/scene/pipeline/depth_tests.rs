@@ -106,6 +106,90 @@ fn color_at(bytes: &[u8], ndc_x: f32) -> [u32; 3] {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn wipeout_respects_close_block_draw_order() {
+    use acadrust::{entities::Wipeout, types::Vector2, EntityType};
+    use crate::scene::{model::wire_model::TangentGeom, Scene};
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = block_on(instance.request_adapter(&Default::default())).expect("GPU adapter");
+    for packed in [false, true] {
+        let mut limits = adapter.limits();
+        if packed {
+            limits.max_storage_buffers_per_shader_stage = 0;
+        }
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("GPU device");
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut pipeline = Pipeline::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let bounds = Rectangle::with_size(Size::new(SIZE as f32, SIZE as f32));
+        let mut uniforms = Uniforms::new(&Camera::default(), bounds, false);
+        uniforms.view_rot = glam::Mat4::IDENTITY;
+        uniforms.eye_high = [0.; 3];
+        uniforms.eye_low = [0.; 3];
+        let mut scene = Scene::new();
+        scene.add_entity(EntityType::Wipeout(Wipeout::polygonal(
+            &[
+                Vector2::new(-0.7, -0.7),
+                Vector2::new(0.7, -0.7),
+                Vector2::new(0.7, 0.7),
+                Vector2::new(-0.7, 0.7),
+            ],
+            0.5,
+        )));
+        let mut masks = scene.wipeout_models_arc().as_ref().clone();
+        assert_eq!(masks.len(), 1);
+        masks[0].color = [0., 0., 0., 1.];
+        masks[0].draw_depth = 0.1;
+        pipeline.upload_wipeouts(&device, &queue, &masks);
+        // Block children share a narrow sub-range of their insert's order.
+        // The mask must hide earlier geometry without erasing later geometry.
+        let depths = [(1, [0.0998, 0.]), (2, [0.1002, 0.])].into_iter().collect();
+        for kind in ["line", "circle", "arc", "ellipse"] {
+            let wires: Vec<_> = [(-0.3, 1), (0.3, 2)]
+                .into_iter()
+                .map(|(x, id)| {
+                    let mut wire = WireModel::solid(
+                        id.to_string(),
+                        Vec::new(),
+                        [1.; 4],
+                        false,
+                    );
+                    let center = [x as f64 - 0.1, 0., 0.5];
+                    let axis_x = [1., 0., 0.];
+                    let axis_y = [0., 1., 0.];
+                    match kind {
+                        "circle" => wire.tangent_geoms.push(TangentGeom::PlanarCircle {
+                            center, axis_x, axis_y, radius: 0.1,
+                        }),
+                        "arc" => wire.tangent_geoms.push(TangentGeom::Arc {
+                            center, axis_x, axis_y, radius: 0.1,
+                            start_angle: -std::f64::consts::FRAC_PI_2,
+                            end_angle: std::f64::consts::FRAC_PI_2,
+                        }),
+                        "ellipse" => wire.tangent_geoms.push(TangentGeom::PlanarEllipse {
+                            center, major_axis: [0.1, 0., 0.], normal: [0., 0., 1.],
+                            minor_axis_ratio: 0.6, start_param: 0., end_param: std::f64::consts::TAU,
+                        }),
+                        _ => wire.points = vec![[x, -0.65, 0.5], [x, 0.65, 0.5]],
+                    }
+                    wire
+                })
+                .collect();
+            pipeline.gpu_circles = std::sync::Arc::new(pipeline.upload_circles(&device, &queue, &wires, &depths));
+            pipeline.gpu_ellipses = std::sync::Arc::new(pipeline.upload_ellipses(&device, &queue, &wires, &depths));
+            let bytes = pixels(&device, &queue, &mut pipeline, &uniforms, &wires, &depths);
+            assert_eq!(color_at(&bytes, -0.3), [0; 3], "mask must cover earlier {kind}");
+            assert_ne!(color_at(&bytes, 0.3), [0; 3], "mask erased later {kind}, packed={packed}");
+        }
+        assert!(block_on(validation.pop()).is_none(), "GPU validation failed");
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn perspective_draw_order_keeps_flat_lines_visible() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = block_on(instance.request_adapter(&Default::default())).expect("GPU adapter");
