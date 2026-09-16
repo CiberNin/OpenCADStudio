@@ -368,6 +368,22 @@ impl CadCommand for LinearDimensionCommand {
             }
         }
     }
+
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        if !matches!(self.step, Step::DimensionLine { .. })
+            || self.awaiting_text
+            || self.awaiting_angle
+            || self.awaiting_rotation
+        {
+            return None;
+        }
+        Some(crate::command::DynSpec {
+            anchor: crate::command::DynAnchor::LastPoint,
+            fields: Vec::new(),
+            guide: crate::command::DynGuide::None,
+            ref_point: None,
+        })
+    }
 }
 
 fn v3(pt: DVec3) -> Vector3 {
