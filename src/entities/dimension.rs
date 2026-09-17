@@ -930,6 +930,23 @@ fn capture_dim_text_relative_position(dim: &Dimension) -> Option<DimTextRelative
                 dy / len,
             )
         }
+        Dimension::Diameter(d) => {
+            let dx = d.definition_point.x - d.angle_vertex.x;
+            let dy = d.definition_point.y - d.angle_vertex.y;
+            let len = (dx * dx + dy * dy).sqrt();
+
+            if len <= 1e-12 {
+                return None;
+            }
+
+            (
+                d.angle_vertex,
+                d.definition_point,
+                d.angle_vertex,
+                dx / len,
+                dy / len,
+            )
+        }
         _ => return None,
     };
 
@@ -985,6 +1002,23 @@ fn restore_dim_text_relative_position(
                 d.first_point,
                 d.second_point,
                 d.definition_point,
+                dx / len,
+                dy / len,
+            )
+        }
+        Dimension::Diameter(d) => {
+            let dx = d.definition_point.x - d.angle_vertex.x;
+            let dy = d.definition_point.y - d.angle_vertex.y;
+            let len = (dx * dx + dy * dy).sqrt();
+
+            if len <= 1e-12 {
+                return;
+            }
+
+            (
+                d.angle_vertex,
+                d.definition_point,
+                d.angle_vertex,
                 dx / len,
                 dy / len,
             )
@@ -1211,6 +1245,26 @@ impl Grippable for Dimension {
         };
         if grip_id == text_grip {
             apply_to_v3(&mut self.base_mut().text_middle_point, &apply);
+
+            // A diametric dimension must remain collinear when its text/leader
+            // grip is moved. Rotate both diameter endpoints around the fixed
+            // center so the leader and diameter share the same radial axis.
+            if let Dimension::Diameter(d) = self {
+                let center = d.center();
+                let radius = d.measurement() * 0.5;
+                let offset = d.base.text_middle_point - center;
+
+                if offset.length_squared() > 1e-24 && radius > 1e-12 {
+                    let radial = offset.normalize() * radius;
+
+                    // Keep the endpoint nearest the text on the text side.
+                    d.angle_vertex = center + radial;
+                    d.definition_point = center - radial;
+                    d.base.definition_point = d.definition_point;
+                    d.base.actual_measurement = d.measurement();
+                }
+            }
+
             // Dragging the text grip pins it to a user-defined location, so it
             // no longer follows the style (DIMTAD). See #94.
             self.base_mut().text_user_positioned = true;
@@ -4639,9 +4693,9 @@ fn dimension_geometry(
                 &mut g,
                 chord,
                 far_chord,
+                lv(d.base.text_middle_point),
                 arrow1,
                 arrow2,
-                d.leader_length as f32,
                 params,
                 suppress,
             );
@@ -5027,9 +5081,9 @@ fn append_diameter_dimension(
     g: &mut DimGeom,
     chord: Vec3,
     far_chord: Vec3,
+    text_anchor: Vec3,
     arrow1: &ArrowKind,
     arrow2: &ArrowKind,
-    leader_length: f32,
     params: DimLineParams,
     suppress: SuppressFlags,
 ) {
@@ -5038,9 +5092,14 @@ fn append_diameter_dimension(
     if diameter <= 1e-6 {
         return;
     }
+    // Text projected outside the diameter requires inward-pointing arrowheads.
+    let text_along = (params.text_position - chord).dot(axis);
+    let text_outside = text_along < 0.0 || text_along > diameter;
 
     let arrows_outside = if params.ticks || params.arrow_len <= 1e-6 {
         false
+    } else if text_outside {
+        true
     } else if diameter < 2.0 * params.arrow_len {
         true
     } else if diameter < params.text_width + 2.0 * params.arrow_len {
@@ -5064,7 +5123,7 @@ fn append_diameter_dimension(
         .unwrap_or(line_length * 0.5);
     let split_point = first + axis * split;
 
-    let draw_inside_line = !arrows_outside || params.dimtofl;
+    let draw_inside_line = text_outside || !arrows_outside || params.dimtofl;
     if draw_inside_line && !suppress.dim1 && split > 1e-6 {
         add_segment_with_text_break(&mut g.dim_lines, first, split_point, params.text_break);
     }
@@ -5089,18 +5148,25 @@ fn append_diameter_dimension(
         append_arrow(g, far_chord, -axis, arrow2);
     }
 
-    let text_along = (params.text_position - chord).dot(axis);
     if params.text_movement == 0 {
-        let (tip, suppressed) = if params.text_position.distance_squared(chord)
+        let (tip, direction, suppressed) = if params.text_position.distance_squared(chord)
             <= params.text_position.distance_squared(far_chord)
         {
-            (chord, suppress.dim1)
+            (chord, -axis, suppress.dim1)
         } else {
-            (far_chord, suppress.dim2)
+            (far_chord, axis, suppress.dim2)
         };
-        if !suppressed && leader_length.abs() > 1e-6 {
-            let direction = normalized_or(params.text_position - tip, axis);
-            add_segment(&mut g.dim_lines, tip, tip + direction * leader_length.abs());
+        if text_outside && !suppressed {
+            let leader_length = (text_anchor - tip).dot(direction);
+
+            if leader_length > 1e-6 {
+                let text_extension = params.text_width * 0.5;
+                add_segment(
+                    &mut g.dim_lines,
+                    tip,
+                    tip + direction * (leader_length + text_extension),
+                );
+            }
         } else if text_along < 0.0 && !suppress.dim1 {
             add_segment(&mut g.dim_lines, chord, params.text_position);
         } else if text_along > diameter && !suppress.dim2 {
@@ -7115,6 +7181,30 @@ fn dimension_text_pos_f64(
         p.x * p.x + p.y * p.y + p.z * p.z > 1e-16
     };
     if use_saved {
+        if let Dimension::Diameter(d) = dim {
+            let dx = d.definition_point.x - d.angle_vertex.x;
+            let dy = d.definition_point.y - d.angle_vertex.y;
+            let len = (dx * dx + dy * dy).sqrt().max(1e-12);
+
+            // Match the readable orientation used by text_on_dim_line().
+            let (mut nx, mut ny) = (dx / len, dy / len);
+            if nx < 0.0 || (nx == 0.0 && ny < 0.0) {
+                nx = -nx;
+                ny = -ny;
+            }
+
+            let px = -ny;
+            let py = nx;
+
+            let perp_sign = if dimtad == 4 { -1.0 } else { 1.0 };
+
+            return Vector3::new(
+                base.text_middle_point.x + px * perp_off * perp_sign,
+                base.text_middle_point.y + py * perp_off * perp_sign,
+                base.text_middle_point.z,
+            );
+        }
+
         return base.text_middle_point;
     }
 

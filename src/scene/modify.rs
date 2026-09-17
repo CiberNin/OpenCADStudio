@@ -1399,6 +1399,7 @@ impl Scene {
         if let Some(entity) = self.document.get_entity_mut(handle) {
             view::dispatch::apply_grip(entity, grip_id, apply);
         }
+        self.sync_diameter_association_angle(handle);
         if let Some((annotation_handle, old_landing)) = leader_landing_before {
             let new_landing = self.document.get_entity(handle).and_then(|entity| {
                 let EntityType::Leader(leader) = entity else {

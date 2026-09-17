@@ -2157,6 +2157,138 @@ impl Scene {
         }
         refreshed
     }
+    pub(crate) fn sync_diameter_association_angle(&mut self, dimension: Handle) {
+        let chord = match self.document.get_entity(dimension) {
+            Some(EntityType::Dimension(Dimension::Diameter(diameter))) => {
+                diameter.angle_vertex
+            }
+            _ => return,
+        };
+
+        let association_handle = self.document.objects.iter().find_map(|(handle, object)| {
+            let ObjectType::Associative(object) = object else {
+                return None;
+            };
+
+            let AssociativeData::DimensionAssociation(association) = &object.data else {
+                return None;
+            };
+
+            (association.dimension == dimension).then_some(*handle)
+        });
+
+        let Some(association_handle) = association_handle else {
+            return;
+        };
+
+        // Resolve the radial source while the association is borrowed immutably.
+        let angle = {
+            let Some(ObjectType::Associative(object)) =
+                self.document.objects.get(&association_handle)
+            else {
+                return;
+            };
+
+            let AssociativeData::DimensionAssociation(association) = &object.data else {
+                return;
+            };
+
+            let Some(reference) = association.references[0].first() else {
+                return;
+            };
+
+            let Ok(walked) = chain::walk_chain(&self.document, &reference.xrefs) else {
+                return;
+            };
+
+            let Some(entity) = self.document.get_entity(walked.entity) else {
+                return;
+            };
+
+            let Some(radial) = radial_source_for_marker(entity, reference.main_gs_marker) else {
+                return;
+            };
+
+            let Some(radial) = chain_map(self, &walked).map_radial(radial) else {
+                return;
+            };
+
+            radial.angle_at(dpoint(chord))
+        };
+
+        if self.is_recording_undo() {
+            let before = self.document.objects.get(&association_handle).cloned();
+            self.record_undo_object_before(association_handle, before);
+        }
+
+        let Some(ObjectType::Associative(object)) =
+            self.document.objects.get_mut(&association_handle)
+        else {
+            return;
+        };
+
+        let AssociativeData::DimensionAssociation(association) = &mut object.data else {
+            return;
+        };
+
+        let Some(reference) = association.references[0].first_mut() else {
+            return;
+        };
+
+        reference.osnap_distance = angle;
+        reference.osnap_point = chord;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acadrust::entities::{Circle, DimensionDiameter};
+
+    #[test]
+    fn diameter_angle_sync_records_the_association_for_undo() {
+        let mut scene = Scene::new();
+        let circle = scene.add_entity(EntityType::Circle(Circle::from_center_radius(
+            Vector3::ZERO,
+            5.0,
+        )));
+        let dimension = scene.add_entity(EntityType::Dimension(Dimension::Diameter(
+            DimensionDiameter::new(
+                Vector3::new(5.0, 0.0, 0.0),
+                Vector3::new(-5.0, 0.0, 0.0),
+            ),
+        )));
+        scene.attach_dimension_association(dimension, vec![Some(circle)]);
+        let association = scene
+            .document
+            .objects
+            .iter()
+            .find_map(|(handle, object)| match object {
+                ObjectType::Associative(object)
+                    if matches!(
+                        object.data,
+                        AssociativeData::DimensionAssociation(ref association)
+                            if association.dimension == dimension
+                    ) => Some(*handle),
+                _ => None,
+            })
+            .expect("diameter association");
+
+        scene.begin_undo_recording();
+        let Some(EntityType::Dimension(Dimension::Diameter(diameter))) =
+            scene.document.get_entity_mut(dimension)
+        else {
+            panic!("diameter dimension");
+        };
+        diameter.angle_vertex = Vector3::new(0.0, 5.0, 0.0);
+        scene.sync_diameter_association_angle(dimension);
+
+        let recording = scene.take_undo_recording().expect("undo recording");
+        let (_, objects, _, _) = recording.into_recorded_images();
+        assert!(objects
+            .iter()
+            .any(|(handle, before)| *handle == association && before.is_some()));
+    }
 }
 
 /// Average displacement of the dimension's resolved definition points.
