@@ -495,6 +495,8 @@ pub struct GridParams {
     pub step_x: f32,
     /// World-space Y spacing (GRIDUNIT Y, after adaptive scaling).
     pub step_y: f32,
+    /// Draw every Nth line as a brighter major line. < 2 disables majors.
+    pub major_every: u32,
     /// Grid origin in absolute world f64 and the active UCS axis directions.
     /// The grid always lies on the active UCS XY plane. Plain WCS passes
     /// `(ZERO, X, Y, Z)`.
@@ -513,6 +515,8 @@ pub struct GridParams {
 #[doc(hidden)]
 pub struct GridGeometry {
     pub segments: Vec<(Point, Point)>,
+    /// Brighter every-Nth lines (major grid). Stroked separately in `draw_grid`.
+    pub major_segments: Vec<(Point, Point)>,
     pub axis_extent: f32,
 }
 
@@ -523,7 +527,7 @@ impl GridGeometry {
     /// the `None` path.
     #[doc(hidden)]
     pub fn empty() -> Self {
-        Self { segments: Vec::new(), axis_extent: 0.0 }
+        Self { segments: Vec::new(), major_segments: Vec::new(), axis_extent: 0.0 }
     }
 }
 
@@ -785,6 +789,7 @@ impl canvas::Program<Message> for GridCanvas {
                             gb,
                             g.step_x,
                             g.step_y,
+                            g.major_every,
                             g.origin,
                             g.axes,
                             g.limits,
@@ -2078,36 +2083,33 @@ fn draw_grid(
     bounds: iced::Rectangle,
     step_x: f32,
     step_y: f32,
+    major_every: u32,
     grid_origin: glam::DVec3,
     grid_axes: (Vec3, Vec3, Vec3),
     limits: Option<(glam::DVec2, glam::DVec2)>,
     style: GridStyle,
 ) {
     let alpha = (style.opacity as f32 / 100.0).clamp(0.02, 1.0);
-    let gc = if style.bg_luminance > 0.5 {
-        // Light background: subtle dark grid lines
-        Color {
-            r: 0.10,
-            g: 0.10,
-            b: 0.10,
-            a: alpha,
-        }
+    // Major lines stay subtle: ~1.5x the minor alpha with a slightly heavier
+    // stroke, matching the reference hierarchy without glaring.
+    let major_alpha = (alpha * 1.5).clamp(0.03, 1.0);
+    let (r, g, b) = if style.bg_luminance > 0.5 {
+        (0.10, 0.10, 0.10)
     } else {
-        // Dark background: subtle light grid lines
-        Color {
-            r: 0.80,
-            g: 0.80,
-            b: 0.80,
-            a: alpha,
-        }
+        (0.80, 0.80, 0.80)
     };
-    let st = canvas::Stroke {
+    let minor_stroke = canvas::Stroke {
         width: 0.5,
-        style: canvas::Style::Solid(gc),
+        style: canvas::Style::Solid(Color { r, g, b, a: alpha }),
+        ..Default::default()
+    };
+    let major_stroke = canvas::Stroke {
+        width: 0.75,
+        style: canvas::Style::Solid(Color { r, g, b, a: major_alpha }),
         ..Default::default()
     };
     let geometry =
-        grid_segments(view_rot, eye, bounds, step_x, step_y, grid_origin, grid_axes, limits);
+        grid_segments(view_rot, eye, bounds, step_x, step_y, major_every, grid_origin, grid_axes, limits);
     if !geometry.segments.is_empty() {
         let path = canvas::Path::new(|builder| {
             for (p0, p1) in &geometry.segments {
@@ -2115,7 +2117,16 @@ fn draw_grid(
                 builder.line_to(*p1);
             }
         });
-        frame.stroke(&path, st);
+        frame.stroke(&path, minor_stroke);
+    }
+    if !geometry.major_segments.is_empty() {
+        let path = canvas::Path::new(|builder| {
+            for (p0, p1) in &geometry.major_segments {
+                builder.move_to(*p0);
+                builder.line_to(*p1);
+            }
+        });
+        frame.stroke(&path, major_stroke);
     }
     if geometry.axis_extent > 0.0 {
         let (gx, gy, gz) = grid_axes;
@@ -2139,6 +2150,7 @@ pub fn grid_segments(
     bounds: iced::Rectangle,
     step_x: f32,
     step_y: f32,
+    major_every: u32,
     grid_origin: glam::DVec3,
     grid_axes: (Vec3, Vec3, Vec3),
     limits: Option<(glam::DVec2, glam::DVec2)>,
@@ -2283,6 +2295,9 @@ pub fn grid_segments(
         return GridGeometry::empty();
     }
     let (sx, sy) = (step_x, step_y);
+    let is_major = |index: i32| {
+        major_every >= 2 && (index.rem_euclid(major_every as i32) == 0)
+    };
 
     // Trace a family-specific visible region around the viewport perimeter.
     // When a boundary ray points through the horizon, binary-search back toward
@@ -2581,13 +2596,15 @@ pub fn grid_segments(
 
         let (min1, max1) = coordinate_range(axis1);
         let (min2, max2) = coordinate_range(axis2);
+        let mut minor = Vec::new();
+        let mut major = Vec::new();
         if let Some((_, anchor_world, gap)) = best_anchor(0) {
             if gap >= MIN_HORIZON_GRID_PX {
                 let anchor = (anchor_world - grid_origin).as_vec3().dot(axis1);
                 let (start, end) = line_range(min1, max1, anchor, sx);
                 for index in start..=end {
                     if let Some(segment) = clip_world_line(0, index as f32 * sx) {
-                        all_segments.push(segment);
+                        if is_major(index) { major.push(segment); } else { minor.push(segment); }
                     }
                 }
             }
@@ -2598,11 +2615,13 @@ pub fn grid_segments(
                 let (start, end) = line_range(min2, max2, anchor, sy);
                 for index in start..=end {
                     if let Some(segment) = clip_world_line(1, index as f32 * sy) {
-                        all_segments.push(segment);
+                        if is_major(index) { major.push(segment); } else { minor.push(segment); }
                     }
                 }
             }
         }
+        all_segments.extend(minor);
+        let all_major: Vec<(Point, Point)> = major;
 
         // LIMITS bounds the grid, not the UCS axes. Size the axes from the
         // visible grid plane so X/Y/Z still span the viewport even when the
@@ -2616,9 +2635,10 @@ pub fn grid_segments(
         if limits_extent > 0.0 {
             axis_extent = limits_extent;
         }
-        return GridGeometry { segments: all_segments, axis_extent };
+        return GridGeometry { segments: all_segments, major_segments: all_major, axis_extent };
     }
 
+    let mut all_major: Vec<(Point, Point)> = Vec::new();
     // Lines parallel to axis2 (varying axis1 position).
     if let Some((anchor_screen, anchor_world, gap)) = best_anchor(0) {
         if gap >= MIN_HORIZON_GRID_PX {
@@ -2631,7 +2651,8 @@ pub fn grid_segments(
                 for i in start..=end {
                     let value = i as f32 * sx;
                     if let Some((p0, p1)) = project_line(0, value) {
-                        all_segments.extend(trim_line(0, p0, p1));
+                        let segs = trim_line(0, p0, p1);
+                        if is_major(i) { all_major.extend(segs); } else { all_segments.extend(segs); }
                     }
                 }
                 axis_extent =
@@ -2652,7 +2673,8 @@ pub fn grid_segments(
                 for i in start..=end {
                     let value = i as f32 * sy;
                     if let Some((p0, p1)) = project_line(1, value) {
-                        all_segments.extend(trim_line(1, p0, p1));
+                        let segs = trim_line(1, p0, p1);
+                        if is_major(i) { all_major.extend(segs); } else { all_segments.extend(segs); }
                     }
                 }
                 axis_extent =
@@ -2662,7 +2684,7 @@ pub fn grid_segments(
     }
 
     let _ = gz; // gz unused after move; retained for symmetry with `draw_axes` call sites.
-    GridGeometry { segments: all_segments, axis_extent }
+    GridGeometry { segments: all_segments, major_segments: all_major, axis_extent }
 }
 
 // ── Coloured UCS axes ──────────────────────────────────────────────────────
@@ -3740,6 +3762,7 @@ mod grid_key_tests {
             },
             step_x: 80.0,
             step_y: 80.0,
+            major_every: 5,
             origin: glam::DVec3::new(0.0, 0.0, 0.0),
             axes: (Vec3::X, Vec3::Y, Vec3::Z),
             limits: None,
@@ -3805,6 +3828,15 @@ mod grid_key_tests {
             GridKey::from_grids(&[p], baseline_bounds, GridStyle::default()),
             baseline_key,
             "step_y change must invalidate"
+        );
+
+        // major_every: major-line frequency change
+        let mut p = baseline_params();
+        p.major_every = 10;
+        assert_ne!(
+            GridKey::from_grids(&[p], baseline_bounds, GridStyle::default()),
+            baseline_key,
+            "major_every change must invalidate"
         );
 
         // origin: translate the UCS origin off-zero
@@ -3962,10 +3994,38 @@ mod grid_key_tests {
         let eye = glam::DVec3::new(0.0, 0.0, 500.0);
         let bounds = iced::Rectangle { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
         let g = grid_segments(
-            view_rot, eye, bounds, 10.0, 2.0,
+            view_rot, eye, bounds, 10.0, 2.0, 5,
             glam::DVec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
         );
         assert!(!g.segments.is_empty(), "grid lines expected");
+    }
+
+    /// Every-Nth line lands in `major_segments`, the rest in `segments`.
+    #[test]
+    fn grid_segments_partition_major_lines() {
+        // Top-down orthographic-ish view over the origin: deterministic lines.
+        let view_rot = glam::camera::rh::proj::directx::orthographic(
+            -400.0, 400.0, -300.0, 300.0, 0.1, 2000.0,
+        ) * glam::camera::rh::view::look_at_mat4(
+            Vec3::new(0.0, 0.0, 500.0),
+            Vec3::ZERO,
+            Vec3::Y,
+        );
+        let eye = glam::DVec3::new(0.0, 0.0, 500.0);
+        let bounds = iced::Rectangle { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let g = grid_segments(
+            view_rot, eye, bounds, 10.0, 10.0, 5,
+            glam::DVec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        );
+        assert!(!g.segments.is_empty(), "minor lines expected");
+        assert!(!g.major_segments.is_empty(), "major lines expected");
+        // major_every = 1 disables the split: everything is minor.
+        let flat = grid_segments(
+            view_rot, eye, bounds, 10.0, 10.0, 1,
+            glam::DVec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        );
+        assert!(flat.major_segments.is_empty());
+        assert!(!flat.segments.is_empty());
     }
 }
 
@@ -4001,6 +4061,7 @@ mod grid_canvas_state_tests {
             bounds,
             step_x: 80.0,
             step_y: 80.0,
+            major_every: 5,
             origin: grid_origin,
             axes: grid_axes,
             limits,

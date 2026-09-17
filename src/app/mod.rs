@@ -545,6 +545,8 @@ pub(super) struct OpenCADStudio {
     /// GRIDUNIT X/Y display spacing backing the DSettings grid-resize inputs.
     pub grid_spacing_x: f32,
     pub grid_spacing_y: f32,
+    /// GRIDMAJOR: every Nth line draws as a brighter major line.
+    pub grid_major_every: u32,
     /// Adaptive grid: scale GRIDUNIT up by 5x steps to stay readable.
     pub grid_adaptive: bool,
     /// Display the grid beyond LIMITS (infinite) instead of clipping to them.
@@ -2767,6 +2769,11 @@ pub enum Message {
     DraftingSettingsToggleSnap,
     DraftingSettingsSnapXChanged(String),
     DraftingSettingsSnapYChanged(String),
+    DraftingSettingsGridXChanged(String),
+    DraftingSettingsGridYChanged(String),
+    DraftingSettingsGridMajorChanged(String),
+    DraftingSettingsToggleAdaptiveGrid,
+    DraftingSettingsToggleBeyondLimits,
     DraftingSettingsToggleEqualSnap,
     DraftingSettingsToggleIsometric,
     DraftingSettingsSetIsoPlane(crate::app::settings::IsoPlane),
@@ -3815,6 +3822,7 @@ impl OpenCADStudio {
             show_grid: false,
             grid_spacing_x: 10.0,
             grid_spacing_y: 10.0,
+            grid_major_every: 5,
             grid_adaptive: true,
             grid_beyond_limits: true,
             dyn_input: true,

@@ -16,6 +16,15 @@ impl DraftingSettingsState {
             snap_x_input: crate::ui::window::drafting_settings::format_snap_spacing(snap_x),
             snap_y_input: crate::ui::window::drafting_settings::format_snap_spacing(snap_y),
             snap_equal,
+            grid_x_input: crate::ui::window::drafting_settings::format_snap_spacing(
+                app.grid_spacing_x,
+            ),
+            grid_y_input: crate::ui::window::drafting_settings::format_snap_spacing(
+                app.grid_spacing_y,
+            ),
+            grid_major_input: format!("{}", app.grid_major_every),
+            grid_adaptive: app.grid_adaptive,
+            grid_beyond_limits: app.grid_beyond_limits,
             isometric: app.isometric_drafting,
             iso_plane: app.iso_plane,
             snap_angle_deg: app.snap_angle_deg,
@@ -61,7 +70,22 @@ impl OpenCADStudio {
                 live.snap_y_input = live.snap_x_input.clone();
             }
         }
+        let gx = crate::ui::window::drafting_settings::parse_snap_spacing(&state.grid_x_input);
+        let gy = crate::ui::window::drafting_settings::parse_snap_spacing(&state.grid_y_input);
+        let gm = crate::ui::window::drafting_settings::parse_grid_major(&state.grid_major_input);
+        let (Some(gx), Some(gy), Some(gm)) = (gx, gy, gm) else {
+            self.command_line.push_error(
+                crate::t!("Grid X/Y spacings must be positive numbers and Major every 2-100.")
+                    .as_ref(),
+            );
+            return false;
+        };
         self.show_grid = state.grid_on;
+        self.grid_spacing_x = gx;
+        self.grid_spacing_y = gy;
+        self.grid_major_every = gm;
+        self.grid_adaptive = state.grid_adaptive;
+        self.grid_beyond_limits = state.grid_beyond_limits;
         self.snapper.grid_snap_on = state.snap_on;
         self.snapper.snap_spacing_x = sx;
         self.snapper.snap_spacing_y = sy;
@@ -97,6 +121,11 @@ mod tests {
             snap_x_input: "10".to_string(),
             snap_y_input: "10".to_string(),
             snap_equal: true,
+            grid_x_input: "10".to_string(),
+            grid_y_input: "10".to_string(),
+            grid_major_input: "5".to_string(),
+            grid_adaptive: true,
+            grid_beyond_limits: true,
             isometric: false,
             iso_plane: crate::app::settings::IsoPlane::Left,
             snap_angle_deg: 0.0,
@@ -133,6 +162,11 @@ mod tests {
             snap_x_input: "10".to_string(),
             snap_y_input: "10".to_string(),
             snap_equal: true,
+            grid_x_input: "10".to_string(),
+            grid_y_input: "10".to_string(),
+            grid_major_input: "5".to_string(),
+            grid_adaptive: true,
+            grid_beyond_limits: true,
             isometric: false,
             iso_plane: crate::app::settings::IsoPlane::Left,
             snap_angle_deg: 0.0,
@@ -220,11 +254,33 @@ mod tests {
         let mut modded = base.clone();
         modded.snap_equal = false;
         assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.grid_x_input = "5".to_string();
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.grid_y_input = "5".to_string();
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.grid_major_input = "10".to_string();
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.grid_adaptive = false;
+        assert!(modded.is_dirty(&base));
+
+        let mut modded = base.clone();
+        modded.grid_beyond_limits = false;
+        assert!(modded.is_dirty(&base));
     }
 
     #[test]
     fn test_parse_snap_spacing() {
-        use crate::ui::window::drafting_settings::{format_snap_spacing, parse_snap_spacing};
+        use crate::ui::window::drafting_settings::{
+            format_snap_spacing, parse_grid_major, parse_snap_spacing,
+        };
         assert_eq!(parse_snap_spacing("10"), Some(10.0));
         assert_eq!(parse_snap_spacing(" 2.5 "), Some(2.5));
         assert_eq!(parse_snap_spacing("0"), None);
@@ -232,5 +288,9 @@ mod tests {
         assert_eq!(parse_snap_spacing("abc"), None);
         assert_eq!(parse_snap_spacing(""), None);
         assert_eq!(format_snap_spacing(10.0), "10");
+        assert_eq!(parse_grid_major("5"), Some(5));
+        assert_eq!(parse_grid_major("1"), None);
+        assert_eq!(parse_grid_major("101"), None);
+        assert_eq!(parse_grid_major("abc"), None);
     }
 }

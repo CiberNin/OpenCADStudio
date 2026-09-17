@@ -465,6 +465,7 @@ impl OpenCADStudio {
                         bounds,
                         step_x,
                         step_y,
+                        major_every: self.grid_major_every,
                         origin,
                         axes,
                         limits,

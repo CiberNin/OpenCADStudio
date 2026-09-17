@@ -533,6 +533,7 @@ impl OpenCADStudio {
             snap_spacing_y: self.snapper.snap_spacing_y,
             grid_spacing_x: self.grid_spacing_x,
             grid_spacing_y: self.grid_spacing_y,
+            grid_major_every: self.grid_major_every,
             grid_adaptive: self.grid_adaptive,
             grid_beyond_limits: self.grid_beyond_limits,
             block_mru: self.block_mru.clone(),
@@ -641,6 +642,7 @@ impl OpenCADStudio {
             crate::app::settings::sanitize_snap_spacing(s.snap_spacing_y);
         self.grid_spacing_x = crate::app::settings::sanitize_snap_spacing(s.grid_spacing_x);
         self.grid_spacing_y = crate::app::settings::sanitize_snap_spacing(s.grid_spacing_y);
+        self.grid_major_every = crate::app::settings::sanitize_grid_major(s.grid_major_every);
         self.grid_adaptive = s.grid_adaptive;
         self.grid_beyond_limits = s.grid_beyond_limits;
         // Block usage: clone but cap to sane sizes (MRU 20, freq map 200)

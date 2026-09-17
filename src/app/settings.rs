@@ -464,6 +464,9 @@ pub struct UserSettings {
     pub grid_spacing_x: f32,
     #[serde(default = "default_snap_spacing")]
     pub grid_spacing_y: f32,
+    /// GRIDMAJOR: every Nth grid line is a brighter major line.
+    #[serde(default = "default_grid_major")]
+    pub grid_major_every: u32,
     /// Adaptive grid scaling (default on).
     #[serde(default = "default_true")]
     pub grid_adaptive: bool,
@@ -496,8 +499,17 @@ fn default_snap_spacing() -> f32 {
     10.0
 }
 
+fn default_grid_major() -> u32 {
+    5
+}
+
 fn default_true() -> bool {
     true
+}
+
+/// Clamp a major-line interval to the range the dialog accepts.
+pub fn sanitize_grid_major(v: u32) -> u32 {
+    v.clamp(2, 100)
 }
 
 /// Clamp a snap spacing to the positive range the dialog accepts.
@@ -616,6 +628,7 @@ impl Default for UserSettings {
             snap_spacing_y: 10.0,
             grid_spacing_x: 10.0,
             grid_spacing_y: 10.0,
+            grid_major_every: 5,
             grid_adaptive: true,
             grid_beyond_limits: true,
             block_mru: Vec::new(),

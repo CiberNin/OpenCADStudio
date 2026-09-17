@@ -1180,15 +1180,18 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
     let origin2 = glam::DVec3::new(0.0, 0.0, 0.0);
     let axes2 = (Vec3::X, Vec3::Y, Vec3::Z);
     let limits2: Option<(glam::DVec2, glam::DVec2)> = None;
+    // Both panes use a square grid, so one step per pane plus a shared
+    // major-line interval covers the new step_x / step_y / major_every args.
+    let major_every = 5u32;
 
     // ── 1. Uncached grid geometry generation ──
     if runner.should_run("ui_grid_geometry_uncached") {
         for _ in 0..10 {
             let _ = black_box(grid_segments(
-                view_rot1, eye1, bounds1, step1, step1, origin1, axes1, limits1,
+                view_rot1, eye1, bounds1, step1, step1, major_every, origin1, axes1, limits1,
             ));
             let _ = black_box(grid_segments(
-                view_rot2, eye2, bounds2, step2, step2, origin2, axes2, limits2,
+                view_rot2, eye2, bounds2, step2, step2, major_every, origin2, axes2, limits2,
             ));
         }
 
@@ -1199,8 +1202,8 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
         for _ in 0..runs {
             let t0 = Instant::now();
             for _ in 0..n {
-                let g1 = grid_segments(view_rot1, eye1, bounds1, step1, step1, origin1, axes1, limits1);
-                let g2 = grid_segments(view_rot2, eye2, bounds2, step2, step2, origin2, axes2, limits2);
+                let g1 = grid_segments(view_rot1, eye1, bounds1, step1, step1, major_every, origin1, axes1, limits1);
+                let g2 = grid_segments(view_rot2, eye2, bounds2, step2, step2, major_every, origin2, axes2, limits2);
                 black_box(g1);
                 black_box(g2);
             }
@@ -1227,6 +1230,7 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
             bounds: bounds1,
             step_x: step1,
             step_y: step1,
+            major_every,
             origin: origin1,
             axes: axes1,
             limits: limits1,
@@ -1237,6 +1241,7 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
             bounds: bounds2,
             step_x: step2,
             step_y: step2,
+            major_every,
             origin: origin2,
             axes: axes2,
             limits: limits2,

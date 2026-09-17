@@ -31,6 +31,11 @@ pub struct DraftingSettingsState {
     pub snap_x_input: String,
     pub snap_y_input: String,
     pub snap_equal: bool,
+    pub grid_x_input: String,
+    pub grid_y_input: String,
+    pub grid_major_input: String,
+    pub grid_adaptive: bool,
+    pub grid_beyond_limits: bool,
     pub isometric: bool,
     pub iso_plane: IsoPlane,
     pub snap_angle_deg: f32,
@@ -62,6 +67,11 @@ impl DraftingSettingsState {
             || self.snap_x_input != saved.snap_x_input
             || self.snap_y_input != saved.snap_y_input
             || self.snap_equal != saved.snap_equal
+            || self.grid_x_input != saved.grid_x_input
+            || self.grid_y_input != saved.grid_y_input
+            || self.grid_major_input != saved.grid_major_input
+            || self.grid_adaptive != saved.grid_adaptive
+            || self.grid_beyond_limits != saved.grid_beyond_limits
             || self.isometric != saved.isometric
             || self.iso_plane != saved.iso_plane
             || (self.snap_angle_deg - saved.snap_angle_deg).abs() > 0.001
@@ -96,6 +106,12 @@ pub fn parse_snap_spacing(s: &str) -> Option<f32> {
     } else {
         None
     }
+}
+
+/// Parse a major-line interval. Must be an integer in 2..=100.
+pub fn parse_grid_major(s: &str) -> Option<u32> {
+    let v: u32 = s.trim().parse().ok()?;
+    (2..=100).contains(&v).then_some(v)
 }
 
 /// Helper for grouped sub-panels with a light border and header title.
@@ -298,19 +314,31 @@ pub fn view_window<'a>(
             column![
                 row![
                     text(crate::t!("Grid X spacing:")).size(11).width(120),
-                    text("10.00").size(11),
+                    text_input("10", &state.grid_x_input)
+                        .on_input(Message::DraftingSettingsGridXChanged)
+                        .size(11)
+                        .padding([4, 7])
+                        .width(100),
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
                 row![
                     text(crate::t!("Grid Y spacing:")).size(11).width(120),
-                    text("10.00").size(11),
+                    text_input("10", &state.grid_y_input)
+                        .on_input(Message::DraftingSettingsGridYChanged)
+                        .size(11)
+                        .padding([4, 7])
+                        .width(100),
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
                 row![
                     text(crate::t!("Major line every:")).size(11).width(120),
-                    text("5").size(11),
+                    text_input("5", &state.grid_major_input)
+                        .on_input(Message::DraftingSettingsGridMajorChanged)
+                        .size(11)
+                        .padding([4, 7])
+                        .width(100),
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
@@ -322,13 +350,17 @@ pub fn view_window<'a>(
             crate::t!("Grid behavior"),
             column![
                 row![
-                    checkbox(true).size(14),
+                    checkbox(state.grid_adaptive)
+                        .on_toggle(|_| Message::DraftingSettingsToggleAdaptiveGrid)
+                        .size(14),
                     text(crate::t!("Adaptive grid")).size(11),
                 ]
                 .spacing(6)
                 .align_y(iced::Center),
                 row![
-                    checkbox(true).size(14),
+                    checkbox(state.grid_beyond_limits)
+                        .on_toggle(|_| Message::DraftingSettingsToggleBeyondLimits)
+                        .size(14),
                     text(crate::t!("Display grid beyond Limits")).size(11),
                 ]
                 .spacing(6)
