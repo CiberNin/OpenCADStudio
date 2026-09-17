@@ -2157,6 +2157,82 @@ impl Scene {
         }
         refreshed
     }
+    pub(crate) fn sync_diameter_association_angle(&mut self, dimension: Handle) {
+        let chord = match self.document.get_entity(dimension) {
+            Some(EntityType::Dimension(Dimension::Diameter(diameter))) => {
+                diameter.angle_vertex
+            }
+            _ => return,
+        };
+
+        let association_handle = self.document.objects.iter().find_map(|(handle, object)| {
+            let ObjectType::Associative(object) = object else {
+                return None;
+            };
+
+            let AssociativeData::DimensionAssociation(association) = &object.data else {
+                return None;
+            };
+
+            (association.dimension == dimension).then_some(*handle)
+        });
+
+        let Some(association_handle) = association_handle else {
+            return;
+        };
+
+        // Resolve the radial source while the association is borrowed immutably.
+        let angle = {
+            let Some(ObjectType::Associative(object)) =
+                self.document.objects.get(&association_handle)
+            else {
+                return;
+            };
+
+            let AssociativeData::DimensionAssociation(association) = &object.data else {
+                return;
+            };
+
+            let Some(reference) = association.references[0].first() else {
+                return;
+            };
+
+            let Ok(walked) = chain::walk_chain(&self.document, &reference.xrefs) else {
+                return;
+            };
+
+            let Some(entity) = self.document.get_entity(walked.entity) else {
+                return;
+            };
+
+            let Some(radial) = radial_source_for_marker(entity, reference.main_gs_marker) else {
+                return;
+            };
+
+            let Some(radial) = chain_map(self, &walked).map_radial(radial) else {
+                return;
+            };
+
+            radial.angle_at(dpoint(chord))
+        };
+
+        let Some(ObjectType::Associative(object)) =
+            self.document.objects.get_mut(&association_handle)
+        else {
+            return;
+        };
+
+        let AssociativeData::DimensionAssociation(association) = &mut object.data else {
+            return;
+        };
+
+        let Some(reference) = association.references[0].first_mut() else {
+            return;
+        };
+
+        reference.osnap_distance = angle;
+        reference.osnap_point = chord;
+    }
 }
 
 /// Average displacement of the dimension's resolved definition points.
