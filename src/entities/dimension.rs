@@ -3825,7 +3825,7 @@ fn tessellate_dimension_inner(
             &mut geom.dim_lines,
             point,
             vec3_local(dim.base().normal),
-            dim_txt as f32 * 0.6,
+            dim_txt as f32 * CELL_WIDTH as f32,
             jog_angle,
         );
     }
@@ -4440,7 +4440,7 @@ fn text_fill_rect(
     // ~0.6 × text_height per character; matches average glyph aspect for
     // the bundled stick fonts. Inflate by 1 DIMGAP on each side.
     let stack_scale = style.map(dimtfac_or_one).unwrap_or(1.0);
-    let approx_w = text_cells(&value, stack_scale) * text_height * 0.6 + dimgap * 2.0;
+    let approx_w = text_cells(&value, stack_scale) * text_height * CELL_WIDTH + dimgap * 2.0;
     let approx_h = dimension_text_extent_height(dim, style, text_height) + dimgap * 2.0;
     let rot = if dim.base().text_rotation.abs() > 1e-9 {
         dim.base().text_rotation
@@ -4484,7 +4484,7 @@ fn arc_length_symbol_points(
     let rotation = dimension_text_rotation(dim, style);
     let (sin_rotation, cos_rotation) = rotation.sin_cos();
     let stack_scale = style.map(dimtfac_or_one).unwrap_or(1.0);
-    let text_width = text_cells(&value, stack_scale) * text_height * 0.6;
+    let text_width = text_cells(&value, stack_scale) * text_height * CELL_WIDTH;
     let symbol_width = text_height * 0.62;
     let symbol_height = text_height * 0.20;
     let (center_x, center_y) = if symbol_position == 1 {
@@ -4550,7 +4550,7 @@ fn dimension_text_layout(
         .map(|style| (style.dimgap.abs() * dim_scale) as f32)
         .unwrap_or(0.09);
     let width = dimension_text_cells(dimension, style)
-        .map(|cells| cells as f32 * text_height as f32 * 0.6 + gap * 2.0)
+        .map(|cells| cells as f32 * text_height as f32 * CELL_WIDTH as f32 + gap * 2.0)
         .unwrap_or(0.0);
     let position = vec3_local(dimension_text_pos_f64(
         dimension,
@@ -4600,7 +4600,7 @@ struct DimLineParams {
     horizontal_text: bool,
     text_movement: i16,
     text_break: Option<TextBreak>,
-    /// DIMTMOVE 1: the point the file stores is where the leader's hook ends,
+    /// DIMTMOVE 1: the point the file stores is where the leader's hook starts,
     /// so the leader is drawn to it exactly and only the text is estimated.
     leader_anchor: Option<Vec3>,
 }
@@ -5154,12 +5154,13 @@ fn append_linear_dimension(
 fn append_radial_leader(g: &mut DimGeom, tip: Vec3, text: Vec3, params: &DimLineParams) {
     if params.horizontal_text {
         let side = if text.x >= tip.x { 1.0 } else { -1.0 };
-        let text_edge = params.leader_anchor.unwrap_or(Vec3::new(
-            text.x - side * params.text_width * 0.5,
-            text.y,
-            text.z,
-        ));
-        let hook_start = text_edge - Vec3::X * (side * params.arrow_len);
+        let (hook_start, text_edge) = match params.leader_anchor {
+            Some(anchor) => (anchor, anchor + Vec3::X * (side * params.arrow_len)),
+            None => {
+                let edge = Vec3::new(text.x - side * params.text_width * 0.5, text.y, text.z);
+                (edge - Vec3::X * (side * params.arrow_len), edge)
+            }
+        };
         let slope = (hook_start - tip).y.abs().atan2((hook_start - tip).x.abs());
         // A leader already within 15° of horizontal runs straight to the text.
         if slope > 15.0_f32.to_radians() {
@@ -6181,7 +6182,7 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         let height = style.dimtxt * scale;
         let gap = style.dimgap.abs() * scale;
         let text_width = dimension_text_cells(dim, Some(style))
-            .map(|cells| cells * height * 0.6 + gap * 2.0)
+            .map(|cells| cells * height * CELL_WIDTH + gap * 2.0)
             .unwrap_or(0.0);
         let arrow = style.dimasz * scale;
         let span = radius as f64 * (end - start).abs() as f64;
@@ -6210,7 +6211,7 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         let height = style.dimtxt * scale;
         let gap = style.dimgap.abs() * scale;
         let text_width = dimension_text_cells(dim, Some(style))
-            .map(|cells| cells * height * 0.6 + gap * 2.0)
+            .map(|cells| cells * height * CELL_WIDTH + gap * 2.0)
             .unwrap_or(0.0);
         let arrow = style.dimasz * scale;
         let insufficient = text_width + arrow > available;
@@ -6237,7 +6238,7 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         let height = style.dimtxt * scale;
         let gap = style.dimgap.abs() * scale;
         let text_width = dimension_text_cells(dim, Some(style))
-            .map(|cells| cells * height * 0.6 + gap * 2.0)
+            .map(|cells| cells * height * CELL_WIDTH + gap * 2.0)
             .unwrap_or(0.0);
         let arrow = style.dimasz * scale;
         let insufficient = text_width + arrow > available;
@@ -6281,7 +6282,7 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
     let height = style.dimtxt * scale;
     let gap = style.dimgap.abs() * scale;
     let text_width = dimension_text_cells(dim, Some(style))
-        .map(|cells| cells * height * 0.6 + gap * 2.0)
+        .map(|cells| cells * height * CELL_WIDTH + gap * 2.0)
         .unwrap_or(0.0);
     let arrow = style.dimasz * scale;
     let span = hi - lo;
@@ -6365,7 +6366,9 @@ fn dimension_text_parts(
     };
     let primary_raw = match dim {
         Dimension::Radius(_) | Dimension::LargeRadial(_) => format!("R{}", value),
-        Dimension::Diameter(_) => format!("Ø{}", value),
+        // U+2205 is the diameter sign AutoCAD writes (and what `%%c` resolves
+        // to); the bundled dimension fonts carry it where Latin Ø is missing.
+        Dimension::Diameter(_) => format!("∅{}", value),
         _ => value,
     };
 
@@ -6643,13 +6646,13 @@ fn dimension_tolerance_entity(
         };
 
     // Approximate widths from glyph counts (~0.6 × cell size per char).
-    let primary_w = primary_value_len as f64 * primary_height * 0.6;
+    let primary_w = primary_value_len as f64 * primary_height * CELL_WIDTH;
     let tol_visible_chars = tol
         .strip_prefix("\\S")
         .and_then(|value| value.strip_suffix(';'))
         .map(|value| value.split('^').map(str::len).max().unwrap_or(0))
         .unwrap_or_else(|| tol.chars().count());
-    let tol_w = tol_visible_chars as f64 * tol_height * 0.6;
+    let tol_w = tol_visible_chars as f64 * tol_height * CELL_WIDTH;
     let gap = primary_height * 0.2;
     let dx_local = primary_w * 0.5 + tol_w * 0.5 + gap;
     let dy_local = match s.dimtolj {
@@ -6709,6 +6712,12 @@ fn effective_dimlfac(style: Option<&DimStyle>) -> f64 {
         lfac
     }
 }
+
+/// Average advance of one character cell as a fraction of the text height.
+/// Measured on the bundled stroke fonts by rendering the text of 106 saved
+/// dimension pictures: median 0.66, where the old guess of 0.60 left every
+/// fit and hook estimate ten percent narrow.
+const CELL_WIDTH: f64 = 0.66;
 
 /// DIMTFAC with the unset value 0 read as 1.
 fn dimtfac_or_one(s: &DimStyle) -> f64 {
@@ -7367,7 +7376,7 @@ fn dimension_text_pos_f64(
     };
     // Rough text width + arrow allowance, used to decide text-outside fit.
     let text_w = dimension_text_cells(dim, style)
-        .map(|cells| cells * text_height * 0.6 + 2.0 * dimgap)
+        .map(|cells| cells * text_height * CELL_WIDTH + 2.0 * dimgap)
         .unwrap_or(0.0);
     let arrow = style
         .map(|style| style.dimasz * dim_scale)
@@ -7378,14 +7387,36 @@ fn dimension_text_pos_f64(
 
     if let Some(point) = stored_text_point(dim) {
         return match dim {
-            // DIMTMOVE 1 stores where the leader's hook ends; the text starts
-            // there and runs away from the arc.
+            // DIMTMOVE 1 stores where the leader's hook starts: one arrow of
+            // hook, a gap, then the text, all running away from the arc.
+            // Measured on 39 such dimensions the stored point sits 2.4 text
+            // heights before the text, which is DIMASZ plus DIMGAP.
             Dimension::Radius(_) | Dimension::Diameter(_)
                 if style.is_some_and(|s| s.dimtmove == 1) =>
             {
                 let tip = radial_leader_tip(dim, point);
                 let side = if point.x >= tip.x { 1.0 } else { -1.0 };
-                Vector3::new(point.x + side * text_w * 0.5, point.y, point.z)
+                Vector3::new(point.x + side * (arrow + text_w * 0.5), point.y, point.z)
+            }
+            // A diameter whose text the user dragged keeps the grip point on
+            // the leader and lifts the text by the DIMTAD offset (#1323).
+            Dimension::Diameter(d) if base.text_user_positioned && dimtad != 0 => {
+                let dx = d.definition_point.x - d.angle_vertex.x;
+                let dy = d.definition_point.y - d.angle_vertex.y;
+                let len = (dx * dx + dy * dy).sqrt().max(1e-12);
+                // Match the readable orientation used by text_on_dim_line().
+                let (mut nx, mut ny) = (dx / len, dy / len);
+                if nx < 0.0 || (nx == 0.0 && ny < 0.0) {
+                    nx = -nx;
+                    ny = -ny;
+                }
+                let (px, py) = (-ny, nx);
+                let perp_sign = if dimtad == 4 { -1.0 } else { 1.0 };
+                Vector3::new(
+                    point.x + px * perp_off * perp_sign,
+                    point.y + py * perp_off * perp_sign,
+                    point.z,
+                )
             }
             _ => point,
         };
@@ -8615,7 +8646,7 @@ mod layout_parity_tests {
         let dim = Dimension::Linear(d);
         let s = style(&document);
         let position = dimension_text_pos_f64(&dim, Some(&s), 0.18, 1.0);
-        let half_width = dimension_text_cells(&dim, Some(&s)).unwrap() * 0.18 * 0.6 * 0.5;
+        let half_width = dimension_text_cells(&dim, Some(&s)).unwrap() * 0.18 * CELL_WIDTH * 0.5;
         let text_start = position.x - half_width;
         let stub_end = 0.2 + 2.0 * 0.18;
         assert!(
@@ -8673,6 +8704,27 @@ mod layout_parity_tests {
         assert_eq!(through_viewport.dimlfac, 4.0, "the recorded factor, made positive");
         let unknown = resolved_dimension_style(&source, &Dimension::Linear(d.clone()), &document);
         assert_eq!(unknown.dimlfac, 1.0, "model space without a record: unscaled");
+    }
+
+    // DIMTMOVE 1: the stored point is where the hook starts. The hook runs
+    // one arrow toward the text, and the text begins a gap beyond it.
+    #[test]
+    fn dimtmove_one_anchors_the_hook_start_at_the_stored_point() {
+        let mut document = document();
+        document.dim_styles.get_mut("Standard").unwrap().dimtmove = 1;
+        let mut d = DimensionRadius::default();
+        d.angle_vertex = Vector3::new(0.0, 0.0, 0.0);
+        d.definition_point = Vector3::new(1.0, 0.0, 0.0);
+        d.base.text_middle_point = Vector3::new(3.0, 1.5, 0.0);
+        let dim = Dimension::Radius(d);
+        let (points, _) = drawn(&document, &dim);
+        let hook: Vec<f64> = points.iter().filter(|p| (p.y - 1.5).abs() < 1e-6).map(|p| p.x).collect();
+        let (lo, hi) = (hook.iter().cloned().fold(f64::MAX, f64::min), hook.iter().cloned().fold(f64::MIN, f64::max));
+        assert!((lo - 3.0).abs() < 1e-6 && (hi - 3.18).abs() < 1e-6, "hook from the stored point one arrow toward the text: {lo}..{hi}");
+        let s = style(&document);
+        let position = dimension_text_pos_f64(&dim, Some(&s), 0.18, 1.0);
+        let half = dimension_text_cells(&dim, Some(&s)).unwrap() * 0.18 * CELL_WIDTH * 0.5;
+        assert!((position.x - half - 0.09 - 3.18).abs() < 1e-6, "text starts a gap past the hook end, got {}", position.x - half);
     }
 
     // Text stored well past the second extension line of a horizontal
