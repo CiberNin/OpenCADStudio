@@ -2852,6 +2852,15 @@ draw =
     .center-keyword = Középpont
     .close-keyword = Zárás
     .second-pt = Második pont
+    .arc-specify-start-point-of-arc = ARC  Adja meg az ív kezdőpontját:
+    .arc-specify-second-point-of-arc = ARC  Adja meg az ív második pontját:
+    .arc-specify-end-point-of-arc = ARC  Adja meg az ív végpontját:
+    .arc-specify-center-point-of-arc = ARC  Adja meg az ív középpontját:
+    .arc-specify-included-angle = ARC  Adja meg a középponti szöget:
+    .arc-specify-length-of-chord = ARC  Adja meg a húr hosszát:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Adja meg az érintő irányát az ív kezdőpontjában:
+    .arc-specify-radius-of-arc = ARC  Adja meg az ív sugarát:
+    .chord-length = Húrhossz
 
 modify =
     .add-vertex = Csúcspont hozzáadása
@@ -5309,6 +5318,10 @@ ui =
     .deselect-all = Kijelölés megszüntetése
     .options-ellipsis = Beállítások...
     .base-point = Bázispont
+    .snap-overrides = Ideiglenes tárgyraszter
+    .mid-between-2-points = 2 pont közötti felezőpont
+    .osnap-settings = Tárgyraszter beállítások...
+    .snap-override-none-next-pick-only = Ideiglenes tárgyraszter: Nincs (csak a következő pontra).
 
 dimstyle =
     .keep-text-between-extension-lines = Mindig legyen szöveg a hosszabbító sorok között

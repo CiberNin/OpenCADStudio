@@ -2852,6 +2852,15 @@ draw =
     .center-keyword = 중심
     .close-keyword = 닫기
     .second-pt = 두 번째 점
+    .arc-specify-start-point-of-arc = ARC  호의 시작점 지정:
+    .arc-specify-second-point-of-arc = ARC  호의 두 번째 점 지정:
+    .arc-specify-end-point-of-arc = ARC  호의 끝점 지정:
+    .arc-specify-center-point-of-arc = ARC  호의 중심점 지정:
+    .arc-specify-included-angle = ARC  사이각 지정:
+    .arc-specify-length-of-chord = ARC  현의 길이 지정:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  호 시작점의 접선 방향 지정:
+    .arc-specify-radius-of-arc = ARC  호의 반지름 지정:
+    .chord-length = 현 길이
 
 modify =
     .add-vertex = 정점 추가
@@ -5309,6 +5318,10 @@ ui =
     .deselect-all = 선택 해제
     .options-ellipsis = 옵션...
     .base-point = 기준점
+    .snap-overrides = 스냅 재지정
+    .mid-between-2-points = 두 점 사이의 중간
+    .osnap-settings = 객체 스냅 설정...
+    .snap-override-none-next-pick-only = 스냅 재지정: 없음 (다음 선택만).
 
 dimstyle =
     .keep-text-between-extension-lines = 보조선 사이에 항상 텍스트 유지

@@ -416,6 +416,17 @@ impl Snapper {
         self.snap_enabled = true;
     }
 
+    /// One-shot "None" override (Snap Overrides ▸ None): the next pick takes
+    /// the raw cursor point, ignoring every running object snap, after which
+    /// `clear_override` restores the saved configuration.
+    pub fn set_override_none(&mut self) {
+        if self.override_saved.is_none() {
+            self.override_saved = Some((self.enabled.clone(), self.snap_enabled));
+        }
+        self.enabled.clear();
+        self.snap_enabled = false;
+    }
+
     /// Restore the pre-override snap configuration. No-op when inactive.
     pub fn clear_override(&mut self) {
         if let Some((enabled, on)) = self.override_saved.take() {

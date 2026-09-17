@@ -754,6 +754,14 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::SnapOverrideNone => {
+                self.snap_override_popup = None;
+                self.snapper.set_override_none();
+                self.command_line
+                    .push_info(crate::t!("Snap override: None (next pick only).").as_ref());
+                Task::none()
+            }
+
             Message::SnapOverrideMtp => {
                 self.snap_override_popup = None;
                 self.tabs[self.active_tab]

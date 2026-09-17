@@ -231,6 +231,9 @@ pub(super) struct DocumentTab {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
     pub(super) suspended_cmd: Option<Box<dyn CadCommand>>,
+    /// `suspended_cmd` was parked by a transparent command (`'ZOOM`) and is
+    /// restored as soon as the transparent one ends.
+    pub(super) transparent_resume: bool,
 }
 
 impl DocumentTab {
@@ -642,6 +645,7 @@ impl DocumentTab {
             zoom_dynamic_mode: false,
             plugin_state: HashMap::new(),
             suspended_cmd: None,
+            transparent_resume: false,
         }
     }
 

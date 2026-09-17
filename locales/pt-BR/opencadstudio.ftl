@@ -2853,6 +2853,15 @@ draw =
     .center-keyword = Centro
     .close-keyword = Fechar
     .second-pt = Segundo ponto
+    .arc-specify-start-point-of-arc = ARC  Especifique o ponto inicial do arco:
+    .arc-specify-second-point-of-arc = ARC  Especifique o segundo ponto do arco:
+    .arc-specify-end-point-of-arc = ARC  Especifique o ponto final do arco:
+    .arc-specify-center-point-of-arc = ARC  Especifique o centro do arco:
+    .arc-specify-included-angle = ARC  Especifique o ângulo incluído:
+    .arc-specify-length-of-chord = ARC  Especifique o comprimento da corda:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Especifique a direção tangente no ponto inicial do arco:
+    .arc-specify-radius-of-arc = ARC  Especifique o raio do arco:
+    .chord-length = Comprimento da corda
 
 modify =
     .add-vertex = Adicionar vértice
@@ -5310,6 +5319,10 @@ ui =
     .deselect-all = Desmarcar tudo
     .options-ellipsis = Opções...
     .base-point = Ponto base
+    .snap-overrides = Substituições de snap
+    .mid-between-2-points = Meio entre 2 pontos
+    .osnap-settings = Configurações de snap...
+    .snap-override-none-next-pick-only = Substituição de snap: Nenhum (somente o próximo ponto).
 
 dimstyle =
     .keep-text-between-extension-lines = Sempre manter o texto entre as linhas de extensão

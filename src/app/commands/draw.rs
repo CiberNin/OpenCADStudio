@@ -311,8 +311,8 @@ impl OpenCADStudio {
             }
 
             "ARC" => {
-                use crate::modules::draw::draw::arc::Arc3PCommand;
-                let new_cmd = Arc3PCommand::new();
+                use crate::modules::draw::draw::arc::ArcCommand;
+                let new_cmd = ArcCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -323,8 +323,8 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
             "ARC_CSE" => {
-                use crate::modules::draw::draw::arc::ArcCommand;
-                let new_cmd = ArcCommand::new();
+                use crate::modules::draw::draw::arc::ArcCSECommand;
+                let new_cmd = ArcCSECommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }

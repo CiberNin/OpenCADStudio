@@ -2865,6 +2865,15 @@ draw =
     .center-keyword = المركز
     .close-keyword = إغلاق
     .second-pt = النقطة الثانية
+    .arc-specify-start-point-of-arc = ARC  حدد نقطة بداية القوس:
+    .arc-specify-second-point-of-arc = ARC  حدد النقطة الثانية للقوس:
+    .arc-specify-end-point-of-arc = ARC  حدد نقطة نهاية القوس:
+    .arc-specify-center-point-of-arc = ARC  حدد مركز القوس:
+    .arc-specify-included-angle = ARC  حدد الزاوية المحصورة:
+    .arc-specify-length-of-chord = ARC  حدد طول الوتر:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  حدد اتجاه المماس عند نقطة بداية القوس:
+    .arc-specify-radius-of-arc = ARC  حدد نصف قطر القوس:
+    .chord-length = طول الوتر
 
 modify =
     .add-vertex = إضافة رأس
@@ -5322,6 +5331,10 @@ ui =
     .deselect-all = إلغاء تحديد الكل
     .options-ellipsis = خيارات...
     .base-point = نقطة الأساس
+    .snap-overrides = تجاوزات الالتقاط
+    .mid-between-2-points = المنتصف بين نقطتين
+    .osnap-settings = إعدادات الالتقاط...
+    .snap-override-none-next-pick-only = تجاوز الالتقاط: بدون (للاختيار التالي فقط).
 
 dimstyle =
     .keep-text-between-extension-lines = إبقاء النص دائمًا بين خطوط الامتداد

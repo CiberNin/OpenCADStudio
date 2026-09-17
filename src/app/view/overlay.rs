@@ -11,7 +11,7 @@ use iced::widget::{
 };
 use iced::{Background, Border, Color, Element, Event, Fill, Length, Rectangle, Size, Theme, Vector};
 use crate::t;
-use crate::ui::popup::context_menu::{ContextMenu, MenuItem, MenuRow, MENU_PAD_TOP, MENU_ROW_H};
+use crate::ui::popup::context_menu::{ContextMenu, MenuIcon, MenuItem, MenuRow, MENU_PAD_TOP, MENU_ROW_H};
 
 pub(super) fn position_canvas_overlay<'a>(
     anchor: iced::Point,
@@ -1123,6 +1123,29 @@ impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
 /// Horizontal inset so the pointer rests inside the default row, not on the
 /// panel's border, when the menu opens.
 const MENU_CURSOR_INSET_X: f32 = 24.0;
+/// Width of the icon gutter every row reserves so labels line up whether or
+/// not the row carries a glyph (object snaps, Pan / Zoom).
+const MENU_GUTTER_W: f32 = 18.0;
+const MENU_ICON_SIZE: f32 = 14.0;
+
+/// The gutter cell: the row's glyph, or empty space of the same width.
+fn context_menu_gutter(icon: Option<MenuIcon>) -> Element<'static, Message> {
+    let bytes = icon.map(|icon| match icon {
+        MenuIcon::Snap(t) => crate::ui::icons::osnap(t),
+        MenuIcon::Mtp => crate::ui::icons::mtp_icon(),
+        MenuIcon::Pan => crate::ui::icons::pan_icon(),
+        MenuIcon::Zoom => crate::ui::icons::zoom_icon(),
+    });
+    let cell: Element<'static, Message> = match bytes {
+        Some(bytes) => crate::ui::icons::themed::<Message>(bytes, MENU_ICON_SIZE),
+        None => iced::widget::Space::new().width(MENU_ICON_SIZE).height(MENU_ICON_SIZE).into(),
+    };
+    container(cell)
+        .width(Length::Fixed(MENU_GUTTER_W))
+        .align_x(iced::Center)
+        .align_y(iced::Center)
+        .into()
+}
 
 /// Render the right-click context menu (rows from
 /// `ui::popup::context_menu::build_context_menu`). The panel is placed so the
@@ -1175,14 +1198,21 @@ pub(super) fn viewport_context_menu_overlay(
                     crate::ui::icons::themed_arrow_right(9.0)
                 };
                 let content = row![
+                    context_menu_gutter(None),
                     text(label.clone()).size(12),
                     iced::widget::Space::new().width(Fill),
                     caret,
                 ]
+                .spacing(4)
                 .align_y(iced::Center);
                 let enabled = !children.is_empty();
                 let mut btn = button(content)
-                    .padding([3, 12])
+                    .padding(iced::Padding {
+                        top: 3.0,
+                        right: 12.0,
+                        bottom: 3.0,
+                        left: 6.0,
+                    })
                     .width(Fill)
                     .height(Length::Fixed(MENU_ROW_H))
                     .style(move |theme: &Theme, status| context_menu_row_style(theme, status, is_hl));
@@ -1241,7 +1271,9 @@ fn context_menu_row(item: &MenuItem, indent: f32, highlighted: bool) -> Element<
         });
     }
     let enabled = item.enabled;
-    let mut content = row![label_text].spacing(8).align_y(iced::Center);
+    let mut content = row![context_menu_gutter(item.icon), label_text]
+        .spacing(4)
+        .align_y(iced::Center);
     if let Some(hint) = item.hint.as_ref() {
         content = content
             .push(iced::widget::Space::new().width(Fill))
@@ -1266,7 +1298,7 @@ fn context_menu_row(item: &MenuItem, indent: f32, highlighted: bool) -> Element<
             top: 3.0,
             right: 12.0,
             bottom: 3.0,
-            left: 12.0 + indent,
+            left: 6.0 + indent,
         })
         .width(Fill)
         .height(Length::Fixed(MENU_ROW_H))

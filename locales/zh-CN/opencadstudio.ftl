@@ -2840,6 +2840,15 @@ draw =
     .center-keyword = 圆心
     .close-keyword = 闭合
     .second-pt = 第二点
+    .arc-specify-start-point-of-arc = ARC  指定圆弧的起点:
+    .arc-specify-second-point-of-arc = ARC  指定圆弧的第二点:
+    .arc-specify-end-point-of-arc = ARC  指定圆弧的端点:
+    .arc-specify-center-point-of-arc = ARC  指定圆弧的圆心:
+    .arc-specify-included-angle = ARC  指定夹角:
+    .arc-specify-length-of-chord = ARC  指定弦长:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  指定圆弧起点的切线方向:
+    .arc-specify-radius-of-arc = ARC  指定圆弧的半径:
+    .chord-length = 弦长
 
 modify =
     .add-vertex = 添加顶点
@@ -5293,6 +5302,10 @@ ui =
     .deselect-all = 全部取消选择
     .options-ellipsis = 选项...
     .base-point = 基点
+    .snap-overrides = 捕捉替代
+    .mid-between-2-points = 两点之间的中点
+    .osnap-settings = 对象捕捉设置...
+    .snap-override-none-next-pick-only = 捕捉替代：无（仅下一次拾取）。
 
 dimstyle =
     .keep-text-between-extension-lines = 始终将文字置于尺寸界线之间

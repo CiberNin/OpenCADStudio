@@ -2853,6 +2853,15 @@ draw =
     .center-keyword = Centre
     .close-keyword = Clore
     .second-pt = Second point
+    .arc-specify-start-point-of-arc = ARC  Spécifiez le point de départ de l'arc :
+    .arc-specify-second-point-of-arc = ARC  Spécifiez le second point de l'arc :
+    .arc-specify-end-point-of-arc = ARC  Spécifiez l'extrémité de l'arc :
+    .arc-specify-center-point-of-arc = ARC  Spécifiez le centre de l'arc :
+    .arc-specify-included-angle = ARC  Spécifiez l'angle inscrit :
+    .arc-specify-length-of-chord = ARC  Spécifiez la longueur de la corde :
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Spécifiez la direction tangente au point de départ de l'arc :
+    .arc-specify-radius-of-arc = ARC  Spécifiez le rayon de l'arc :
+    .chord-length = Longueur de corde
 
 modify =
     .add-vertex = Ajouter un sommet
@@ -5309,6 +5318,10 @@ ui =
     .deselect-all = Tout désélectionner
     .options-ellipsis = Options...
     .base-point = Point de base
+    .snap-overrides = Remplacements d'accrochage
+    .mid-between-2-points = Milieu entre 2 points
+    .osnap-settings = Paramètres d'accrochage...
+    .snap-override-none-next-pick-only = Remplacement d'accrochage : Aucun (prochain point seulement).
 
 dimstyle =
     .keep-text-between-extension-lines = Toujours conserver le texte entre les lignes d’attache

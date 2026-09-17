@@ -2852,6 +2852,15 @@ draw =
     .center-keyword = Střed
     .close-keyword = Uzavřít
     .second-pt = Druhý bod
+    .arc-specify-start-point-of-arc = ARC  Zadejte počáteční bod oblouku:
+    .arc-specify-second-point-of-arc = ARC  Zadejte druhý bod oblouku:
+    .arc-specify-end-point-of-arc = ARC  Zadejte koncový bod oblouku:
+    .arc-specify-center-point-of-arc = ARC  Zadejte střed oblouku:
+    .arc-specify-included-angle = ARC  Zadejte středový úhel:
+    .arc-specify-length-of-chord = ARC  Zadejte délku tětivy:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Zadejte směr tečny v počátečním bodě oblouku:
+    .arc-specify-radius-of-arc = ARC  Zadejte poloměr oblouku:
+    .chord-length = Délka tětivy
 
 modify =
     .add-vertex = Přidat vrchol
@@ -5307,6 +5316,10 @@ ui =
     .deselect-all = Zrušit výběr
     .options-ellipsis = Možnosti...
     .base-point = Referenční bod
+    .snap-overrides = Dočasné uchopení
+    .mid-between-2-points = Střed mezi 2 body
+    .osnap-settings = Nastavení uchopení...
+    .snap-override-none-next-pick-only = Dočasné uchopení: Žádné (jen pro další bod).
 
 dimstyle =
     .keep-text-between-extension-lines = Vždy ponechte text mezi vynášecími řádky

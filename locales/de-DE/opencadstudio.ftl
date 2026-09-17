@@ -2853,6 +2853,15 @@ draw =
     .center-keyword = Zentrum
     .close-keyword = Schließen
     .second-pt = Zweiter Punkt
+    .arc-specify-start-point-of-arc = ARC  Startpunkt des Bogens angeben:
+    .arc-specify-second-point-of-arc = ARC  Zweiten Punkt des Bogens angeben:
+    .arc-specify-end-point-of-arc = ARC  Endpunkt des Bogens angeben:
+    .arc-specify-center-point-of-arc = ARC  Mittelpunkt des Bogens angeben:
+    .arc-specify-included-angle = ARC  Eingeschlossenen Winkel angeben:
+    .arc-specify-length-of-chord = ARC  Sehnenlänge angeben:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Tangentenrichtung am Bogenanfang angeben:
+    .arc-specify-radius-of-arc = ARC  Radius des Bogens angeben:
+    .chord-length = Sehnenlänge
 
 modify =
     .add-vertex = Scheitelpunkt hinzufügen
@@ -5308,6 +5317,10 @@ ui =
     .deselect-all = Auswahl aufheben
     .options-ellipsis = Optionen...
     .base-point = Basispunkt
+    .snap-overrides = Fang-Überschreibungen
+    .mid-between-2-points = Mitte zwischen 2 Punkten
+    .osnap-settings = Objektfang-Einstellungen...
+    .snap-override-none-next-pick-only = Fang-Überschreibung: Keine (nur nächster Punkt).
 
 dimstyle =
     .keep-text-between-extension-lines = Text immer zwischen Hilfslinien halten

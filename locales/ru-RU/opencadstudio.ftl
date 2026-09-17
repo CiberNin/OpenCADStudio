@@ -2856,6 +2856,15 @@ draw =
     .center-keyword = Центр
     .close-keyword = Замкнуть
     .second-pt = Вторая точка
+    .arc-specify-start-point-of-arc = ARC  Укажите начальную точку дуги:
+    .arc-specify-second-point-of-arc = ARC  Укажите вторую точку дуги:
+    .arc-specify-end-point-of-arc = ARC  Укажите конечную точку дуги:
+    .arc-specify-center-point-of-arc = ARC  Укажите центр дуги:
+    .arc-specify-included-angle = ARC  Укажите центральный угол:
+    .arc-specify-length-of-chord = ARC  Укажите длину хорды:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Укажите направление касательной в начальной точке дуги:
+    .arc-specify-radius-of-arc = ARC  Укажите радиус дуги:
+    .chord-length = Длина хорды
 
 modify =
     .add-vertex = Добавить вершину
@@ -5311,6 +5320,10 @@ ui =
     .deselect-all = Снять выделение
     .options-ellipsis = Параметры...
     .base-point = Базовая точка
+    .snap-overrides = Разовые привязки
+    .mid-between-2-points = Середина между 2 точками
+    .osnap-settings = Настройки привязки...
+    .snap-override-none-next-pick-only = Разовая привязка: Нет (только следующая точка).
 
 dimstyle =
     .keep-text-between-extension-lines = Всегда размещать текст между выносными линиями

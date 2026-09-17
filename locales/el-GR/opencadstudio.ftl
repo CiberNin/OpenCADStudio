@@ -2853,6 +2853,15 @@ draw =
     .center-keyword = Κέντρο
     .close-keyword = Κλείσιμο
     .second-pt = Δεύτερο σημείο
+    .arc-specify-start-point-of-arc = ARC  Ορίστε αρχικό σημείο τόξου:
+    .arc-specify-second-point-of-arc = ARC  Ορίστε δεύτερο σημείο τόξου:
+    .arc-specify-end-point-of-arc = ARC  Ορίστε τελικό σημείο τόξου:
+    .arc-specify-center-point-of-arc = ARC  Ορίστε κέντρο τόξου:
+    .arc-specify-included-angle = ARC  Ορίστε περιεχόμενη γωνία:
+    .arc-specify-length-of-chord = ARC  Ορίστε μήκος χορδής:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Ορίστε διεύθυνση εφαπτομένης στην αρχή του τόξου:
+    .arc-specify-radius-of-arc = ARC  Ορίστε ακτίνα τόξου:
+    .chord-length = Μήκος χορδής
 
 modify =
     .count-objects = (__ocs_arg_count__ αντικείμενα)
@@ -5310,6 +5319,10 @@ ui =
     .deselect-all = Αποεπιλογή όλων
     .options-ellipsis = Επιλογές...
     .base-point = Σημείο βάσης
+    .snap-overrides = Προσωρινές έλξεις
+    .mid-between-2-points = Μέσο μεταξύ 2 σημείων
+    .osnap-settings = Ρυθμίσεις έλξης...
+    .snap-override-none-next-pick-only = Προσωρινή έλξη: Καμία (μόνο για το επόμενο σημείο).
 
 dimstyle =
     .keep-text-between-extension-lines = Το κείμενο να παραμένει πάντα μεταξύ των γραμμών προέκτασης

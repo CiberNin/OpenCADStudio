@@ -2841,6 +2841,15 @@ draw =
     .center-keyword = केंद्र
     .close-keyword = बंद करें
     .second-pt = दूसरा बिंदु
+    .arc-specify-start-point-of-arc = ARC  चाप का प्रारंभिक बिंदु निर्दिष्ट करें:
+    .arc-specify-second-point-of-arc = ARC  चाप का दूसरा बिंदु निर्दिष्ट करें:
+    .arc-specify-end-point-of-arc = ARC  चाप का अंतिम बिंदु निर्दिष्ट करें:
+    .arc-specify-center-point-of-arc = ARC  चाप का केंद्र बिंदु निर्दिष्ट करें:
+    .arc-specify-included-angle = ARC  अंतर्निहित कोण निर्दिष्ट करें:
+    .arc-specify-length-of-chord = ARC  जीवा की लंबाई निर्दिष्ट करें:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  चाप के प्रारंभिक बिंदु पर स्पर्शरेखा की दिशा निर्दिष्ट करें:
+    .arc-specify-radius-of-arc = ARC  चाप की त्रिज्या निर्दिष्ट करें:
+    .chord-length = जीवा की लंबाई
 
 modify =
     .add-vertex = शीर्ष जोड़ें
@@ -5298,6 +5307,10 @@ ui =
     .deselect-all = सभी का चयन हटाएँ
     .options-ellipsis = विकल्प...
     .base-point = आधार बिंदु
+    .snap-overrides = स्नैप ओवरराइड
+    .mid-between-2-points = 2 बिंदुओं के बीच मध्य
+    .osnap-settings = ऑब्जेक्ट स्नैप सेटिंग्स...
+    .snap-override-none-next-pick-only = स्नैप ओवरराइड: कोई नहीं (केवल अगले चयन के लिए)।
 
 dimstyle =
     .keep-text-between-extension-lines = पाठ को हमेशा विस्तार रेखाओं के बीच रखें

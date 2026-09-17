@@ -16,6 +16,7 @@
 use crate::command::CmdOption;
 use crate::scene::parametric_constraints::ConstraintId;
 use crate::scene::pick::grip::GripEditMode;
+use crate::snap::SnapType;
 use crate::t;
 
 /// Fixed row height used by the renderer, so `ContextMenu::default_row_y`
@@ -26,9 +27,9 @@ pub const MENU_SEP_H: f32 = 7.0;
 /// Vertical padding inside the menu panel above the first row.
 pub const MENU_PAD_TOP: f32 = 4.0;
 /// Column width without keyword hints (the width the menu always had).
-pub const MENU_WIDTH: f32 = 180.0;
+pub const MENU_WIDTH: f32 = 200.0;
 /// Column width when any row carries a right-aligned keyword hint.
-pub const MENU_WIDTH_WITH_HINTS: f32 = 220.0;
+pub const MENU_WIDTH_WITH_HINTS: f32 = 236.0;
 /// How many recent entries the Recent Input / Repeat lists show.
 pub const RECENT_LIMIT: usize = 10;
 
@@ -40,6 +41,17 @@ pub enum SubmenuId {
     Clipboard,
     DrawOrder,
     Isolate,
+    SnapOverrides,
+}
+
+/// Glyph drawn in a row's icon gutter (AutoCAD shows one for object snaps
+/// and the navigation rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuIcon {
+    Snap(SnapType),
+    Mtp,
+    Pan,
+    Zoom,
 }
 
 /// What a grip-menu row does (AutoCAD grip-mode shortcut menu).
@@ -74,6 +86,10 @@ pub enum MenuAction {
     Command(String),
     /// One-shot "Mid Between 2 Points" snap override.
     Mtp,
+    /// One-shot object snap override for the next pick.
+    SnapOverride(SnapType),
+    /// Next pick ignores object snaps.
+    SnapOverrideNone,
     DeleteSelected,
     SelectSimilar,
     InvertSelection,
@@ -107,6 +123,8 @@ pub struct MenuItem {
     pub enabled: bool,
     /// Rendered with a leading check mark (toggle / current-state rows).
     pub checked: bool,
+    /// Glyph in the icon gutter.
+    pub icon: Option<MenuIcon>,
 }
 
 impl MenuItem {
@@ -119,7 +137,13 @@ impl MenuItem {
             default: false,
             enabled: true,
             checked: false,
+            icon: None,
         }
+    }
+
+    fn icon(mut self, icon: MenuIcon) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     fn hint(mut self, hint: impl Into<String>) -> Self {
@@ -401,16 +425,30 @@ fn command_rows(
     open_submenu: Option<SubmenuId>,
 ) -> Vec<MenuRow> {
     let mut rows = Vec::new();
+    // AutoCAD order: Enter, Cancel, Recent Input, the command's keywords,
+    // Snap Overrides, then the transparent navigation commands.
+    //
     // A command may name its own finish action (PLINE "Done", OFFSET's
-    // "<0.5000>" default). That row *is* Enter, so it replaces the generic
-    // Enter row at the top instead of appearing twice.
+    // "<0.5000>" default). That row *is* Enter: it is not listed twice, and
+    // a default value is shown as the Enter row's hint.
     let finish = options.iter().find(|o| o.keyword.is_empty());
-    let enter_label = finish.map_or_else(|| t!("Enter").into_owned(), |o| o.label.clone());
+    let enter_hint = match finish {
+        Some(o) if o.label.starts_with('<') => o.label.clone(),
+        _ => "⏎".to_string(),
+    };
     rows.push(MenuRow::Item(
-        MenuItem::new(enter_label, MenuAction::Enter).hint("⏎").default(),
+        MenuItem::new(t!("Enter").into_owned(), MenuAction::Enter).hint(enter_hint).default(),
     ));
     rows.push(MenuRow::Item(
         MenuItem::new(t!("Cancel").into_owned(), MenuAction::Cancel).hint("Esc"),
+    ));
+    rows.push(recent_input_submenu(
+        recent_inputs
+            .iter()
+            .take(RECENT_LIMIT)
+            .map(|tok| MenuItem::new(tok.clone(), MenuAction::FeedInput(tok.clone())))
+            .collect(),
+        open_submenu,
     ));
 
     let keyword_opts: Vec<&CmdOption> = options.iter().filter(|o| !o.keyword.is_empty()).collect();
@@ -425,28 +463,79 @@ fn command_rows(
         }
     }
 
-    if !recent_inputs.is_empty() {
+    if has_point_step {
         rows.push(MenuRow::Separator);
         rows.push(MenuRow::Submenu {
-            id: SubmenuId::RecentInput,
-            label: t!("Recent Input").into_owned(),
-            items: recent_inputs
-                .iter()
-                .take(RECENT_LIMIT)
-                .map(|tok| MenuItem::new(tok.clone(), MenuAction::FeedInput(tok.clone())))
-                .collect(),
-            open: open_submenu == Some(SubmenuId::RecentInput),
+            id: SubmenuId::SnapOverrides,
+            label: t!("Snap Overrides").into_owned(),
+            items: snap_override_items(),
+            open: open_submenu == Some(SubmenuId::SnapOverrides),
         });
     }
 
-    if has_point_step {
-        rows.push(MenuRow::Separator);
-        rows.push(MenuRow::Item(MenuItem::new(
-            t!("Mid Between 2 Points (M2P)").into_owned(),
-            MenuAction::Mtp,
-        )));
-    }
+    rows.push(MenuRow::Separator);
+    rows.extend(navigation_rows(true));
     rows
+}
+
+/// Recent Input ▸ — always listed (AutoCAD keeps the entry even when there
+/// is nothing to recall yet; it is simply disabled then).
+fn recent_input_submenu(items: Vec<MenuItem>, open_submenu: Option<SubmenuId>) -> MenuRow {
+    MenuRow::Submenu {
+        id: SubmenuId::RecentInput,
+        label: t!("Recent Input").into_owned(),
+        items,
+        open: open_submenu == Some(SubmenuId::RecentInput),
+    }
+}
+
+/// Snap Overrides ▸: one-shot object snaps for the next pick, in AutoCAD's
+/// grouping (M2P, then the edge snaps, the curve snaps, the relation snaps,
+/// None) plus the settings dialog.
+fn snap_override_items() -> Vec<MenuItem> {
+    let snap = |label: &str, t: SnapType| {
+        MenuItem::new(t!(label).into_owned(), MenuAction::SnapOverride(t)).icon(MenuIcon::Snap(t))
+    };
+    vec![
+        MenuItem::new(t!("Mid Between 2 Points").into_owned(), MenuAction::Mtp).icon(MenuIcon::Mtp),
+        snap("Endpoint", SnapType::Endpoint),
+        snap("Midpoint", SnapType::Midpoint),
+        snap("Intersection", SnapType::Intersection),
+        snap("Apparent Intersection", SnapType::ApparentIntersection),
+        snap("Extension", SnapType::Extension),
+        snap("Center", SnapType::Center),
+        snap("Quadrant", SnapType::Quadrant),
+        snap("Tangent", SnapType::Tangent),
+        snap("Perpendicular", SnapType::Perpendicular),
+        snap("Parallel", SnapType::Parallel),
+        snap("Node", SnapType::Node),
+        snap("Insertion", SnapType::Insertion),
+        snap("Nearest", SnapType::Nearest),
+        MenuItem::new(t!("None").into_owned(), MenuAction::SnapOverrideNone),
+        MenuItem::new(
+            t!("Osnap Settings...").into_owned(),
+            MenuAction::Command("OSNAP".to_string()),
+        ),
+    ]
+}
+
+/// Pan / Zoom rows. While a command runs they execute transparently (the
+/// `'` prefix, as in AutoCAD) so the command resumes afterwards.
+fn navigation_rows(transparent: bool) -> Vec<MenuRow> {
+    let prefix = if transparent { "'" } else { "" };
+    vec![
+        MenuRow::Item(
+            MenuItem::new(t!("Pan").into_owned(), MenuAction::Command(format!("{prefix}PAN")))
+                .icon(MenuIcon::Pan),
+        ),
+        MenuRow::Item(
+            MenuItem::new(
+                t!("Zoom").into_owned(),
+                MenuAction::Command(format!("{prefix}ZOOM DYNAMIC")),
+            )
+            .icon(MenuIcon::Zoom),
+        ),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -473,18 +562,16 @@ fn idle_rows(
             )
             .default(),
         ));
-        rows.push(MenuRow::Submenu {
-            id: SubmenuId::RecentInput,
-            label: t!("Recent Input").into_owned(),
-            items: recent_cmds
-                .iter()
-                .take(RECENT_LIMIT)
-                .map(|c| MenuItem::new(c.clone(), MenuAction::Command(c.to_uppercase())))
-                .collect(),
-            open: open_submenu == Some(SubmenuId::RecentInput),
-        });
-        rows.push(MenuRow::Separator);
     }
+    rows.push(recent_input_submenu(
+        recent_cmds
+            .iter()
+            .take(RECENT_LIMIT)
+            .map(|c| MenuItem::new(c.clone(), MenuAction::Command(c.to_uppercase())))
+            .collect(),
+        open_submenu,
+    ));
+    rows.push(MenuRow::Separator);
 
     // ── Clipboard ──────────────────────────────────────────────────────
     rows.push(MenuRow::Submenu {
@@ -574,8 +661,7 @@ fn idle_rows(
     rows.push(MenuRow::Separator);
 
     // ── Navigation ─────────────────────────────────────────────────────
-    rows.push(MenuRow::Item(cmd(t!("Pan").into_owned(), "PAN")));
-    rows.push(MenuRow::Item(cmd(t!("Zoom").into_owned(), "ZOOM")));
+    rows.extend(navigation_rows(false));
     // The edit menu is long already; Zoom Extents stays on the idle menu
     // (and on the middle button's double-click), as in AutoCAD.
     if !has_selection {
@@ -689,19 +775,25 @@ mod tests {
     #[test]
     fn command_menu_lists_options_with_hints() {
         let menu = build_context_menu(&line_ctx(), None);
+        // AutoCAD order: Enter, Cancel, Recent Input, keywords, Snap
+        // Overrides, Pan / Zoom.
         assert_eq!(
             labels(&menu),
             vec![
                 tl("Enter"),
                 tl("Cancel"),
+                format!("{} >", tl("Recent Input")),
                 "---".into(),
                 tl("Close"),
                 tl("Undo"),
                 "---".into(),
-                tl("Mid Between 2 Points (M2P)"),
+                format!("{} >", tl("Snap Overrides")),
+                "---".into(),
+                tl("Pan"),
+                tl("Zoom"),
             ]
         );
-        let close = item_at(&menu, 3);
+        let close = item_at(&menu, 4);
         assert_eq!(close.hint.as_deref(), Some("C"));
         assert_eq!(close.mnemonic, Some('C'));
         assert_eq!(close.action, MenuAction::Option("C".into()));
@@ -718,14 +810,29 @@ mod tests {
             recent_inputs: Vec::new(),
         };
         let menu = build_context_menu(&ctx, None);
-        assert_eq!(labels(&menu), vec![tl("Done"), tl("Cancel"), "---".into(), tl("Arc")]);
+        // The finish option is the Enter row itself — listed once, as "Enter".
         let done = item_at(&menu, 0);
+        assert_eq!(done.label, tl("Enter"));
         assert!(done.default);
         assert_eq!(done.action, MenuAction::Enter);
+        assert_eq!(done.hint.as_deref(), Some("⏎"));
         assert_eq!(
-            actions(&menu),
-            vec![MenuAction::Enter, MenuAction::Cancel, MenuAction::Option("A".into())]
+            actions(&menu)[..4],
+            [
+                MenuAction::Enter,
+                MenuAction::Cancel,
+                MenuAction::ToggleSubmenu(SubmenuId::RecentInput),
+                MenuAction::Option("A".into())
+            ]
         );
+        // A default value shows on the Enter row as its hint (OFFSET <dist>).
+        let ctx = MenuContext::Command {
+            options: vec![CmdOption::enter("<0.5000>")],
+            has_point_step: false,
+            recent_inputs: Vec::new(),
+        };
+        let menu = build_context_menu(&ctx, None);
+        assert_eq!(item_at(&menu, 0).hint.as_deref(), Some("<0.5000>"));
     }
 
     #[test]
@@ -736,7 +843,18 @@ mod tests {
             recent_inputs: Vec::new(),
         };
         let menu = build_context_menu(&ctx, None);
-        assert_eq!(actions(&menu), vec![MenuAction::Enter, MenuAction::Cancel]);
+        assert_eq!(
+            actions(&menu),
+            vec![
+                MenuAction::Enter,
+                MenuAction::Cancel,
+                MenuAction::ToggleSubmenu(SubmenuId::RecentInput),
+                MenuAction::Command("'PAN".into()),
+                MenuAction::Command("'ZOOM DYNAMIC".into()),
+            ]
+        );
+        // Nothing to recall yet: the Recent Input header is disabled.
+        assert!(!menu.selectable()[2].enabled);
     }
 
     #[test]
@@ -748,17 +866,18 @@ mod tests {
         };
         let closed = build_context_menu(&ctx, None);
         assert_eq!(
-            actions(&closed),
-            vec![
+            actions(&closed)[..3],
+            [
                 MenuAction::Enter,
                 MenuAction::Cancel,
                 MenuAction::ToggleSubmenu(SubmenuId::RecentInput)
             ]
         );
+        assert!(closed.selectable()[2].enabled);
         let open = build_context_menu(&ctx, Some(SubmenuId::RecentInput));
         assert_eq!(
-            actions(&open),
-            vec![
+            actions(&open)[..5],
+            [
                 MenuAction::Enter,
                 MenuAction::Cancel,
                 MenuAction::ToggleSubmenu(SubmenuId::RecentInput),
@@ -766,6 +885,31 @@ mod tests {
                 MenuAction::FeedInput("C".into()),
             ]
         );
+    }
+
+    #[test]
+    fn snap_overrides_submenu_lists_every_object_snap() {
+        let ctx = MenuContext::Command {
+            options: Vec::new(),
+            has_point_step: true,
+            recent_inputs: Vec::new(),
+        };
+        let menu = build_context_menu(&ctx, Some(SubmenuId::SnapOverrides));
+        let acts = actions(&menu);
+        assert!(acts.contains(&MenuAction::Mtp));
+        for &(t, _, _) in crate::snap::ALL_SNAP_MODES {
+            assert!(acts.contains(&MenuAction::SnapOverride(t)), "missing {t:?}");
+        }
+        assert!(acts.contains(&MenuAction::SnapOverrideNone));
+        assert!(acts.contains(&MenuAction::Command("OSNAP".into())));
+        // An entity-pick step offers no snap overrides.
+        let ctx = MenuContext::Command {
+            options: Vec::new(),
+            has_point_step: false,
+            recent_inputs: Vec::new(),
+        };
+        let menu = build_context_menu(&ctx, None);
+        assert!(!actions(&menu).contains(&MenuAction::ToggleSubmenu(SubmenuId::SnapOverrides)));
     }
 
     fn idle_ctx(has_selection: bool) -> MenuContext {
@@ -870,10 +1014,10 @@ mod tests {
             recent_inputs: Vec::new(),
         };
         let menu = build_context_menu(&ctx, None);
-        // rows: Enter(0) Cancel(1) Angle(2) CEnter(3) CLose(4)
-        assert_eq!(menu.find_mnemonic('c', None), Some(3));
-        assert_eq!(menu.find_mnemonic('C', Some(3)), Some(4));
-        assert_eq!(menu.find_mnemonic('C', Some(4)), Some(3));
+        // rows: Enter(0) Cancel(1) Recent Input(2) Angle(3) CEnter(4) CLose(5) …
+        assert_eq!(menu.find_mnemonic('c', None), Some(4));
+        assert_eq!(menu.find_mnemonic('C', Some(4)), Some(5));
+        assert_eq!(menu.find_mnemonic('C', Some(5)), Some(4));
         assert_eq!(menu.find_mnemonic('Z', None), None);
     }
 

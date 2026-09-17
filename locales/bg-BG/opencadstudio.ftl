@@ -2852,6 +2852,15 @@ draw =
     .center-keyword = Център
     .close-keyword = Затвори
     .second-pt = Втора точка
+    .arc-specify-start-point-of-arc = ARC  Задайте начална точка на дъгата:
+    .arc-specify-second-point-of-arc = ARC  Задайте втора точка на дъгата:
+    .arc-specify-end-point-of-arc = ARC  Задайте крайна точка на дъгата:
+    .arc-specify-center-point-of-arc = ARC  Задайте център на дъгата:
+    .arc-specify-included-angle = ARC  Задайте вписан ъгъл:
+    .arc-specify-length-of-chord = ARC  Задайте дължина на хордата:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Задайте посока на допирателната в началото на дъгата:
+    .arc-specify-radius-of-arc = ARC  Задайте радиус на дъгата:
+    .chord-length = Дължина на хордата
 
 modify =
     .add-vertex = Добавяне на връх
@@ -5310,6 +5319,10 @@ ui =
     .deselect-all = Отмяна на избора
     .options-ellipsis = Опции...
     .base-point = Базова точка
+    .snap-overrides = Временни прихващания
+    .mid-between-2-points = Средата между 2 точки
+    .osnap-settings = Настройки на прихващане...
+    .snap-override-none-next-pick-only = Временно прихващане: Няма (само за следващата точка).
 
 dimstyle =
     .keep-text-between-extension-lines = Винаги пази текста между удължителните линии

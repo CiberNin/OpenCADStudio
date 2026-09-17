@@ -140,6 +140,8 @@ impl OpenCADStudio {
             }
             MenuAction::Command(cmd) => self.update(Message::Command(cmd)),
             MenuAction::Mtp => self.update(Message::SnapOverrideMtp),
+            MenuAction::SnapOverride(t) => self.update(Message::SnapOverridePick(t)),
+            MenuAction::SnapOverrideNone => self.update(Message::SnapOverrideNone),
             MenuAction::DeleteSelected => self.update(Message::DeleteSelected),
             MenuAction::SelectSimilar => self.update(Message::SelectSimilar),
             MenuAction::InvertSelection => self.update(Message::InvertSelection),
@@ -455,7 +457,8 @@ mod tests {
             assert_eq!(acts[1], MenuAction::Cancel);
             assert!(acts.contains(&MenuAction::Option("C".into())));
             assert!(acts.contains(&MenuAction::Option("U".into())));
-            assert!(acts.contains(&MenuAction::Mtp));
+            assert!(acts.contains(&MenuAction::ToggleSubmenu(SubmenuId::SnapOverrides)));
+            assert!(acts.contains(&MenuAction::Command("'PAN".into())));
         });
     }
 
@@ -828,6 +831,113 @@ mod tests {
             assert!(!app.tabs[0].grip_base_pending);
             let (x, y) = line_start(&app, handle);
             assert!((x - 1.0).abs() < 1e-3 && (y - 1.0).abs() < 1e-3);
+        });
+    }
+}
+
+#[cfg(test)]
+mod transparent_tests {
+    use super::*;
+    use crate::command::StepInput;
+    use glam::DVec3;
+
+    fn with_stack(f: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn test thread")
+            .join()
+            .unwrap_or_else(|e| std::panic::resume_unwind(e));
+    }
+
+    fn line_app() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.tabs[0].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        let _ = app.dispatch_command("LINE");
+        let _ = app.feed_command(StepInput::Point(DVec3::ZERO));
+        app
+    }
+
+    fn active(app: &OpenCADStudio) -> Option<&'static str> {
+        app.tabs[0].active_cmd.as_ref().map(|c| c.name())
+    }
+
+    #[test]
+    fn transparent_pan_keeps_the_command_running() {
+        with_stack(|| {
+            let mut app = line_app();
+            let _ = app.update(Message::ContextMenuPick(MenuAction::Command("'PAN".into())));
+            assert!(app.tabs[0].pan_mode);
+            assert_eq!(active(&app), Some("LINE"));
+            // Esc leaves pan mode; the line is still being drawn.
+            let _ = app.update(Message::CommandEscape);
+            assert!(!app.tabs[0].pan_mode);
+            assert_eq!(active(&app), Some("LINE"));
+        });
+    }
+
+    #[test]
+    fn transparent_zoom_window_resumes_the_command() {
+        with_stack(|| {
+            let mut app = line_app();
+            let _ = app.dispatch_command("'ZOOM W");
+            assert_eq!(active(&app), Some("ZOOM WINDOW"));
+            assert!(app.tabs[0].transparent_resume);
+            let _ = app.feed_command(StepInput::Point(DVec3::new(-5.0, -5.0, 0.0)));
+            let _ = app.feed_command(StepInput::Point(DVec3::new(5.0, 5.0, 0.0)));
+            assert_eq!(active(&app), Some("LINE"), "LINE resumes after the zoom");
+            assert!(!app.tabs[0].transparent_resume);
+            assert!(app.tabs[0].suspended_cmd.is_none());
+            // The line still has its first point: the next pick draws a segment.
+            let _ = app.feed_command(StepInput::Point(DVec3::new(10.0, 0.0, 0.0)));
+            let lines = app.tabs[0]
+                .scene
+                .document
+                .entities()
+                .filter(|e| matches!(e, acadrust::EntityType::Line(_)))
+                .count();
+            assert_eq!(lines, 1);
+        });
+    }
+
+    #[test]
+    fn zoom_prompt_handoff_and_escape_both_resume() {
+        with_stack(|| {
+            let mut app = line_app();
+            let _ = app.dispatch_command("'ZOOM");
+            let _ = app.feed_active_cmd("E"); // → ZOOM EXTENTS, one-shot
+            assert_eq!(active(&app), Some("LINE"));
+            let _ = app.dispatch_command("'ZOOM");
+            assert_eq!(active(&app), Some("ZOOM WINDOW"));
+            let _ = app.update(Message::CommandEscape);
+            assert_eq!(active(&app), Some("LINE"));
+            assert!(!app.tabs[0].transparent_resume);
+        });
+    }
+
+    #[test]
+    fn new_command_drops_a_parked_one() {
+        with_stack(|| {
+            let mut app = line_app();
+            let _ = app.dispatch_command("'ZOOM");
+            let _ = app.dispatch_command("CIRCLE");
+            assert_eq!(active(&app), Some("CIRCLE"));
+            assert!(app.tabs[0].suspended_cmd.is_none());
+            let _ = app.update(Message::CommandEscape);
+            assert_eq!(active(&app), None, "no stale LINE comes back");
+        });
+    }
+
+    #[test]
+    fn snap_override_none_is_one_shot() {
+        with_stack(|| {
+            let mut app = line_app();
+            app.snapper.snap_enabled = true;
+            let _ = app.update(Message::ContextMenuPick(MenuAction::SnapOverrideNone));
+            assert!(!app.snapper.snap_enabled);
+            app.snapper.clear_override();
+            assert!(app.snapper.snap_enabled);
         });
     }
 }

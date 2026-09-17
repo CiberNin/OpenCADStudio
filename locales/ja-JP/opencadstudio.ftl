@@ -2843,6 +2843,15 @@ draw =
     .center-keyword = 中心
     .close-keyword = 閉じる
     .second-pt = 2 点目
+    .arc-specify-start-point-of-arc = ARC  円弧の始点を指定:
+    .arc-specify-second-point-of-arc = ARC  円弧の 2 点目を指定:
+    .arc-specify-end-point-of-arc = ARC  円弧の終点を指定:
+    .arc-specify-center-point-of-arc = ARC  円弧の中心を指定:
+    .arc-specify-included-angle = ARC  中心角を指定:
+    .arc-specify-length-of-chord = ARC  弦の長さを指定:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  円弧の始点での接線方向を指定:
+    .arc-specify-radius-of-arc = ARC  円弧の半径を指定:
+    .chord-length = 弦の長さ
 
 modify =
     .add-vertex = 頂点を追加
@@ -5298,6 +5307,10 @@ ui =
     .deselect-all = 選択解除
     .options-ellipsis = オプション...
     .base-point = 基点
+    .snap-overrides = 優先オブジェクトスナップ
+    .mid-between-2-points = 2 点間の中点
+    .osnap-settings = オブジェクトスナップ設定...
+    .snap-override-none-next-pick-only = 優先スナップ: なし (次の点のみ)。
 
 dimstyle =
     .keep-text-between-extension-lines = 寸法値を常に寸法補助線の間に配置

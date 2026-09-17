@@ -2852,6 +2852,15 @@ draw =
     .center-keyword = Keskipiste
     .close-keyword = Sulje
     .second-pt = Toinen piste
+    .arc-specify-start-point-of-arc = ARC  Määritä kaaren alkupiste:
+    .arc-specify-second-point-of-arc = ARC  Määritä kaaren toinen piste:
+    .arc-specify-end-point-of-arc = ARC  Määritä kaaren päätepiste:
+    .arc-specify-center-point-of-arc = ARC  Määritä kaaren keskipiste:
+    .arc-specify-included-angle = ARC  Määritä keskuskulma:
+    .arc-specify-length-of-chord = ARC  Määritä jänteen pituus:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Määritä tangentin suunta kaaren alkupisteessä:
+    .arc-specify-radius-of-arc = ARC  Määritä kaaren säde:
+    .chord-length = Jänteen pituus
 
 modify =
     .add-vertex = Lisää kärkipiste
@@ -5307,6 +5316,10 @@ ui =
     .deselect-all = Poista valinta
     .options-ellipsis = Asetukset...
     .base-point = Peruspiste
+    .snap-overrides = Tilapäiset tartunnat
+    .mid-between-2-points = 2 pisteen keskikohta
+    .osnap-settings = Tartunta-asetukset...
+    .snap-override-none-next-pick-only = Tilapäinen tartunta: Ei mitään (vain seuraava piste).
 
 dimstyle =
     .keep-text-between-extension-lines = Pidä teksti aina jatkorivien välissä

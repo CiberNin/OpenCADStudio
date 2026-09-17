@@ -2854,6 +2854,15 @@ draw =
     .center-keyword = CEnter
     .close-keyword = CLose
     .second-pt = Second pt
+    .arc-specify-start-point-of-arc = ARC  Specify start point of arc:
+    .arc-specify-second-point-of-arc = ARC  Specify second point of arc:
+    .arc-specify-end-point-of-arc = ARC  Specify end point of arc:
+    .arc-specify-center-point-of-arc = ARC  Specify center point of arc:
+    .arc-specify-included-angle = ARC  Specify included angle:
+    .arc-specify-length-of-chord = ARC  Specify length of chord:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Specify tangent direction for the start point of arc:
+    .arc-specify-radius-of-arc = ARC  Specify radius of arc:
+    .chord-length = chord Length
 
 modify =
     .count-objects =  (__ocs_arg_count__ objects)
@@ -5311,6 +5320,10 @@ ui =
     .deselect-all = Deselect All
     .options-ellipsis = Options...
     .base-point = Base Point
+    .snap-overrides = Snap Overrides
+    .mid-between-2-points = Mid Between 2 Points
+    .osnap-settings = Osnap Settings...
+    .snap-override-none-next-pick-only = Snap override: None (next pick only).
 
 dimstyle =
     .keep-text-between-extension-lines = Always keep text between extension lines

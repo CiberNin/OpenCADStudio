@@ -2853,6 +2853,15 @@ draw =
     .center-keyword = Centrum
     .close-keyword = Sluiten
     .second-pt = Tweede punt
+    .arc-specify-start-point-of-arc = ARC  Geef beginpunt van boog op:
+    .arc-specify-second-point-of-arc = ARC  Geef tweede punt van boog op:
+    .arc-specify-end-point-of-arc = ARC  Geef eindpunt van boog op:
+    .arc-specify-center-point-of-arc = ARC  Geef middelpunt van boog op:
+    .arc-specify-included-angle = ARC  Geef ingesloten hoek op:
+    .arc-specify-length-of-chord = ARC  Geef lengte van koorde op:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Geef raaklijnrichting in beginpunt van boog op:
+    .arc-specify-radius-of-arc = ARC  Geef straal van boog op:
+    .chord-length = Koordelengte
 
 modify =
     .add-vertex = Hoekpunt toevoegen
@@ -5308,6 +5317,10 @@ ui =
     .deselect-all = Alles deselecteren
     .options-ellipsis = Opties...
     .base-point = Basispunt
+    .snap-overrides = Tijdelijke snaps
+    .mid-between-2-points = Midden tussen 2 punten
+    .osnap-settings = Objectsnap-instellingen...
+    .snap-override-none-next-pick-only = Tijdelijke snap: Geen (alleen volgend punt).
 
 dimstyle =
     .keep-text-between-extension-lines = Tekst altijd tussen hulplijnen houden

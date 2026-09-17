@@ -63,6 +63,12 @@ impl OpenCADStudio {
         // routing, so every path below (Start-tab gate, plugins, all dispatch
         // families, the Repeat menu) sees the canonical command. Arguments after
         // the first space are left untouched. A non-alias passes through as-is.
+        // AutoCAD's transparent prefix: `'PAN` / `'ZOOM` run in the middle
+        // of another command and hand control back to it afterwards.
+        let (cmd, quoted) = match cmd.trim().strip_prefix('\'') {
+            Some(rest) => (rest.trim(), true),
+            None => (cmd, false),
+        };
         let resolved = self.resolve_alias(cmd);
         let cmd = resolved.as_deref().unwrap_or(cmd);
         if is_spacemouse_command(cmd) {
@@ -72,11 +78,22 @@ impl OpenCADStudio {
         // already running: pressing F8 partway through a LINE means "constrain
         // the rest of this line", not "abandon it". Everything below tears the
         // running command down, so a transparent one skips straight past it.
-        // (#677)
-        if is_transparent(cmd) {
-            return self
-                .dispatch_families(cmd, i)
-                .unwrap_or_else(Task::none);
+        // (#677) A quoted navigation command does the same; an interactive
+        // one (ZOOM Window) parks the running command and resumes it when the
+        // zoom ends, as does a ZOOM the zoom prompt itself hands off to.
+        let transparent = is_transparent(cmd)
+            || (quoted && is_transparent_capable(cmd))
+            || (self.tabs[i].transparent_resume && cmd.starts_with("ZOOM"));
+        if transparent {
+            if zoom_prompts(cmd) && self.tabs[i].active_cmd.is_some() {
+                self.tabs[i].suspended_cmd = self.tabs[i].active_cmd.take();
+                self.tabs[i].transparent_resume = true;
+                self.tabs[i].scene.clear_preview_wire();
+            }
+            let task = self.dispatch_families(cmd, i).unwrap_or_else(Task::none);
+            // A one-shot zoom is over already — resume straight away.
+            self.resume_transparent_parent(i);
+            return task;
         }
         // A new command abandons any grip edit and its numeric input.
         let had_pending_grip_input = self.grip_pending.take().is_some();
@@ -115,6 +132,9 @@ impl OpenCADStudio {
             // template-property override too (#239).
             self.restore_add_selected_defaults();
         }
+        // A command parked behind a transparent zoom / MTP goes with it.
+        self.tabs[i].suspended_cmd = None;
+        self.tabs[i].transparent_resume = false;
         // Starting any command leaves interactive navigation modes (their own
         // command arms below re-enable the selected one).
         self.tabs[i].pan_mode = false;
@@ -275,6 +295,21 @@ impl OpenCADStudio {
 /// point, so F8 during a MOVE both ended the move and made the dragged ghost
 /// vanish. Nothing here starts a command, opens a document or reads geometry,
 /// so there is nothing for the teardown to protect. (#677)
+/// Commands that may run transparently (`'PAN`, `'ZOOM …`): the navigation
+/// set, which never edits the drawing.
+fn is_transparent_capable(cmd: &str) -> bool {
+    cmd == "PAN" || cmd == "ZOOM" || cmd.starts_with("ZOOM ") || matches!(cmd, "ZW" | "ZE" | "ZA" | "ZP" | "ZI" | "ZO" | "ZD" | "ZEA" | "ZOBJ")
+}
+
+/// ZOOM forms that install an interactive prompt (window corners, object
+/// pick) and so need the running command parked while they last.
+fn zoom_prompts(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "ZOOM" | "ZOOM WINDOW" | "ZOOM W" | "ZW" | "ZOOM OBJECT" | "ZOOM O" | "ZOBJ"
+    )
+}
+
 pub fn is_transparent(cmd: &str) -> bool {
     is_spacemouse_command(cmd)
         || matches!(

@@ -2852,6 +2852,15 @@ draw =
     .center-keyword = Środek
     .close-keyword = Zamknij
     .second-pt = Drugi punkt
+    .arc-specify-start-point-of-arc = ARC  Określ punkt początkowy łuku:
+    .arc-specify-second-point-of-arc = ARC  Określ drugi punkt łuku:
+    .arc-specify-end-point-of-arc = ARC  Określ punkt końcowy łuku:
+    .arc-specify-center-point-of-arc = ARC  Określ środek łuku:
+    .arc-specify-included-angle = ARC  Określ kąt rozwarcia:
+    .arc-specify-length-of-chord = ARC  Określ długość cięciwy:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Określ kierunek stycznej w punkcie początkowym łuku:
+    .arc-specify-radius-of-arc = ARC  Określ promień łuku:
+    .chord-length = Długość cięciwy
 
 modify =
     .add-vertex = Dodaj wierzchołek
@@ -5309,6 +5318,10 @@ ui =
     .deselect-all = Odznacz wszystko
     .options-ellipsis = Opcje...
     .base-point = Punkt bazowy
+    .snap-overrides = Tymczasowe lokalizacje
+    .mid-between-2-points = Środek między 2 punktami
+    .osnap-settings = Ustawienia lokalizacji...
+    .snap-override-none-next-pick-only = Tymczasowa lokalizacja: Brak (tylko następny punkt).
 
 dimstyle =
     .keep-text-between-extension-lines = Zawsze przechowuj tekst pomiędzy liniami pomocniczymi

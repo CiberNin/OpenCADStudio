@@ -2835,6 +2835,15 @@ draw =
     .center-keyword = Merkez
     .close-keyword = Kapat
     .second-pt = İkinci nokta
+    .arc-specify-start-point-of-arc = ARC  Yayın başlangıç noktasını belirtin:
+    .arc-specify-second-point-of-arc = ARC  Yayın ikinci noktasını belirtin:
+    .arc-specify-end-point-of-arc = ARC  Yayın bitiş noktasını belirtin:
+    .arc-specify-center-point-of-arc = ARC  Yayın merkez noktasını belirtin:
+    .arc-specify-included-angle = ARC  İç açıyı belirtin:
+    .arc-specify-length-of-chord = ARC  Kiriş uzunluğunu belirtin:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Yayın başlangıç noktasındaki teğet yönünü belirtin:
+    .arc-specify-radius-of-arc = ARC  Yayın yarıçapını belirtin:
+    .chord-length = Kiriş uzunluğu
 
 modify =
     .count-objects = (__ocs_arg_count__ nesne)
@@ -5233,6 +5242,10 @@ ui =
     .deselect-all = Seçimi kaldır
     .options-ellipsis = Seçenekler...
     .base-point = Taban noktası
+    .snap-overrides = Geçici kenetlemeler
+    .mid-between-2-points = 2 nokta arası orta
+    .osnap-settings = Nesne kenetleme ayarları...
+    .snap-override-none-next-pick-only = Geçici kenetleme: Yok (yalnızca sonraki nokta).
 
 dimstyle =
     .keep-text-between-extension-lines = Metni her zaman uzatma çizgileri arasında tut
