@@ -1668,14 +1668,36 @@ pub(crate) fn resolved_dimension_style(
         }
     }
 
-    // Negative DIMLFAC applies only in paper space; preserve its sign on export.
+    // Negative DIMLFAC applies only in paper space, and there only to a
+    // dimension that measures model space through a viewport. AutoCAD writes
+    // the factor it actually applied as ACAD_DIMASSOC_CALC_DIMLFAC: zero for a
+    // dimension of paper-space geometry, which then reads its sheet distance.
     if style.dimlfac < 0.0 {
-        style.dimlfac = crate::scene::viewport_ref::MeasurementScale::user_lfac_for_space(
-            style.dimlfac,
-            dimension_in_paper_space(dimension, document),
-        );
+        style.dimlfac = match calculated_dimlfac(dimension) {
+            Some(calculated) if calculated.abs() < 1e-12 => 1.0,
+            Some(calculated) => calculated.abs(),
+            None => crate::scene::viewport_ref::MeasurementScale::user_lfac_for_space(
+                style.dimlfac,
+                dimension_in_paper_space(dimension, document),
+            ),
+        };
     }
     style
+}
+
+/// The linear factor AutoCAD applied when it last regenerated the dimension.
+fn calculated_dimlfac(dimension: &Dimension) -> Option<f64> {
+    dimension
+        .base()
+        .common
+        .extended_data
+        .get_record("ACAD_DIMASSOC_CALC_DIMLFAC")
+        .and_then(|record| {
+            record.values.iter().find_map(|value| match value {
+                acadrust::xdata::XDataValue::Real(factor) => Some(*factor),
+                _ => None,
+            })
+        })
 }
 
 /// Whether the dimension's owner is paper space, even without a Layout object.
@@ -8616,6 +8638,32 @@ mod layout_parity_tests {
             points.iter().all(|p| p.y <= top + 0.01 && p.y >= -0.01),
             "centred text leaves the arrows inside"
         );
+    }
+
+    // A negative DIMLFAC scales only a paper-space dimension that measures
+    // model space through a viewport. AutoCAD records the factor it applied;
+    // zero means the dimension reads its sheet distance unscaled.
+    #[test]
+    fn negative_dimlfac_follows_the_factor_autocad_applied() {
+        use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+        let document = CadDocument::new();
+        let mut source = style(&document);
+        source.dimlfac = -4.0;
+        let mut d = DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(4.457, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 1.0, 0.0);
+        let with_factor = |factor: f64| {
+            let mut d = d.clone();
+            let mut record = ExtendedDataRecord::new("ACAD_DIMASSOC_CALC_DIMLFAC");
+            record.add_value(XDataValue::Real(factor));
+            d.base.common.extended_data.add_record(record);
+            Dimension::Linear(d)
+        };
+        let sheet = resolved_dimension_style(&source, &with_factor(0.0), &document);
+        assert_eq!(sheet.dimlfac, 1.0, "no factor applied: sheet distance");
+        let through_viewport = resolved_dimension_style(&source, &with_factor(-4.0), &document);
+        assert_eq!(through_viewport.dimlfac, 4.0, "the recorded factor, made positive");
+        let unknown = resolved_dimension_style(&source, &Dimension::Linear(d.clone()), &document);
+        assert_eq!(unknown.dimlfac, 1.0, "model space without a record: unscaled");
     }
 
     // Text stored well past the second extension line of a horizontal
