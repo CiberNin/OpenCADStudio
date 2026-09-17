@@ -3747,6 +3747,10 @@ fn tessellate_dimension_inner(
             horizontal_text: text_layout.horizontal,
             text_movement: style.map(|s| s.dimtmove).unwrap_or(0),
             text_break: text_layout.break_box,
+            leader_anchor: style
+                .filter(|s| s.dimtmove == 1)
+                .and_then(|_| stored_text_point(dim))
+                .map(vec3_local),
         },
         SuppressFlags {
             ext1: dimse1,
@@ -4415,7 +4419,7 @@ fn text_fill_rect(
     // the bundled stick fonts. Inflate by 1 DIMGAP on each side.
     let stack_scale = style.map(dimtfac_or_one).unwrap_or(1.0);
     let approx_w = text_cells(&value, stack_scale) * text_height * 0.6 + dimgap * 2.0;
-    let approx_h = dimension_text_block_height(style, text_height) + dimgap * 2.0;
+    let approx_h = dimension_text_extent_height(dim, style, text_height) + dimgap * 2.0;
     let rot = if dim.base().text_rotation.abs() > 1e-9 {
         dim.base().text_rotation
     } else {
@@ -4536,7 +4540,9 @@ fn dimension_text_layout(
     let break_box = (bare_width > 0.0).then_some(TextBreak {
         center: position,
         half_width: bare_width * 0.5,
-        half_height: text_height as f32 * 0.5,
+        // A limits stack is two lines tall; the break and the arrow fit both
+        // have to clear the whole block.
+        half_height: dimension_text_extent_height(dimension, style, text_height) as f32 * 0.5,
         padding: gap,
         rotation: dimension_text_rotation(dimension, style),
     });
@@ -4572,6 +4578,9 @@ struct DimLineParams {
     horizontal_text: bool,
     text_movement: i16,
     text_break: Option<TextBreak>,
+    /// DIMTMOVE 1: the point the file stores is where the leader's hook ends,
+    /// so the leader is drawn to it exactly and only the text is estimated.
+    leader_anchor: Option<Vec3>,
 }
 fn dimension_geometry(
     dim: &Dimension,
@@ -4644,43 +4653,22 @@ fn dimension_geometry(
                     add_segment(&mut g.dim_lines, a, b);
                     add_segment(&mut g.dim_lines, b, point);
                 }
-            } else if !suppress.dim2 {
-                add_segment(&mut g.dim_lines, center, point);
             }
             let radius = (point - center).length();
             let text_is_outside = text.distance(center) > radius + 1e-5;
+            // Text inside the arc: the dimension line runs from the arc point
+            // to the centre. Text outside: only a leader from the arc point to
+            // the text, unless DIMTOFL asks for the inside line as well.
+            if !jogged && !suppress.dim2 && (!text_is_outside || params.dimtofl) {
+                add_segment(&mut g.dim_lines, center, point);
+            }
             if text_is_outside && !suppress.dim2 {
-                let radial = normalized_or(point - center, Vec3::X);
-                let angle_from_horizontal = radial.y.abs().atan2(radial.x.abs());
-                if params.horizontal_text
-                    && angle_from_horizontal > 15.0_f32.to_radians()
-                    && radial.y.abs() > 1e-6
-                {
-                    let travel = (text.y - point.y) / radial.y;
-                    if travel > 0.0 {
-                        let elbow = point + radial * travel;
-                        let landing_gap = params.text_width * 0.5 + params.arrow_len;
-                        let landing = Vec3::new(
-                            text.x - radial.x.signum() * landing_gap,
-                            text.y,
-                            text.z,
-                        );
-                        add_segment(&mut g.dim_lines, point, elbow);
-                        add_segment(&mut g.dim_lines, elbow, landing);
-                    } else {
-                        add_segment(&mut g.dim_lines, point, text);
-                    }
-                } else {
-                    add_segment(&mut g.dim_lines, point, text);
-                }
+                append_radial_leader(&mut g, point, text, &params);
             }
             if !suppress.dim2 {
-                append_arrow(
-                    &mut g,
-                    point,
-                    normalized_or(center - point, Vec3::X),
-                    arrow1,
-                );
+                // The arrowhead sits on the arc with its body toward the text.
+                let body = if text_is_outside { point - center } else { center - point };
+                append_arrow(&mut g, point, normalized_or(body, Vec3::X), arrow1);
             }
             if text_is_outside {
                 append_center_mark(&mut g, center, params.dimcen, radius);
@@ -5026,17 +5014,38 @@ fn append_linear_dimension(
     let d2_out = d2 + dir_d1_to_d2 * dle;
 
     // When text plus arrows do not fit, DIMATFIT decides which component moves
-    // first: 0=both, 1=arrows, 2=text, 3=best fit.
+    // first: 0=both, 1=arrows, 2=text, 3=best fit. The text is measured along
+    // the dimension line where it is drawn: horizontal text on a vertical
+    // dimension takes up its height, and text dragged toward one end runs into
+    // that arrow long before the sum of widths says the gap is full.
     let gap = (d2 - d1).length();
+    let text_span = params.text_break.map(|text_break| {
+        let axis_angle = dir_d1_to_d2.y.atan2(dir_d1_to_d2.x) as f64;
+        let (sin, cos) = (text_break.rotation - axis_angle).sin_cos();
+        let half = (text_break.half_width as f64 * cos).abs()
+            + (text_break.half_height as f64 * sin).abs()
+            + text_break.padding as f64;
+        let along = (text_break.center - d1).dot(dir_d1_to_d2) as f64;
+        (along - half, along + half)
+    });
+    let text_extent = text_span
+        .map(|(lo, hi)| (hi - lo) as f32)
+        .unwrap_or(params.text_width);
+    let text_hits_an_arrow = text_span.is_some_and(|(lo, hi)| {
+        let center = (lo + hi) * 0.5;
+        center > 0.0
+            && center < gap as f64
+            && (lo < params.arrow_len as f64 || hi > (gap - params.arrow_len) as f64)
+    });
     let arrows_outside = if params.ticks || params.arrow_len <= 1e-6 {
         false
-    } else if gap < 2.0 * params.arrow_len {
+    } else if gap < 2.0 * params.arrow_len || text_hits_an_arrow {
         true
-    } else if gap < params.text_width + 2.0 * params.arrow_len {
+    } else if gap < text_extent + 2.0 * params.arrow_len {
         match params.dimatfit {
             0 | 1 => true,
             2 => false,
-            _ => params.text_width <= gap,
+            _ => text_extent <= gap,
         }
     } else {
         false
@@ -5075,6 +5084,54 @@ fn append_linear_dimension(
         append_arrow(g, d1, normalized_or(d2 - d1, axis), arrow1);
         append_arrow(g, d2, normalized_or(d1 - d2, -axis), arrow2);
     }
+
+    // Horizontal text outside the extension lines of a dimension that is not
+    // horizontal itself: the dimension line runs on to the text's height and
+    // turns a hook one arrow long toward the text, which sits against it.
+    if params.horizontal_text && !params.ticks && dir_d1_to_d2.y.abs() > 1e-3 {
+        if let Some(text_break) = params.text_break {
+            let along = (text_break.center - d1).dot(dir_d1_to_d2);
+            let outside = if along < 0.0 {
+                Some((d1, -dir_d1_to_d2, suppress.dim1))
+            } else if along > gap {
+                Some((d2, dir_d1_to_d2, suppress.dim2))
+            } else {
+                None
+            };
+            if let Some((end, outward, suppressed)) = outside {
+                let travel = (text_break.center.y - end.y) / outward.y;
+                if travel > 0.0 && !suppressed {
+                    let elbow = end + outward * travel;
+                    let side = if text_break.center.x >= elbow.x { 1.0 } else { -1.0 };
+                    let hook_end = Vec3::new(elbow.x + side * params.arrow_len, elbow.y, elbow.z);
+                    add_segment(&mut g.dim_lines, end, elbow);
+                    add_segment(&mut g.dim_lines, elbow, hook_end);
+                }
+            }
+        }
+    }
+}
+
+/// Leader from a point on the circle to text outside it. Horizontal text gets a
+/// hook one arrow long that the text sits against; aligned text is reached by a
+/// straight leader that stops a gap short of it. `text_width` already carries
+/// a gap on each side.
+fn append_radial_leader(g: &mut DimGeom, tip: Vec3, text: Vec3, params: &DimLineParams) {
+    if params.horizontal_text {
+        let side = if text.x >= tip.x { 1.0 } else { -1.0 };
+        let text_edge = params.leader_anchor.unwrap_or(Vec3::new(
+            text.x - side * params.text_width * 0.5,
+            text.y,
+            text.z,
+        ));
+        let hook_start = text_edge - Vec3::X * (side * params.arrow_len);
+        add_segment(&mut g.dim_lines, tip, hook_start);
+        add_segment(&mut g.dim_lines, hook_start, text_edge);
+    } else {
+        let toward = normalized_or(text - tip, Vec3::X);
+        let reach = ((text - tip).length() - params.text_width * 0.5).max(0.0);
+        add_segment(&mut g.dim_lines, tip, tip + toward * reach);
+    }
 }
 
 fn append_diameter_dimension(
@@ -5090,6 +5147,25 @@ fn append_diameter_dimension(
     let axis = normalized_or(far_chord - chord, Vec3::X);
     let diameter = chord.distance(far_chord);
     if diameter <= 1e-6 {
+        return;
+    }
+    let center = (chord + far_chord) * 0.5;
+    let text_is_outside = params.text_position.distance(center) > diameter * 0.5 + 1e-5;
+    if text_is_outside && !params.dimtofl && params.text_movement == 0 {
+        // Outside text without DIMTOFL: no line across the circle, just a
+        // leader from the near side with the arrowhead on the circle and its
+        // body toward the text.
+        let (tip, suppressed) = if params.text_position.distance_squared(chord)
+            <= params.text_position.distance_squared(far_chord)
+        {
+            (chord, suppress.dim1)
+        } else {
+            (far_chord, suppress.dim2)
+        };
+        if !suppressed {
+            append_radial_leader(g, tip, params.text_position, &params);
+            append_arrow(g, tip, normalized_or(tip - center, axis), arrow1);
+        }
         return;
     }
     // Text projected outside the diameter requires inward-pointing arrowheads.
@@ -6048,8 +6124,8 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         return false;
     };
     if let Some((vertex, start, end, radius)) = angular_dimension_frame(dim) {
-        if dim.base().text_user_positioned {
-            let text = vec3_local(dim.base().text_middle_point);
+        if let Some(point) = stored_text_point(dim) {
+            let text = vec3_local(point);
             let angle = (text.y - vertex.y).atan2(text.x - vertex.x);
             return (angle - start).rem_euclid(std::f32::consts::TAU)
                 > end - start + 1.0e-6;
@@ -6075,11 +6151,8 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
     }
     if let Dimension::LargeRadial(radial) = dim {
         let radius = radial.definition_point.distance(&radial.chord_point);
-        if dim.base().text_user_positioned {
-            return radial
-                .definition_point
-                .distance(&dim.base().text_middle_point)
-                > radius + 1.0e-9;
+        if let Some(point) = stored_text_point(dim) {
+            return radial.definition_point.distance(&point) > radius + 1.0e-9;
         }
         if style.dimtix {
             return false;
@@ -6108,8 +6181,7 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         let dx = radius.definition_point.x - radius.angle_vertex.x;
         let dy = radius.definition_point.y - radius.angle_vertex.y;
         let available = dx.hypot(dy);
-        if dim.base().text_user_positioned {
-            let text = dim.base().text_middle_point;
+        if let Some(text) = stored_text_point(dim) {
             return (text.x - radius.angle_vertex.x)
                 .hypot(text.y - radius.angle_vertex.y)
                 > available + 1e-9;
@@ -6154,8 +6226,7 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
     let second_axis = second.x * axis.x + second.y * axis.y;
     let lo = first_axis.min(second_axis);
     let hi = first_axis.max(second_axis);
-    if dim.base().text_user_positioned {
-        let point = dim.base().text_middle_point;
+    if let Some(point) = stored_text_point(dim) {
         let position = point.x * axis.x + point.y * axis.y;
         return position < lo || position > hi;
     }
@@ -6604,6 +6675,15 @@ fn dimtfac_or_one(s: &DimStyle) -> f64 {
     }
 }
 
+/// Vertical extent of a dimension's whole value: the first line (or limits
+/// stack) plus any `\P` continuation lines at MText's default spacing.
+fn dimension_text_extent_height(dim: &Dimension, style: Option<&DimStyle>, text_height: f64) -> f64 {
+    let lines = dimension_text_value(dim, style)
+        .map(|value| text_lines(&value))
+        .unwrap_or(1);
+    dimension_text_block_height(style, text_height) + (lines - 1) as f64 * text_height * 5.0 / 3.0
+}
+
 /// Vertical extent of the rendered value: one line, or a DIMLIM stack whose
 /// halves each sit at DIMTFAC × DIMTXT.
 fn dimension_text_block_height(style: Option<&DimStyle>, text_height: f64) -> f64 {
@@ -6625,22 +6705,55 @@ pub(crate) fn dimension_text_cells(dim: &Dimension, style: Option<&DimStyle>) ->
     Some(text_cells(&value, style.map(dimtfac_or_one).unwrap_or(1.0)))
 }
 
+/// Width in cells of the widest line; `\P` starts a new line.
 fn text_cells(value: &str, stack_scale: f64) -> f64 {
+    value
+        .split(r"\P")
+        .map(|line| line_cells(line, stack_scale))
+        .fold(0.0, f64::max)
+}
+
+/// Number of lines the value renders as.
+fn text_lines(value: &str) -> usize {
+    value.split(r"\P").count().max(1)
+}
+
+/// Visible cells of one line: MText format codes (`\\f...;`, `\\H...;`, `\\C...;`,
+/// braces, underline toggles) take no room, a stack is as wide as its wider half.
+fn line_cells(value: &str, stack_scale: f64) -> f64 {
     let mut cells = 0.0;
-    let mut rest = value;
-    while let Some(start) = rest.find("\\S") {
-        cells += rest[..start].chars().count() as f64;
-        let body = &rest[start + 2..];
-        let end = body.find(';').unwrap_or(body.len());
-        let widest = body[..end]
-            .split(['^', '/', '#'])
-            .map(|half| half.chars().count())
-            .max()
-            .unwrap_or(0);
-        cells += widest as f64 * stack_scale;
-        rest = &body[(end + 1).min(body.len())..];
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' | '}' => {}
+            '\\' => match chars.next() {
+                Some('S') => {
+                    let body: String = chars.by_ref().take_while(|c| *c != ';').collect();
+                    let widest = body
+                        .split(['^', '/', '#'])
+                        .map(|half| half.chars().count())
+                        .max()
+                        .unwrap_or(0);
+                    cells += widest as f64 * stack_scale;
+                }
+                Some('~') => cells += 1.0,
+                // Underline, overline and strike toggles take no room; an
+                // escaped backslash or brace is one visible character.
+                Some('L' | 'l' | 'O' | 'o' | 'K' | 'k') => {}
+                Some('\\' | '{' | '}') => cells += 1.0,
+                Some(_) => {
+                    for c in chars.by_ref() {
+                        if c == ';' {
+                            break;
+                        }
+                    }
+                }
+                None => {}
+            },
+            _ => cells += 1.0,
+        }
     }
-    cells + rest.chars().count() as f64
+    cells
 }
 
 /// Format a linear measurement honouring DIMLFAC, DIMRND, DIMDEC, DIMZIN, DIMDSEP, DIMLUNIT.
@@ -7018,6 +7131,7 @@ fn text_on_dim_line(
     dimtix: bool,
     dimatfit: i16,
     tad: i16,
+    horizontal_outside: bool,
 ) -> Vector3 {
     // The perpendicular "up" side: the perpendicular of the dimension line
     // normalised so the text reads left-to-right (or bottom-to-top when
@@ -7070,7 +7184,24 @@ fn text_on_dim_line(
                 _ => text_w > span,
             };
         if text_outside {
-            along = hi + arrow + text_w * 0.5;
+            // Past the two-arrow stub the dimension line grows outside the
+            // extension line, then the gap that `text_w` already carries.
+            along = hi + 2.0 * arrow + text_w * 0.5;
+            if horizontal_outside && ay.abs() > 1e-3 {
+                // Horizontal text beside a hook: the line runs out two arrow
+                // lengths, the hook turns one arrow toward the text-up side
+                // and the text sits against it, centred on the hook.
+                let elbow_along = hi + 2.0 * arrow;
+                let side = if px >= 0.0 { 1.0 } else { -1.0 };
+                let elbow_x = defpt.x + ax * elbow_along;
+                let elbow_y = defpt.y + ay * elbow_along;
+                let vertical = if tad == 0 { 0.0 } else { perp_off * perp_sign };
+                return Vector3::new(
+                    elbow_x + side * (arrow + text_w * 0.5),
+                    elbow_y + vertical,
+                    defpt.z,
+                );
+            }
         }
     }
     let bx = defpt.x + ax * along;
@@ -7124,7 +7255,7 @@ fn text_on_single_arrow_dim_line(
             _ => text_width > available,
         };
     let along = if text_outside {
-        high + arrow + text_width * 0.5
+        high + 2.0 * arrow + text_width * 0.5
     } else {
         (first_along + second_along) * 0.5
     };
@@ -7133,6 +7264,30 @@ fn text_on_single_arrow_dim_line(
         defpt.y + ay * along + perpendicular_y * perp_off * perpendicular_sign,
         defpt.z,
     )
+}
+
+/// AutoCAD writes the text middle point (group 11) for automatic and hand
+/// placed text alike, so a non-zero point is where the text was drawn and a
+/// regenerated dimension keeps it. Only a cleared point is placed from the style.
+fn stored_text_point(dim: &Dimension) -> Option<Vector3> {
+    let p = dim.base().text_middle_point;
+    (p.x * p.x + p.y * p.y + p.z * p.z > 1e-16).then_some(p)
+}
+
+/// The point on the circle a radial leader leaves from: the arc point of a
+/// radius, or whichever end of a diameter's chord is nearer the text.
+fn radial_leader_tip(dim: &Dimension, text: Vector3) -> Vector3 {
+    match dim {
+        Dimension::Radius(d) => d.definition_point,
+        Dimension::Diameter(d) => {
+            if d.angle_vertex.distance(&text) <= d.definition_point.distance(&text) {
+                d.angle_vertex
+            } else {
+                d.definition_point
+            }
+        }
+        _ => dim.base().text_middle_point,
+    }
 }
 
 fn dimension_text_pos_f64(
@@ -7160,52 +7315,32 @@ fn dimension_text_pos_f64(
     let perp_off = if dimtad == 0 {
         dimtvp * text_height
     } else {
-        dimension_text_block_height(style, text_height) * 0.5 + dimgap
+        dimension_text_extent_height(dim, style, text_height) * 0.5 + dimgap
     };
     // Rough text width + arrow allowance, used to decide text-outside fit.
     let text_w = dimension_text_cells(dim, style)
         .map(|cells| cells * text_height * 0.6 + 2.0 * dimgap)
         .unwrap_or(0.0);
-    let arrow = if matches!(dim, Dimension::LargeRadial(_)) {
-        style
-            .map(|style| style.dimasz * dim_scale)
-            .unwrap_or(text_height)
-    } else {
-        text_height
-    };
+    let arrow = style
+        .map(|style| style.dimasz * dim_scale)
+        .filter(|arrow| *arrow > 1e-9)
+        .unwrap_or(text_height);
+    // DIMTOH: text that lands outside reads horizontally.
+    let horizontal_outside = style.is_some_and(|style| style.dimtoh);
 
-    // Explicit per-entity override (text dragged to a custom location): the
-    // saved point wins. Otherwise the dimension style governs placement.
-    let use_saved = base.text_user_positioned && {
-        let p = base.text_middle_point;
-        p.x * p.x + p.y * p.y + p.z * p.z > 1e-16
-    };
-    if use_saved {
-        if let Dimension::Diameter(d) = dim {
-            let dx = d.definition_point.x - d.angle_vertex.x;
-            let dy = d.definition_point.y - d.angle_vertex.y;
-            let len = (dx * dx + dy * dy).sqrt().max(1e-12);
-
-            // Match the readable orientation used by text_on_dim_line().
-            let (mut nx, mut ny) = (dx / len, dy / len);
-            if nx < 0.0 || (nx == 0.0 && ny < 0.0) {
-                nx = -nx;
-                ny = -ny;
+    if let Some(point) = stored_text_point(dim) {
+        return match dim {
+            // DIMTMOVE 1 stores where the leader's hook ends; the text starts
+            // there and runs away from the arc.
+            Dimension::Radius(_) | Dimension::Diameter(_)
+                if style.is_some_and(|s| s.dimtmove == 1) =>
+            {
+                let tip = radial_leader_tip(dim, point);
+                let side = if point.x >= tip.x { 1.0 } else { -1.0 };
+                Vector3::new(point.x + side * text_w * 0.5, point.y, point.z)
             }
-
-            let px = -ny;
-            let py = nx;
-
-            let perp_sign = if dimtad == 4 { -1.0 } else { 1.0 };
-
-            return Vector3::new(
-                base.text_middle_point.x + px * perp_off * perp_sign,
-                base.text_middle_point.y + py * perp_off * perp_sign,
-                base.text_middle_point.z,
-            );
-        }
-
-        return base.text_middle_point;
+            _ => point,
+        };
     }
 
     match dim {
@@ -7225,6 +7360,7 @@ fn dimension_text_pos_f64(
                 dimtix,
                 dimatfit,
                 dimtad,
+                horizontal_outside,
             )
         }
         Dimension::Aligned(d) => {
@@ -7244,6 +7380,7 @@ fn dimension_text_pos_f64(
                 dimtix,
                 dimatfit,
                 dimtad,
+                horizontal_outside,
             )
         }
         Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => {
@@ -7333,6 +7470,7 @@ fn dimension_text_pos_f64(
                 dimtix,
                 dimatfit,
                 dimtad,
+                horizontal_outside,
             )
         }
         Dimension::Ordinate(d) => {
@@ -7433,6 +7571,7 @@ pub(crate) fn baked_large_radial_geometry(
             horizontal_text: text.horizontal,
             text_movement: style.map(|style| style.dimtmove).unwrap_or(0),
             text_break: text.break_box,
+            leader_anchor: None,
         },
         SuppressFlags {
             ext1: style.is_some_and(|style| style.dimse1),
@@ -7553,13 +7692,9 @@ pub(crate) fn dimension_text_grip_position(
     document: &CadDocument,
     anno_scale: f64,
 ) -> Option<Vector3> {
-    // Once the user has moved the text, its saved point is authoritative.
-    let base = dim.base();
-    if base.text_user_positioned {
-        let p = base.text_middle_point;
-        if p.x * p.x + p.y * p.y + p.z * p.z > 1e-16 {
-            return Some(p);
-        }
+    // A stored text point is where the text is drawn; the grip goes there.
+    if let Some(p) = stored_text_point(dim) {
+        return Some(p);
     }
 
     // For automatic text, use the same text-building path used by the
@@ -7587,11 +7722,11 @@ mod dimtad_tests {
     fn above_is_up_regardless_of_direction() {
         let (first, second, defpt) = (v(0.0, 10.0), v(20.0, 10.0), v(0.0, 0.0));
         let perp = 5.0;
-        let fwd = text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, 3, 1);
-        let rev = text_on_dim_line(first, second, defpt, -1.0, 0.0, 0, perp, 0.0, 1.0, false, 3, 1);
+        let fwd = text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, 3, 1, false);
+        let rev = text_on_dim_line(first, second, defpt, -1.0, 0.0, 0, perp, 0.0, 1.0, false, 3, 1, false);
         assert!(fwd.y > 0.0, "above must be +Y, got {}", fwd.y);
         assert!(rev.y > 0.0, "above must be +Y even reversed, got {}", rev.y);
-        let below = text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, 3, 4);
+        let below = text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, 3, 4, false);
         assert!(below.y < 0.0, "below must be -Y, got {}", below.y);
     }
 
@@ -7614,7 +7749,8 @@ mod dimtad_tests {
             false,
             3,
             2,
-        );
+        false,
+    );
         assert!(
             above.y > 10.0,
             "outside must clear the object side, got {}",
@@ -7634,7 +7770,8 @@ mod dimtad_tests {
             false,
             3,
             2,
-        );
+        false,
+    );
         assert!(
             below.y < -10.0,
             "outside must clear the object side, got {}",
@@ -8262,6 +8399,14 @@ mod limits_format_tests {
         assert_eq!(text_cells("10.000", 0.5), 6.0);
         assert_eq!(text_cells(r"R\S1.020^0.98;", 0.5), 1.0 + 5.0 * 0.5);
         assert_eq!(text_cells(r"\S10.020^9.950; REF", 1.0), 6.0 + 4.0);
+        assert_eq!(text_cells(r"\S1.020^0.980;\PCutouts", 1.0), 7.0, "widest line, not the sum");
+        assert_eq!(text_lines(r"4X <>\PNominal"), 2);
+        assert_eq!(
+            text_cells(r"{\fArial|b0|i1|c0|p34;Cutouts}", 1.0),
+            7.0,
+            "format codes and braces take no room"
+        );
+        assert_eq!(text_cells(r"\H0.7x;10\L Ref\l", 1.0), 6.0);
     }
 
     // A three-point angular dimension whose first extension point coincides
@@ -8328,5 +8473,186 @@ mod limits_format_tests {
         s.dimtfac = 0.5;
         let expected = 2.0 * 0.5 * 2.0 * f64::from(crate::entities::text_support::STACK_HALF_SCALE);
         assert_eq!(dimension_text_block_height(Some(&s), 2.0), expected);
+    }
+}
+
+#[cfg(test)]
+mod layout_parity_tests {
+    use super::*;
+    use acadrust::entities::{DimensionDiameter, DimensionLinear, DimensionRadius};
+    use glam::DVec3;
+
+    /// A document whose Standard style has imperial sizes and horizontal text.
+    fn document() -> CadDocument {
+        let mut document = CadDocument::new();
+        let style = document
+            .dim_styles
+            .get_mut("Standard")
+            .expect("Standard style");
+        style.dimasz = 0.18;
+        style.dimtxt = 0.18;
+        style.dimgap = 0.09;
+        style.dimtih = true;
+        style.dimtoh = true;
+        style.dimtad = 0;
+        style.dimdec = 2;
+        document
+    }
+
+    fn style(document: &CadDocument) -> DimStyle {
+        document.dim_styles.get("Standard").expect("Standard style").clone()
+    }
+
+    /// Stroke endpoints and arrowhead triangle count of the drawn dimension.
+    fn drawn(document: &CadDocument, dim: &Dimension) -> (Vec<DVec3>, usize) {
+        let wires = dim.tessellate(
+            document,
+            Handle::new(0x40),
+            false,
+            [1.0; 4],
+            1.0,
+            1.0,
+            &rustc_hash::FxHashSet::default(),
+            None,
+            [0.0, 0.0, 0.0, 1.0],
+            None,
+            None,
+        );
+        let mut points = Vec::new();
+        let mut fills = 0;
+        for wire in &wires {
+            for p in wire.points.iter().filter(|p| p[0].is_finite()) {
+                points.push(DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64));
+            }
+            fills += wire.fill_tris.len() / 3;
+        }
+        (points, fills)
+    }
+
+    fn vertical(top: f64) -> DimensionLinear {
+        let mut d = DimensionLinear::default();
+        d.first_point = Vector3::new(0.0, 0.0, 0.0);
+        d.second_point = Vector3::new(0.0, top, 0.0);
+        d.definition_point = Vector3::new(-0.5, top, 0.0);
+        d.rotation = std::f64::consts::FRAC_PI_2;
+        d
+    }
+
+    // AutoCAD writes group 11 for every dimension; the regenerated text goes
+    // where the file says it was, moved by the user or not.
+    #[test]
+    fn stored_text_point_places_automatic_text() {
+        let document = document();
+        let mut d = DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(7.0, 5.2, 0.0);
+        d.base.text_user_positioned = false;
+        let dim = Dimension::Linear(d);
+        let position = dimension_text_pos_f64(&dim, Some(&style(&document)), 0.18, 1.0);
+        assert_eq!((position.x, position.y), (7.0, 5.2));
+    }
+
+    // Text pushed outside by a narrow gap sits past the two-arrow stub and a
+    // gap, not directly against the arrowhead.
+    #[test]
+    fn outside_text_clears_the_stub_and_a_gap() {
+        let document = document();
+        let mut d = DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.2, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 1.0, 0.0);
+        let dim = Dimension::Linear(d);
+        let s = style(&document);
+        let position = dimension_text_pos_f64(&dim, Some(&s), 0.18, 1.0);
+        let half_width = dimension_text_cells(&dim, Some(&s)).unwrap() * 0.18 * 0.6 * 0.5;
+        let text_start = position.x - half_width;
+        let stub_end = 0.2 + 2.0 * 0.18;
+        assert!(
+            (text_start - (stub_end + 0.09)).abs() < 1e-6,
+            "text starts at {text_start}, expected {}",
+            stub_end + 0.09
+        );
+    }
+
+    // Horizontal text near the top of a vertical dimension runs into the top
+    // arrowhead, so both arrowheads flip outside and stubs grow past the
+    // extension lines. Text in the middle leaves them inside.
+    #[test]
+    fn text_that_hits_an_arrow_moves_the_arrows_outside() {
+        let document = document();
+        let top = 1.12;
+        let mut near_top = vertical(top);
+        near_top.base.text_middle_point = Vector3::new(-0.5, 0.98, 0.0);
+        let (points, _) = drawn(&document, &Dimension::Linear(near_top));
+        assert!(
+            points.iter().any(|p| p.y > top + 0.1) && points.iter().any(|p| p.y < -0.1),
+            "arrows should be outside with stubs past both extension lines"
+        );
+
+        let mut centred = vertical(top);
+        centred.base.text_middle_point = Vector3::new(-0.5, top * 0.5, 0.0);
+        let (points, _) = drawn(&document, &Dimension::Linear(centred));
+        assert!(
+            points.iter().all(|p| p.y <= top + 0.01 && p.y >= -0.01),
+            "centred text leaves the arrows inside"
+        );
+    }
+
+    // Horizontal text stored above a vertical dimension: the dimension line
+    // runs up to the text's height and hooks one arrow toward it.
+    #[test]
+    fn horizontal_outside_text_gets_a_leg_and_a_hook() {
+        let document = document();
+        let top = 0.3;
+        let mut d = vertical(top);
+        d.base.text_middle_point = Vector3::new(-0.5 + 0.9, 1.0, 0.0);
+        let (points, _) = drawn(&document, &Dimension::Linear(d));
+        assert!(
+            points.iter().any(|p| (p.y - 1.0).abs() < 1e-6 && (p.x + 0.5).abs() < 1e-6),
+            "the dimension line reaches the text height at the extension line"
+        );
+        assert!(
+            points.iter().any(|p| (p.y - 1.0).abs() < 1e-6 && (p.x - (-0.5 + 0.18)).abs() < 1e-6),
+            "a hook one arrow long turns toward the text"
+        );
+    }
+
+    // Radius text outside the arc: no line to the centre, a leader from the arc
+    // point to a hook the text sits against, arrowhead body pointing outward.
+    #[test]
+    fn radius_text_outside_draws_a_hooked_leader_only() {
+        let document = document();
+        let mut d = DimensionRadius::default();
+        d.angle_vertex = Vector3::new(0.0, 0.0, 0.0);
+        d.definition_point = Vector3::new(1.0, 0.0, 0.0);
+        d.base.text_middle_point = Vector3::new(3.0, 0.8, 0.0);
+        let (points, fills) = drawn(&document, &Dimension::Radius(d));
+        assert!(
+            !points.iter().any(|p| p.length() < 1e-6),
+            "no dimension line reaches the centre"
+        );
+        let hook: Vec<_> = points.iter().filter(|p| (p.y - 0.8).abs() < 1e-6).collect();
+        assert!(hook.len() >= 2, "a horizontal hook at the text height: {hook:?}");
+        assert!(
+            points.iter().any(|p| p.x > 1.05 && p.x < 1.3 && p.y > 0.0),
+            "arrowhead body lies outside the arc along the leader"
+        );
+        assert_eq!(fills, 1);
+    }
+
+    // Diameter text outside the circle without DIMTOFL: a single leader from
+    // the near side, one arrowhead, and no line across the circle.
+    #[test]
+    fn diameter_text_outside_draws_one_leader_and_no_chord() {
+        let document = document();
+        let mut d = DimensionDiameter::default();
+        d.angle_vertex = Vector3::new(-1.0, 0.0, 0.0);
+        d.definition_point = Vector3::new(1.0, 0.0, 0.0);
+        d.base.text_middle_point = Vector3::new(3.0, 0.8, 0.0);
+        let (points, fills) = drawn(&document, &Dimension::Diameter(d));
+        assert!(
+            !points.iter().any(|p| p.x < -0.5),
+            "nothing is drawn on the far side of the circle"
+        );
+        assert_eq!(fills, 1, "one arrowhead");
+        assert!(points.iter().any(|p| (p.y - 0.8).abs() < 1e-6), "hook at the text height");
     }
 }
