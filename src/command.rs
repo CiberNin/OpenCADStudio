@@ -1487,6 +1487,14 @@ pub enum CmdResult {
         second_start: crate::scene::parametric_constraints::ParametricRef,
         label: &'static str,
     },
+    /// Adds an ordered tangent relation. The first picked reference stays
+    /// fixed during the initial solve and the second keeps its intrinsic
+    /// shape while it moves into tangency.
+    AddTangentConstraint {
+        first: crate::scene::parametric_constraints::ParametricRef,
+        second: crate::scene::parametric_constraints::ParametricRef,
+        label: &'static str,
+    },
     /// Opens the Auto Constrain settings dialog from the selection prompt.
     OpenAutoConstrainSettings,
     /// Adds an ordered Coincident relation.  Point/point selections create a

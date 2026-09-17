@@ -3211,12 +3211,38 @@ impl Scene {
         retain_size: bool,
         retained_originals: &[(Handle, EntityType)],
     ) {
-        self.bump_entities_with_solve_policy(changes, driven_refs, retain_size, retained_originals, true);
+        self.bump_entities_with_solve_policy(
+            changes,
+            driven_refs,
+            retain_size,
+            retained_originals,
+            &[],
+            true,
+        );
     }
 
     /// Refresh display and associations after a solved grip or exact history restore.
     pub(crate) fn bump_entities_after_parametric_solve(&mut self, changes: &[(Handle, ChangeKind)]) {
-        self.bump_entities_with_solve_policy(changes, &[], false, &[], false);
+        self.bump_entities_with_solve_policy(changes, &[], false, &[], &[], false);
+    }
+
+    /// Apply a newly-created ordered relation while temporarily anchoring
+    /// its reference side. The anchors guide only this first solve and are
+    /// never added to the persistent constraint graph.
+    pub fn bump_entities_with_initial_parametric_policy(
+        &mut self,
+        changes: &[(Handle, ChangeKind)],
+        fixed_refs: &[parametric_constraints::ParametricRef],
+        retain_size: bool,
+    ) {
+        self.bump_entities_with_solve_policy(
+            changes,
+            &[],
+            retain_size,
+            &[],
+            fixed_refs,
+            true,
+        );
     }
 
     fn bump_entities_with_solve_policy(
@@ -3225,6 +3251,7 @@ impl Scene {
         driven_refs: &[parametric_constraints::ParametricRef],
         retain_size: bool,
         retained_originals: &[(Handle, EntityType)],
+        fixed_refs: &[parametric_constraints::ParametricRef],
         solve_parametric: bool,
     ) {
         if changes.iter().any(|(handle, kind)| {
@@ -3260,11 +3287,12 @@ impl Scene {
             }
         }
         if solve_parametric && !self.parametric_constraints.is_empty() {
-            for change in self.refresh_parametric_constraints_with_originals(
+            for change in self.refresh_parametric_constraints_with_initial_policy(
                 &changes,
                 driven_refs,
                 retain_size,
                 retained_originals,
+                fixed_refs,
             ) {
                 if !changes.iter().any(|(handle, _)| *handle == change.0) {
                     changes.push(change);

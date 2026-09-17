@@ -8,6 +8,8 @@ mod geom_constraint;
 #[path = "perpendicular.rs"]
 mod perpendicular_command;
 mod point_on_entity;
+#[path = "tangent.rs"]
+mod tangent_command;
 mod tools;
 mod value;
 pub use coincident::{coincident_tool, CoincidentConstraintCommand};
@@ -17,6 +19,7 @@ pub use perpendicular_command::{PerpendicularConstraintCommand, PerpendicularPic
 pub use point_on_entity::{
     center_point_tool, midpoint_tool, point_on_curve_tool, PointOnEntityConstraintCommand,
 };
+pub use tangent_command::TangentConstraintCommand;
 pub use tools::{
     colinear, concentric, equal, fixed, horizontal, normal, parallel, perpendicular, symmetric,
     tangent, vertical,

@@ -1405,7 +1405,44 @@ impl OpenCADStudio {
                 }
             }
 
-            "PCONSTRAINT" | "ECONSTRAINT" | "TCONSTRAINT" | "LCONSTRAINT"
+            "TCONSTRAINT" => {
+                use crate::command::CmdResult;
+                use crate::modules::parametric::TangentConstraintCommand;
+
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                if handles.is_empty() {
+                    let command = TangentConstraintCommand::new();
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                } else if handles.len() != 2 {
+                    self.command_line
+                        .push_output("Select exactly two tangent-compatible objects.");
+                } else {
+                    let refs = handles
+                        .iter()
+                        .filter_map(|handle| {
+                            let entity = self.tabs[i].scene.document.get_entity(*handle)?;
+                            TangentConstraintCommand::preselected_reference(entity, *handle)
+                        })
+                        .collect::<Vec<_>>();
+                    if refs.len() == 2 && refs[0] != refs[1] {
+                        return Some(self.apply_cmd_result(CmdResult::AddTangentConstraint {
+                            first: refs[0],
+                            second: refs[1],
+                            label: "Tangent constraint",
+                        }));
+                    }
+                    self.tabs[i].scene.deselect_all();
+                    self.command_line.push_error(
+                        "Invalid selection for Tangent. Select a line, polyline segment, circle, arc or ellipse.",
+                    );
+                    let command = TangentConstraintCommand::new();
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                }
+            }
+
+            "PCONSTRAINT" | "ECONSTRAINT" | "LCONSTRAINT"
             | "NRCONSTRAINT" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if handles.is_empty() {
@@ -1422,7 +1459,6 @@ impl OpenCADStudio {
                     use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
                     let (kind, label) = match cmd {
                         "PCONSTRAINT" => (ConstraintKind::Parallel, "Parallel constraint"),
-                        "TCONSTRAINT" => (ConstraintKind::Tangent, "Tangent constraint"),
                         "LCONSTRAINT" => (ConstraintKind::Colinear, "Colinear constraint"),
                         "NRCONSTRAINT" => (ConstraintKind::Normal, "Normal constraint"),
                         _ => (ConstraintKind::Equal, "Equal constraint"),
