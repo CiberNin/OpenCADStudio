@@ -4359,8 +4359,9 @@ fn text_fill_rect(
     let dimgap = style.map(|s| s.dimgap.abs()).unwrap_or(0.0) * dim_scale;
     // ~0.6 × text_height per character; matches average glyph aspect for
     // the bundled stick fonts. Inflate by 1 DIMGAP on each side.
-    let approx_w = value.chars().count() as f64 * text_height * 0.6 + dimgap * 2.0;
-    let approx_h = text_height + dimgap * 2.0;
+    let stack_scale = style.map(dimtfac_or_one).unwrap_or(1.0);
+    let approx_w = text_cells(&value, stack_scale) * text_height * 0.6 + dimgap * 2.0;
+    let approx_h = dimension_text_block_height(style, text_height) + dimgap * 2.0;
     let rot = if dim.base().text_rotation.abs() > 1e-9 {
         dim.base().text_rotation
     } else {
@@ -4402,7 +4403,8 @@ fn arc_length_symbol_points(
     let position = dimension_text_pos_f64(dim, style, text_height, dim_scale);
     let rotation = dimension_text_rotation(dim, style);
     let (sin_rotation, cos_rotation) = rotation.sin_cos();
-    let text_width = value.chars().count() as f64 * text_height * 0.6;
+    let stack_scale = style.map(dimtfac_or_one).unwrap_or(1.0);
+    let text_width = text_cells(&value, stack_scale) * text_height * 0.6;
     let symbol_width = text_height * 0.62;
     let symbol_height = text_height * 0.20;
     let (center_x, center_y) = if symbol_position == 1 {
@@ -4467,8 +4469,8 @@ fn dimension_text_layout(
     let gap = style
         .map(|style| (style.dimgap.abs() * dim_scale) as f32)
         .unwrap_or(0.09);
-    let width = dimension_text_value(dimension, style)
-        .map(|text| text.chars().count() as f32 * text_height as f32 * 0.6 + gap * 2.0)
+    let width = dimension_text_cells(dimension, style)
+        .map(|cells| cells as f32 * text_height as f32 * 0.6 + gap * 2.0)
         .unwrap_or(0.0);
     let position = vec3_local(dimension_text_pos_f64(
         dimension,
@@ -5830,13 +5832,18 @@ fn dimension_text_entity(
     document: &CadDocument,
     dim_scale: f64,
 ) -> Option<EntityType> {
-    // Tolerances are emitted by `dimension_tolerance_entity` at their own
+    // Deviations are emitted by `dimension_tolerance_entity` at their own
     // height and alignment; keep the primary entity free of duplicate text.
     let (value, _) = dimension_text_parts(dim, style)?;
     // Use f64 position directly to avoid f32 round-trip precision loss at large
     // coordinates (e.g. Turkish UTM ~4,000,000 m). tessellate() will apply
     // world_offset when rendering this synthetic entity.
     let pos_f64 = dimension_text_pos_f64(dim, style, text_height, dim_scale);
+    // A limits stack draws each half at DIMTFAC × DIMTXT, like the source application.
+    let text_height = match style {
+        Some(s) if s.dimlim => text_height * dimtfac_or_one(s),
+        _ => text_height,
+    };
     let base = dim.base();
 
     let rotation = dimension_text_rotation(dim, style);
@@ -5987,8 +5994,8 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         let scale = if style.dimscale > 1e-9 { style.dimscale } else { 1.0 };
         let height = style.dimtxt * scale;
         let gap = style.dimgap.abs() * scale;
-        let text_width = dimension_text_value(dim, Some(style))
-            .map(|value| value.chars().count() as f64 * height * 0.6 + gap * 2.0)
+        let text_width = dimension_text_cells(dim, Some(style))
+            .map(|cells| cells * height * 0.6 + gap * 2.0)
             .unwrap_or(0.0);
         let arrow = style.dimasz * scale;
         let span = radius as f64 * (end - start).abs() as f64;
@@ -6019,8 +6026,8 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         };
         let height = style.dimtxt * scale;
         let gap = style.dimgap.abs() * scale;
-        let text_width = dimension_text_value(dim, Some(style))
-            .map(|value| value.chars().count() as f64 * height * 0.6 + gap * 2.0)
+        let text_width = dimension_text_cells(dim, Some(style))
+            .map(|cells| cells * height * 0.6 + gap * 2.0)
             .unwrap_or(0.0);
         let arrow = style.dimasz * scale;
         let insufficient = text_width + arrow > available;
@@ -6047,8 +6054,8 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
         let scale = if style.dimscale > 1e-9 { style.dimscale } else { 1.0 };
         let height = style.dimtxt * scale;
         let gap = style.dimgap.abs() * scale;
-        let text_width = dimension_text_value(dim, Some(style))
-            .map(|value| value.chars().count() as f64 * height * 0.6 + gap * 2.0)
+        let text_width = dimension_text_cells(dim, Some(style))
+            .map(|cells| cells * height * 0.6 + gap * 2.0)
             .unwrap_or(0.0);
         let arrow = style.dimasz * scale;
         let insufficient = text_width + arrow > available;
@@ -6092,8 +6099,8 @@ fn dimension_text_is_outside(dim: &Dimension, style: Option<&DimStyle>) -> bool 
     let scale = if style.dimscale > 1e-9 { style.dimscale } else { 1.0 };
     let height = style.dimtxt * scale;
     let gap = style.dimgap.abs() * scale;
-    let text_width = dimension_text_value(dim, Some(style))
-        .map(|value| value.chars().count() as f64 * height * 0.6 + gap * 2.0)
+    let text_width = dimension_text_cells(dim, Some(style))
+        .map(|cells| cells * height * 0.6 + gap * 2.0)
         .unwrap_or(0.0);
     let arrow = style.dimasz * scale;
     let span = hi - lo;
@@ -6167,26 +6174,28 @@ fn dimension_text_parts(
     let is_angular = matches!(dim, Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_));
 
     // Auto-generated body used when the user did not override it. Built first
-    // so user_text "<>" substitution can re-use it.
-    let primary_raw = if is_angular {
-        format_angular_value(dim.measurement(), style)
-    } else {
-        let v = format_linear_value(dim.measurement(), style);
-        match dim {
-            Dimension::Radius(_) | Dimension::LargeRadial(_) => format!("R{}", v),
-            Dimension::Diameter(_) => format!("Ø{}", v),
-            _ => v,
-        }
+    // so user_text "<>" substitution can re-use it. With DIMLIM the limits
+    // stack is the value itself: the source application prints the upper limit over the
+    // lower one and no nominal, so the tolerance slot stays empty.
+    let value = match limits_text(dim, style, is_angular) {
+        Some(limits) => limits,
+        None if is_angular => format_angular_value(display_measurement(dim), style),
+        None => format_linear_value(display_measurement(dim), style),
+    };
+    let primary_raw = match dim {
+        Dimension::Radius(_) | Dimension::LargeRadial(_) => format!("R{}", value),
+        Dimension::Diameter(_) => format!("Ø{}", value),
+        _ => value,
     };
 
-    // Build tolerance / limits suffix separately so the caller can render
-    // it as its own Text entity at DIMTFAC × DIMTXT height.
+    // Build the deviation suffix separately so the caller can render it as
+    // its own Text entity at DIMTFAC × DIMTXT height.
     let tolerance_suffix = build_tolerance_suffix(dim, style, is_angular);
     let primary = apply_dimpost(&primary_raw, style);
 
     // Alternate units appended in brackets when DIMALT is on (linear only).
     let primary = if !is_angular {
-        match alternate_units_text(dim.measurement(), style) {
+        match alternate_units_text(display_measurement(dim) * effective_dimlfac(style), style) {
             Some(alt) => format!("{} [{}]", primary, alt),
             None => primary,
         }
@@ -6208,24 +6217,93 @@ fn dimension_text_parts(
     Some((primary, tolerance_suffix))
 }
 
+/// The value the text reports. An angular dimension whose extension point
+/// sits on its vertex has no measurable angle; the source application then keeps showing the
+/// angle it stored (group 42, radians) rather than 0°, and so do we.
+fn display_measurement(dim: &Dimension) -> f64 {
+    let measured = dim.measurement();
+    let stored = dim.base().actual_measurement;
+    match dim {
+        Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_)
+            if measured.abs() < 1e-9 && stored.abs() > 1e-9 =>
+        {
+            stored.to_degrees()
+        }
+        _ => measured,
+    }
+}
+
+/// DIMLIM: the upper limit stacked over the lower one, replacing the nominal.
+/// The offsets apply to the displayed number, so DIMLFAC and DIMRND come first.
+fn limits_text(dim: &Dimension, style: Option<&DimStyle>, is_angular: bool) -> Option<String> {
+    // the source application stacks the two limits even when both offsets are zero and the
+    // halves read the same.
+    let s = style.filter(|s| s.dimlim)?;
+    let measurement = display_measurement(dim);
+    if is_angular {
+        return Some(format!(
+            "\\S{}^{};",
+            format_angular_value(measurement + s.dimtp, style),
+            format_angular_value(measurement - s.dimtm, style)
+        ));
+    }
+    let mut nominal = measurement * effective_dimlfac(style);
+    if s.dimrnd > 1e-12 {
+        nominal = (nominal / s.dimrnd).round() * s.dimrnd;
+    }
+    let (high, low) = limit_pair(nominal + s.dimtp, nominal - s.dimtm, s);
+    Some(format!("\\S{}^{};", high, low))
+}
+
+/// The two limits keep the same number of decimals so the stack lines up:
+/// DIMTZIN drops trailing zeros only as far as both values allow. the source application
+/// writes `13.950` over `13.926` with DIMTZIN 8, not `13.95` over `13.926`.
+fn limit_pair(high: f64, low: f64, s: &DimStyle) -> (String, String) {
+    let dimtdec = s.dimtdec.max(0) as usize;
+    let mut high = decimal_text(high, dimtdec);
+    let mut low = decimal_text(low, dimtdec);
+    if s.dimtzin & 8 != 0 {
+        let droppable = |value: &str| match value.find('.') {
+            Some(_) => value.len() - value.trim_end_matches('0').len(),
+            None => 0,
+        };
+        let drop = droppable(&high).min(droppable(&low));
+        for value in [&mut high, &mut low] {
+            value.truncate(value.len() - drop);
+            if value.ends_with('.') {
+                value.pop();
+            }
+        }
+    }
+    let finish = |value: &str| {
+        let value = if s.dimtzin & 4 != 0 {
+            strip_leading_zero(value)
+        } else {
+            value.to_string()
+        };
+        swap_decimal_sep(&value, s.dimdsep)
+    };
+    (finish(&high), finish(&low))
+}
+
+/// Formats a tolerance number with DIMTDEC, DIMTZIN and DIMDSEP.
+fn tolerance_formatter(s: &DimStyle) -> impl Fn(f64) -> String + '_ {
+    let dimtdec = s.dimtdec.max(0) as usize;
+    move |v: f64| {
+        let raw = decimal_text(v, dimtdec);
+        swap_decimal_sep(&apply_linear_zero_suppression(&raw, s.dimtzin), s.dimdsep)
+    }
+}
+
+/// DIMTOL deviation suffix drawn beside the nominal. DIMLIM wins over DIMTOL,
+/// as in the source application, and is handled by `limits_text`.
 fn build_tolerance_suffix(
     dim: &Dimension,
     style: Option<&DimStyle>,
     is_angular: bool,
 ) -> Option<String> {
-    let s = style?;
-    let measurement = dim.measurement();
-    let dimtdec = s.dimtdec.max(0) as usize;
-    let dimtzin = s.dimtzin;
-    let fmt = |v: f64| -> String {
-        let raw = format!("{:.*}", dimtdec, v);
-        swap_decimal_sep(&apply_linear_zero_suppression(&raw, dimtzin), s.dimdsep)
-    };
-    if s.dimlim {
-        let high = measurement + s.dimtp;
-        let low = measurement - s.dimtm;
-        return Some(format!("\\S{}^{};", fmt(high), fmt(low)));
-    }
+    let s = style.filter(|s| !s.dimlim)?;
+    let fmt = tolerance_formatter(s);
     if s.dimtol {
         let unit = if is_angular { "°" } else { "" };
         if (s.dimtp - s.dimtm).abs() < 1e-12 && s.dimtp.abs() > 1e-12 {
@@ -6309,7 +6387,7 @@ fn alternate_units_text(measurement: f64, style: Option<&DimStyle>) -> Option<St
         let alttdec = s.dimalttd.max(0) as usize;
         let alttzin = s.dimalttz;
         let fmt = |x: f64| -> String {
-            let raw = format!("{:.*}", alttdec, x * tolerance_factor);
+            let raw = decimal_text(x * tolerance_factor, alttdec);
             swap_decimal_sep(&apply_linear_zero_suppression(&raw, alttzin), s.dimdsep)
         };
         if (s.dimtp - s.dimtm).abs() < 1e-12 && s.dimtp.abs() > 1e-12 {
@@ -6323,11 +6401,12 @@ fn alternate_units_text(measurement: f64, style: Option<&DimStyle>) -> Option<St
         let alttdec = s.dimalttd.max(0) as usize;
         let alttzin = s.dimalttz;
         let fmt = |x: f64| -> String {
-            let raw = format!("{:.*}", alttdec, x * tolerance_factor);
+            let raw = decimal_text(x * tolerance_factor, alttdec);
             swap_decimal_sep(&apply_linear_zero_suppression(&raw, alttzin), s.dimdsep)
         };
+        // Alternate limits stack like the primary ones.
         format!(
-            "{}/{}",
+            "\\S{}^{};",
             fmt(measurement + s.dimtp),
             fmt(measurement - s.dimtm)
         )
@@ -6358,12 +6437,7 @@ fn dimension_tolerance_entity(
     let s = style?;
     let is_angular = matches!(dim, Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_));
     let tol = build_tolerance_suffix(dim, style, is_angular)?;
-    let dimtfac = if s.dimtfac.abs() < 1e-12 {
-        1.0
-    } else {
-        s.dimtfac
-    };
-    let tol_height = primary_height * dimtfac;
+    let tol_height = primary_height * dimtfac_or_one(s);
 
     // Pull the geometry we need from the synthetic primary entity (Text or
     // MText — `dimension_text_entity` routes to MText when the dim value
@@ -6443,14 +6517,73 @@ fn apply_dimpost(value: &str, style: Option<&DimStyle>) -> String {
     }
 }
 
+/// `resolved_dimension_style` has already applied the DXF sign convention,
+/// so a negative value here means the caller passed an unresolved style;
+/// fall back to 1.0 rather than reporting a negative length.
+fn effective_dimlfac(style: Option<&DimStyle>) -> f64 {
+    let lfac = style.map(|s| s.dimlfac).unwrap_or(1.0);
+    if lfac.abs() < 1e-12 || lfac < 0.0 {
+        1.0
+    } else {
+        lfac
+    }
+}
+
+/// DIMTFAC with the unset value 0 read as 1.
+fn dimtfac_or_one(s: &DimStyle) -> f64 {
+    if s.dimtfac.abs() < 1e-12 {
+        1.0
+    } else {
+        s.dimtfac
+    }
+}
+
+/// Vertical extent of the rendered value: one line, or a DIMLIM stack whose
+/// halves each sit at DIMTFAC × DIMTXT.
+fn dimension_text_block_height(style: Option<&DimStyle>, text_height: f64) -> f64 {
+    match style {
+        Some(s) if s.dimlim => {
+            text_height
+                * dimtfac_or_one(s)
+                * 2.0
+                * f64::from(crate::entities::text_support::STACK_HALF_SCALE)
+        }
+        _ => text_height,
+    }
+}
+
+/// Approximate width of the rendered value in character cells of the nominal
+/// text height. A `\S` stack is as wide as its wider half, drawn at DIMTFAC.
+pub(crate) fn dimension_text_cells(dim: &Dimension, style: Option<&DimStyle>) -> Option<f64> {
+    let value = dimension_text_value(dim, style)?;
+    Some(text_cells(&value, style.map(dimtfac_or_one).unwrap_or(1.0)))
+}
+
+fn text_cells(value: &str, stack_scale: f64) -> f64 {
+    let mut cells = 0.0;
+    let mut rest = value;
+    while let Some(start) = rest.find("\\S") {
+        cells += rest[..start].chars().count() as f64;
+        let body = &rest[start + 2..];
+        let end = body.find(';').unwrap_or(body.len());
+        let widest = body[..end]
+            .split(['^', '/', '#'])
+            .map(|half| half.chars().count())
+            .max()
+            .unwrap_or(0);
+        cells += widest as f64 * stack_scale;
+        rest = &body[(end + 1).min(body.len())..];
+    }
+    cells + rest.chars().count() as f64
+}
+
 /// Format a linear measurement honouring DIMLFAC, DIMRND, DIMDEC, DIMZIN, DIMDSEP, DIMLUNIT.
 fn format_linear_value(measurement: f64, style: Option<&DimStyle>) -> String {
-    let (dec, zin, lfac, rnd, dsep, lunit, frac, sub_factor, sub_suffix) = style
+    let (dec, zin, rnd, dsep, lunit, frac, sub_factor, sub_suffix) = style
         .map(|s| {
             (
                 s.dimdec,
                 s.dimzin,
-                s.dimlfac,
                 s.dimrnd,
                 s.dimdsep,
                 s.dimlunit,
@@ -6459,16 +6592,9 @@ fn format_linear_value(measurement: f64, style: Option<&DimStyle>) -> String {
                 s.dimmzs.as_str(),
             )
         })
-        .unwrap_or((4, 8, 1.0, 0.0, 46, 2, 0, 1.0, ""));
+        .unwrap_or((4, 8, 0.0, 46, 2, 0, 1.0, ""));
 
-    // `resolved_dimension_style` has already applied the DXF sign convention,
-    // so a negative value here means the caller passed an unresolved style;
-    // fall back to 1.0 rather than reporting a negative length.
-    let lfac = if lfac.abs() < 1e-12 || lfac < 0.0 {
-        1.0
-    } else {
-        lfac
-    };
+    let lfac = effective_dimlfac(style);
     let scaled = measurement * lfac;
     let use_sub_units = zin & 4 != 0 && scaled.abs() < 1.0 && sub_factor.abs() > 1e-12;
     // For values below one unit, DIMMZF replaces DIMLFAC; applying it after
@@ -6514,8 +6640,21 @@ fn format_with_unit(
         5 => format_fractional(value, dec, if alternate { 0 } else { dimfrac }),
         6 if alternate => format_architectural(value, dec, 2, zin),
         7 if alternate => format_fractional(value, dec, 2),
-        _ => format!("{:.*}", dec, value),
+        _ => decimal_text(value, dec),
     }
+}
+
+/// Fixed-point text rounded half away from zero. A few scaled ULPs settle
+/// decimal ties without changing values at higher requested precision.
+fn decimal_text(value: f64, decimals: usize) -> String {
+    let scale = 10f64.powi(decimals.min(15) as i32);
+    let scaled = value * scale;
+    let tolerance = (scaled.abs().max(1.0) * f64::EPSILON * 4.0).min(0.25);
+    format!(
+        "{:.*}",
+        decimals,
+        (scaled + scaled.signum() * tolerance).round() / scale
+    )
 }
 
 fn format_engineering(inches: f64, dec: usize) -> String {
@@ -6955,11 +7094,11 @@ fn dimension_text_pos_f64(
     let perp_off = if dimtad == 0 {
         dimtvp * text_height
     } else {
-        text_height * 0.5 + dimgap
+        dimension_text_block_height(style, text_height) * 0.5 + dimgap
     };
     // Rough text width + arrow allowance, used to decide text-outside fit.
-    let text_w = dimension_text_value(dim, style)
-        .map(|t| t.chars().count() as f64 * text_height * 0.6 + 2.0 * dimgap)
+    let text_w = dimension_text_cells(dim, style)
+        .map(|cells| cells * text_height * 0.6 + 2.0 * dimgap)
         .unwrap_or(0.0);
     let arrow = if matches!(dim, Dimension::LargeRadial(_)) {
         style
@@ -7890,5 +8029,214 @@ mod linear_transform_tests {
         let mut d = DimensionAligned::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(6.0, 8.0, 0.0));
         d.definition_point = Vector3::new(2.0, 11.0, 0.0);
         assert_draws_turned_with_its_plane(Dimension::Aligned(d));
+    }
+}
+
+
+#[cfg(test)]
+mod limits_format_tests {
+    use super::*;
+    use acadrust::entities::DimensionLinear;
+
+    /// A horizontal linear dimension measuring 10 units along X.
+    fn horizontal() -> Dimension {
+        let mut d =
+            DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        Dimension::Linear(d)
+    }
+
+    fn style() -> DimStyle {
+        let mut s = DimStyle::standard();
+        s.dimdec = 3;
+        s.dimtdec = 3;
+        // Keep trailing zeros so the expectations read like the drawing.
+        s.dimzin = 0;
+        s.dimtzin = 0;
+        s.dimtp = 0.02;
+        s.dimtm = 0.05;
+        s
+    }
+
+    // the source application's DIMLIM shows the upper limit over the lower one and nothing
+    // else. The renderer used to keep the nominal and hang the stack beside
+    // it, so a drawing with limits-only styles grew an extra number on every
+    // regenerated dimension.
+    #[test]
+    fn limits_replace_the_nominal() {
+        let mut s = style();
+        s.dimlim = true;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S10.020^9.950;".to_string(), None))
+        );
+    }
+
+    // Stacked limits keep a common number of decimals: with DIMTZIN 8 the
+    // zero in 10.020 stays because 9.965 has nothing to drop, while a pair
+    // that both end in zero shortens together.
+    #[test]
+    fn limits_drop_trailing_zeros_only_together() {
+        let mut s = style();
+        s.dimlim = true;
+        s.dimtzin = 8;
+        s.dimtm = 0.035;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S10.020^9.965;".to_string(), None))
+        );
+        s.dimtm = 0.08;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S10.02^9.92;".to_string(), None))
+        );
+    }
+
+    // The offsets apply to the number the reader sees, which for a paper
+    // space dimension is the DIMLFAC-scaled distance (and DIMRND-rounded).
+    #[test]
+    fn limits_are_offsets_from_the_scaled_measurement() {
+        let mut s = style();
+        s.dimlim = true;
+        s.dimlfac = 7.5;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S75.020^74.950;".to_string(), None))
+        );
+        s.dimrnd = 0.5;
+        s.dimtm = 0.0;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S75.020^75.000;".to_string(), None))
+        );
+    }
+
+    // the source application keeps the stack when both offsets are zero: production
+    // drawings show `\S11.469^11.469;` for such dimensions.
+    #[test]
+    fn limits_without_offsets_still_stack() {
+        let mut s = style();
+        s.dimlim = true;
+        s.dimtp = 0.0;
+        s.dimtm = 0.0;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some((r"\S10.000^10.000;".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn limits_take_precedence_over_deviation() {
+        let mut s = style();
+        s.dimlim = true;
+        s.dimtol = true;
+        let (_, suffix) = dimension_text_parts(&horizontal(), Some(&s)).unwrap();
+        assert_eq!(suffix, None);
+    }
+
+    #[test]
+    fn deviation_keeps_the_nominal_and_a_separate_suffix() {
+        let mut s = style();
+        s.dimtol = true;
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some(("10.000".to_string(), Some(r"\S+0.020^-0.050;".to_string())))
+        );
+    }
+
+    // A per-entity DSTYLE override turning limits off (group 72 = 0) is how
+    // the reference callouts in a limits-style drawing show a plain value.
+    #[test]
+    fn limits_off_shows_the_plain_value() {
+        let s = style();
+        assert_eq!(
+            dimension_text_parts(&horizontal(), Some(&s)),
+            Some(("10.000".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn user_text_substitutes_the_stack_for_the_measurement() {
+        let mut s = style();
+        s.dimlim = true;
+        let mut dim = horizontal();
+        dim.base_mut().text = "<> REF".to_string();
+        let (value, _) = dimension_text_parts(&dim, Some(&s)).unwrap();
+        assert_eq!(value, r"\S10.020^9.950; REF");
+    }
+
+    // Fit decisions size the text by its visible cells: a stack is as wide as
+    // its wider half, drawn at DIMTFAC, not as wide as its control codes.
+    #[test]
+    fn text_cells_measure_the_wider_stack_half() {
+        assert_eq!(text_cells("10.000", 0.5), 6.0);
+        assert_eq!(text_cells(r"R\S1.020^0.98;", 0.5), 1.0 + 5.0 * 0.5);
+        assert_eq!(text_cells(r"\S10.020^9.950; REF", 1.0), 6.0 + 4.0);
+    }
+
+    // A three-point angular dimension whose first extension point coincides
+    // with the vertex measures nothing; the stored angle keeps the text.
+    #[test]
+    fn degenerate_angular_dimension_reports_its_stored_angle() {
+        use acadrust::entities::DimensionAngular3Pt;
+        let mut d = DimensionAngular3Pt::default();
+        d.angle_vertex = Vector3::new(6.0, 4.85, 0.0);
+        d.first_point = d.angle_vertex;
+        d.second_point = Vector3::new(7.0, 4.85, 0.0);
+        d.definition_point = Vector3::new(8.0, 5.4, 0.0);
+        d.base.actual_measurement = std::f64::consts::FRAC_PI_4;
+        let dim = Dimension::Angular3Pt(d);
+        let mut s = style();
+        s.dimadec = 0;
+        assert_eq!(
+            dimension_text_parts(&dim, Some(&s)),
+            Some(("45°".to_string(), None))
+        );
+        s.dimlim = true;
+        s.dimtp = 0.1;
+        s.dimtm = 0.1;
+        let (value, _) = dimension_text_parts(&dim, Some(&s)).unwrap();
+        assert!(value.starts_with(r"\S45"), "{value}");
+    }
+
+    // the source application rounds a printed value half away from zero; Rust's formatter
+    // rounds the binary value, which sits a hair below the decimal tie.
+    #[test]
+    fn decimal_text_rounds_half_away_from_zero() {
+        assert_eq!(decimal_text(0.4255, 3), "0.426");
+        assert_eq!(decimal_text(0.4085, 3), "0.409");
+        assert_eq!(decimal_text(-0.4255, 3), "-0.426");
+        assert_eq!(decimal_text(2.5, 0), "3");
+        assert_eq!(decimal_text(0.1234, 3), "0.123");
+        assert_eq!(decimal_text(0.0000000000004, 12), "0.000000000000");
+    }
+
+    // Alternate units multiply the displayed (DIMLFAC-scaled) value and stack
+    // their limits like the primary ones.
+    #[test]
+    fn alternate_limits_stack_from_the_scaled_value() {
+        let mut s = style();
+        s.dimlim = true;
+        s.dimlfac = 2.0;
+        s.dimalt = true;
+        s.dimaltf = 25.4;
+        s.dimaltd = 2;
+        s.dimalttd = 2;
+        s.dimaltz = 0;
+        s.dimalttz = 0;
+        s.dimtp = 0.02;
+        s.dimtm = 0.05;
+        let (value, _) = dimension_text_parts(&horizontal(), Some(&s)).unwrap();
+        assert_eq!(value, r"\S20.020^19.950; [\S508.51^506.73;]");
+    }
+
+    #[test]
+    fn a_limits_stack_is_two_halves_tall() {
+        let mut s = style();
+        assert_eq!(dimension_text_block_height(Some(&s), 2.0), 2.0);
+        s.dimlim = true;
+        s.dimtfac = 0.5;
+        let expected = 2.0 * 0.5 * 2.0 * f64::from(crate::entities::text_support::STACK_HALF_SCALE);
+        assert_eq!(dimension_text_block_height(Some(&s), 2.0), expected);
     }
 }
