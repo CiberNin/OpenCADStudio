@@ -459,6 +459,17 @@ pub struct UserSettings {
     pub snap_spacing_x: f32,
     #[serde(default = "default_snap_spacing")]
     pub snap_spacing_y: f32,
+    /// GRIDUNIT X/Y display spacing (grid resizing). Falls back to 10.
+    #[serde(default = "default_snap_spacing")]
+    pub grid_spacing_x: f32,
+    #[serde(default = "default_snap_spacing")]
+    pub grid_spacing_y: f32,
+    /// Adaptive grid scaling (default on).
+    #[serde(default = "default_true")]
+    pub grid_adaptive: bool,
+    /// Display grid beyond LIMITS (default on, matches dialog).
+    #[serde(default = "default_true")]
+    pub grid_beyond_limits: bool,
     /// Most-recently-inserted block names, most recent first, capped to 20.
     /// Used to rank INSERT suggestions without touching the drawing file.
     #[serde(default)]
@@ -483,6 +494,10 @@ fn default_commandline_fade_ms() -> i32 {
 /// Default SNAPUNIT spacing shown in the Drafting Settings dialog.
 fn default_snap_spacing() -> f32 {
     10.0
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Clamp a snap spacing to the positive range the dialog accepts.
@@ -599,6 +614,10 @@ impl Default for UserSettings {
             commandline_fade_ms: 3000,
             snap_spacing_x: 10.0,
             snap_spacing_y: 10.0,
+            grid_spacing_x: 10.0,
+            grid_spacing_y: 10.0,
+            grid_adaptive: true,
+            grid_beyond_limits: true,
             block_mru: Vec::new(),
             block_freq: std::collections::HashMap::new(),
         }

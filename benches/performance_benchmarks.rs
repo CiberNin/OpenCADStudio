@@ -1185,10 +1185,10 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
     if runner.should_run("ui_grid_geometry_uncached") {
         for _ in 0..10 {
             let _ = black_box(grid_segments(
-                view_rot1, eye1, bounds1, step1, origin1, axes1, limits1,
+                view_rot1, eye1, bounds1, step1, step1, origin1, axes1, limits1,
             ));
             let _ = black_box(grid_segments(
-                view_rot2, eye2, bounds2, step2, origin2, axes2, limits2,
+                view_rot2, eye2, bounds2, step2, step2, origin2, axes2, limits2,
             ));
         }
 
@@ -1199,8 +1199,8 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
         for _ in 0..runs {
             let t0 = Instant::now();
             for _ in 0..n {
-                let g1 = grid_segments(view_rot1, eye1, bounds1, step1, origin1, axes1, limits1);
-                let g2 = grid_segments(view_rot2, eye2, bounds2, step2, origin2, axes2, limits2);
+                let g1 = grid_segments(view_rot1, eye1, bounds1, step1, step1, origin1, axes1, limits1);
+                let g2 = grid_segments(view_rot2, eye2, bounds2, step2, step2, origin2, axes2, limits2);
                 black_box(g1);
                 black_box(g2);
             }
@@ -1225,7 +1225,8 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
             view_rot: view_rot1,
             eye: eye1,
             bounds: bounds1,
-            step: step1,
+            step_x: step1,
+            step_y: step1,
             origin: origin1,
             axes: axes1,
             limits: limits1,
@@ -1234,7 +1235,8 @@ fn bench_ui_grid_geometry(runner: &mut BenchmarkRunner) {
             view_rot: view_rot2,
             eye: eye2,
             bounds: bounds2,
-            step: step2,
+            step_x: step2,
+            step_y: step2,
             origin: origin2,
             axes: axes2,
             limits: limits2,

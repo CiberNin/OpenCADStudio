@@ -542,6 +542,13 @@ pub(super) struct OpenCADStudio {
     snap_angle_deg: f32,
     /// Show grid lines in the viewport (F7).
     show_grid: bool,
+    /// GRIDUNIT X/Y display spacing backing the DSettings grid-resize inputs.
+    pub grid_spacing_x: f32,
+    pub grid_spacing_y: f32,
+    /// Adaptive grid: scale GRIDUNIT up by 5x steps to stay readable.
+    pub grid_adaptive: bool,
+    /// Display the grid beyond LIMITS (infinite) instead of clipping to them.
+    pub grid_beyond_limits: bool,
     /// Dynamic input overlay (F12): show coordinate tooltip near cursor.
     dyn_input: bool,
     /// Currently visible page in the application Options dialog.
@@ -3806,6 +3813,10 @@ impl OpenCADStudio {
             iso_plane: settings::IsoPlane::Left,
             snap_angle_deg: 0.0,
             show_grid: false,
+            grid_spacing_x: 10.0,
+            grid_spacing_y: 10.0,
+            grid_adaptive: true,
+            grid_beyond_limits: true,
             dyn_input: true,
             options_tab: crate::ui::window::options::OptionsTab::General,
             spacemouse: {

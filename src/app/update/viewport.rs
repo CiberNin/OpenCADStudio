@@ -1924,18 +1924,25 @@ impl OpenCADStudio {
             // content), so snap / hit-test / preview run exactly like the
             // main model view — no paper projection, tracks pan/zoom/twist.
             let cursor_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-            let (view_rot, eye, grid_spacing) = match &edit_cam {
+        let (gx, gy, adaptive) = (self.grid_spacing_x, self.grid_spacing_y, self.grid_adaptive);
+        let visible_step = |distance: f32, fov_y: f32| {
+            let (sx, sy) = crate::ui::overlay::compute_grid_steps(
+                gx, gy, distance, fov_y, bounds, adaptive,
+            );
+            sx.max(sy)
+        };
+        let (view_rot, eye, grid_spacing) = match &edit_cam {
                 Some(cam) => (
                     cam.view_proj_rte(bounds),
                     cam.eye(),
-                    crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                    visible_step(cam.distance, cam.fov_y),
                 ),
                 None => {
                     let cam = self.tabs[i].scene.camera.borrow();
                     (
                         cam.view_proj_rte(bounds),
                         cam.eye(),
-                        crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                        visible_step(cam.distance, cam.fov_y),
                     )
                 }
             };
@@ -2788,18 +2795,26 @@ impl OpenCADStudio {
         // Object/grid snap, same path as an entity grip or command drag: the
         // dragged UCS point sticks to endpoints/midpoints/grid under the cursor,
         // and the snap marker is published via `snap_result`.
+        let (dgx, dgy, dadaptive) =
+            (self.grid_spacing_x, self.grid_spacing_y, self.grid_adaptive);
+        let dvisible_step = |distance: f32, fov_y: f32| {
+            let (sx, sy) = crate::ui::overlay::compute_grid_steps(
+                dgx, dgy, distance, fov_y, bounds, dadaptive,
+            );
+            sx.max(sy)
+        };
         let (view_rot, eye, grid_spacing) = match &edit_cam {
             Some(cam) => (
                 cam.view_proj_rte(bounds),
                 cam.eye(),
-                crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                dvisible_step(cam.distance, cam.fov_y),
             ),
             None => {
                 let cam = self.tabs[i].scene.camera.borrow();
                 (
                     cam.view_proj_rte(bounds),
                     cam.eye(),
-                    crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                    dvisible_step(cam.distance, cam.fov_y),
                 )
             }
         };

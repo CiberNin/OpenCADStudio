@@ -443,18 +443,31 @@ impl OpenCADStudio {
                         );
                         axes = (ux.as_vec3(), uy.as_vec3(), uz.as_vec3());
                     }
+                    // BUG FIX: the display step used to ignore GRIDUNIT entirely
+                    // (hardcoded 1.0 base). It now resizes from the DSettings
+                    // grid spacing, and honors "Display grid beyond Limits".
+                    let (step_x, step_y) = crate::ui::overlay::compute_grid_steps(
+                        self.grid_spacing_x,
+                        self.grid_spacing_y,
+                        cam.distance,
+                        cam.fov_y,
+                        bounds,
+                        self.grid_adaptive,
+                    );
+                    let limits = if self.grid_beyond_limits {
+                        None
+                    } else {
+                        tab.scene.grid_limits_for_viewport(handle)
+                    };
                     crate::ui::overlay::GridParams {
                         view_rot: cam.view_proj_rte(bounds),
                         eye: cam.eye(),
                         bounds,
-                        step: crate::ui::overlay::compute_grid_step(
-                            cam.distance,
-                            cam.fov_y,
-                            bounds,
-                        ),
+                        step_x,
+                        step_y,
                         origin,
                         axes,
-                        limits: tab.scene.grid_limits_for_viewport(handle),
+                        limits,
                     }
                 })
                 .collect();
