@@ -1830,6 +1830,29 @@ fn retained_radius(entity: &EntityType) -> Option<f64> {
     }
 }
 
+/// Hold the distance between two points at `length`.
+///
+/// `P2PDistance` divides by the current distance, so a zero-length segment
+/// gives the solver a NaN Jacobian. Keep coincident endpoints together with
+/// per-axis differences instead.
+fn retain_segment_length(
+    sys: &mut System,
+    a: GPoint,
+    b: GPoint,
+    current_length: f64,
+    length: f64,
+) {
+    if current_length > f64::EPSILON && length > f64::EPSILON {
+        let target = sys.add_param(length, true);
+        sys.add_constraint(Rc::new(P2PDistance::new(a, b, target)));
+        return;
+    }
+    let dx = sys.add_param(0.0, true);
+    let dy = sys.add_param(0.0, true);
+    sys.add_constraint(Rc::new(Difference::new(a.x, b.x, dx)));
+    sys.add_constraint(Rc::new(Difference::new(a.y, b.y, dy)));
+}
+
 /// Visit vertices and segments in stored drawing order, including the closing edge last.
 fn polyline_ref_order(
     document: &acadrust::CadDocument,
@@ -2139,8 +2162,7 @@ fn solve_scope(
                         .get(handle)
                         .and_then(|entity| retained_line_length(entity, None))
                         .unwrap_or(current_length);
-                    let target = sys.add_param(length, true);
-                    sys.add_constraint(Rc::new(P2PDistance::new(line.p1, line.p2, target)));
+                    retain_segment_length(&mut sys, line.p1, line.p2, current_length, length);
                 }
                 EntityGeom::Polyline {
                     points,
@@ -2169,8 +2191,7 @@ fn solve_scope(
                             .get(handle)
                             .and_then(|entity| retained_line_length(entity, Some(index)))
                             .unwrap_or(current_length);
-                        let target = sys.add_param(length, true);
-                        sys.add_constraint(Rc::new(P2PDistance::new(a, b, target)));
+                        retain_segment_length(&mut sys, a, b, current_length, length);
                     }
                 }
                 EntityGeom::Circle(circle) => {
@@ -2346,8 +2367,8 @@ fn solve_scope(
                 })
         });
         if directional && !retain_size {
-            let length = sys.add_param((x2 - x1).hypot(y2 - y1), true);
-            sys.add_constraint(Rc::new(P2PDistance::new(line.p1, line.p2, length)));
+            let length = (x2 - x1).hypot(y2 - y1);
+            retain_segment_length(&mut sys, line.p1, line.p2, length, length);
         } else if !directional {
             let dx = sys.add_param(x2 - x1, true);
             let dy = sys.add_param(y2 - y1, true);

@@ -2346,3 +2346,22 @@ mod region_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod degenerate_constraint_tests {
+    use crate::app::OpenCADStudio;
+
+    /// Retaining a zero-length line's size used to hand the solver a NaN
+    /// Jacobian, and its SVD fallback never returned.
+    #[test]
+    fn equal_constraint_with_a_zero_length_line_returns() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 0,0 "}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 5,5 20,7 "}"#);
+        app.automation_op(r#"{"op":"select","type":"Line"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"ECONSTRAINT"}"#);
+        let lines = app.automation_op(r#"{"op":"query","type":"Line","detail":"geometry"}"#);
+        assert_eq!(lines["ok"], true, "{lines}");
+    }
+}
