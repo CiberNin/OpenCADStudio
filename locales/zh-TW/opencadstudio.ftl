@@ -60,7 +60,7 @@ options =
     .right-click-customization = 右鍵自訂
     .right-click-in-drawing-area = 在繪圖區域按右鍵
     .hold-duration = 按住時間
-    .right-click-mode-help = 快捷功能表：按右鍵一律開啟功能表（AutoCAD 預設）。時間敏感：快速按一下等於 Enter，長按開啟功能表 (SHORTCUTMENUDURATION)。
+    .right-click-mode-help = 快捷功能表：按右鍵一律開啟功能表。時間敏感：快速按一下等於 Enter，長按開啟功能表 (SHORTCUTMENUDURATION)。
     .right-click-mode-shortcut-menu = 快捷功能表
     .right-click-mode-time-sensitive = 時間敏感（快速按一下 = Enter）
     .right-click-mode-enter-first = 先 Enter，第二次按一下 = 功能表

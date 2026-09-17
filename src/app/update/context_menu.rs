@@ -234,7 +234,7 @@ impl OpenCADStudio {
     /// when the message was consumed; `None` lets it fall through to the
     /// normal handlers (after closing the menu when the key is not a menu key,
     /// so typing a command name or a coordinate just works — the menu gets
-    /// out of the way exactly as it does in AutoCAD).
+    /// out of the way exactly as it does in commercial solutions).
     pub(in crate::app) fn intercept_context_menu_key(&mut self, msg: &Message) -> Option<Task<Message>> {
         match msg {
             Message::ArrowKeyPressed { direction, .. }
@@ -308,7 +308,7 @@ impl OpenCADStudio {
         None
     }
 
-    /// Grip-mode shortcut menu (AutoCAD's grip menu): the grip stays hot
+    /// Grip-mode shortcut menu (the grip menu of commercial solutions): the grip stays hot
     /// for Stretch / Base Point / Copy / Undo; Move / Rotate / Scale / Mirror
     /// hand the selection to the matching command with the grip as its base
     /// point; Exit drops the edit.

@@ -5131,7 +5131,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "Right-click Customization" => Some(("options", "right-click-customization")),
         "Right-click in drawing area" => Some(("options", "right-click-in-drawing-area")),
         "Hold duration" => Some(("options", "hold-duration")),
-        "Shortcut menu: right-click always opens the menu (AutoCAD default). Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION)." => Some(("options", "right-click-mode-help")),
+        "Shortcut menu: right-click always opens the menu. Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION)." => Some(("options", "right-click-mode-help")),
         "Shortcut menu" => Some(("options", "right-click-mode-shortcut-menu")),
         "Time-sensitive (quick click = Enter)" => Some(("options", "right-click-mode-time-sensitive")),
         "Enter first, second click = menu" => Some(("options", "right-click-mode-enter-first")),

@@ -60,7 +60,7 @@ options =
     .right-click-customization = Настройка правой кнопки мыши
     .right-click-in-drawing-area = Правая кнопка в области чертежа
     .hold-duration = Длительность удержания
-    .right-click-mode-help = Контекстное меню: правая кнопка всегда открывает меню (по умолчанию в AutoCAD). С учётом времени: короткий щелчок — Enter, удержание открывает меню (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Контекстное меню: правая кнопка всегда открывает меню. С учётом времени: короткий щелчок — Enter, удержание открывает меню (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Контекстное меню
     .right-click-mode-time-sensitive = С учётом времени (короткий щелчок = Enter)
     .right-click-mode-enter-first = Сначала Enter, второй щелчок = меню

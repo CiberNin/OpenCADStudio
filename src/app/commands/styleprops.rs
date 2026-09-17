@@ -1492,9 +1492,9 @@ impl OpenCADStudio {
                                     Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false))
                                 }
                             },
-                            // AutoCAD bit code: 0 = no shortcut menus (right-click
+                            // Bit code of commercial solutions: 0 = no shortcut menus (right-click
                             // is Enter), 16 = time-sensitive; everything else is the
-                            // regular shortcut menu. Reported as AutoCAD's defaults
+                            // regular shortcut menu. Reported as the defaults of commercial solutions
                             // (11 = default+edit+command menus, +16 when
                             // time-sensitive).
                             "SHORTCUTMENU" => {

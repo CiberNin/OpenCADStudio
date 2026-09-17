@@ -60,7 +60,7 @@ options =
     .right-click-customization = Настройка на десния бутон
     .right-click-in-drawing-area = Десен бутон в чертожната област
     .hold-duration = Време на задържане
-    .right-click-mode-help = Контекстно меню: десният бутон винаги отваря менюто (по подразбиране в AutoCAD). Зависимо от времето: бързо щракване е Enter, по-дълго задържане отваря менюто (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Контекстно меню: десният бутон винаги отваря менюто. Зависимо от времето: бързо щракване е Enter, по-дълго задържане отваря менюто (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Контекстно меню
     .right-click-mode-time-sensitive = Зависимо от времето (бързо щракване = Enter)
     .right-click-mode-enter-first = Първо Enter, второ щракване = меню

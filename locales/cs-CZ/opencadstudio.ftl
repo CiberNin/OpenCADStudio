@@ -60,7 +60,7 @@ options =
     .right-click-customization = Přizpůsobení pravého tlačítka
     .right-click-in-drawing-area = Pravé tlačítko v kreslicí ploše
     .hold-duration = Doba podržení
-    .right-click-mode-help = Kontextová nabídka: pravé tlačítko vždy otevře nabídku (výchozí v AutoCADu). Časově citlivé: krátké kliknutí je Enter, delší podržení otevře nabídku (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Kontextová nabídka: pravé tlačítko vždy otevře nabídku. Časově citlivé: krátké kliknutí je Enter, delší podržení otevře nabídku (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Kontextová nabídka
     .right-click-mode-time-sensitive = Časově citlivé (krátké kliknutí = Enter)
     .right-click-mode-enter-first = Nejprve Enter, druhé kliknutí = nabídka

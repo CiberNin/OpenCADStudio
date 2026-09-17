@@ -60,7 +60,7 @@ options =
     .right-click-customization = Right-click Customization
     .right-click-in-drawing-area = Right-click in drawing area
     .hold-duration = Hold duration
-    .right-click-mode-help = Shortcut menu: right-click always opens the menu (AutoCAD default). Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Shortcut menu: right-click always opens the menu. Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Shortcut menu
     .right-click-mode-time-sensitive = Time-sensitive (quick click = Enter)
     .right-click-mode-enter-first = Enter first, second click = menu

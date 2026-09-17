@@ -60,7 +60,7 @@ options =
     .right-click-customization = Hiiren oikean painikkeen mukautus
     .right-click-in-drawing-area = Oikea painike piirtoalueella
     .hold-duration = Painalluksen kesto
-    .right-click-mode-help = Pikavalikko: oikea painike avaa aina valikon (AutoCADin oletus). Aikaherkkä: nopea napsautus on Enter, pidempi painallus avaa valikon (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Pikavalikko: oikea painike avaa aina valikon. Aikaherkkä: nopea napsautus on Enter, pidempi painallus avaa valikon (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Pikavalikko
     .right-click-mode-time-sensitive = Aikaherkkä (nopea napsautus = Enter)
     .right-click-mode-enter-first = Ensin Enter, toinen napsautus = valikko

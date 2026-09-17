@@ -73,7 +73,7 @@ impl CadCommand for LineCommand {
 
     fn options(&self) -> Vec<crate::command::CmdOption> {
         use crate::command::CmdOption;
-        // Mirrors AutoCAD's LINE prompt: Undo once a point is placed, Close
+        // Covers the LINE prompt of commercial solutions: Undo once a point is placed, Close
         // once a closing segment is possible, eXit always.
         match self.points.len() {
             0 => Vec::new(),
@@ -201,7 +201,7 @@ impl CadCommand for LineCommand {
                 }
             }
             // eXit: end the command keeping every segment drawn so far
-            // (AutoCAD LINE's third keyword).
+            // (the third LINE keyword of commercial solutions).
             "X" | "EXIT" => Some(CmdResult::Cancel),
             "U" | "UNDO" => {
                 if self.points.len() >= 2 {

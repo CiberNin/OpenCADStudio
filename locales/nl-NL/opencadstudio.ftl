@@ -60,7 +60,7 @@ options =
     .right-click-customization = Rechtsklik aanpassen
     .right-click-in-drawing-area = Rechtsklik in tekengebied
     .hold-duration = Vasthoudduur
-    .right-click-mode-help = Snelmenu: rechtsklik opent altijd het menu (AutoCAD-standaard). Tijdgevoelig: een korte klik is Enter, langer vasthouden opent het menu (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Snelmenu: rechtsklik opent altijd het menu. Tijdgevoelig: een korte klik is Enter, langer vasthouden opent het menu (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Snelmenu
     .right-click-mode-time-sensitive = Tijdgevoelig (korte klik = Enter)
     .right-click-mode-enter-first = Eerst Enter, tweede klik = menu

@@ -60,7 +60,7 @@ options =
     .right-click-customization = Dostosowanie prawego przycisku
     .right-click-in-drawing-area = Prawy przycisk w obszarze rysunku
     .hold-duration = Czas przytrzymania
-    .right-click-mode-help = Menu skrótów: prawy przycisk zawsze otwiera menu (domyślnie w AutoCAD). Zależne od czasu: krótkie kliknięcie to Enter, dłuższe przytrzymanie otwiera menu (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Menu skrótów: prawy przycisk zawsze otwiera menu. Zależne od czasu: krótkie kliknięcie to Enter, dłuższe przytrzymanie otwiera menu (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Menu skrótów
     .right-click-mode-time-sensitive = Zależne od czasu (krótkie kliknięcie = Enter)
     .right-click-mode-enter-first = Najpierw Enter, drugie kliknięcie = menu

@@ -60,7 +60,7 @@ options =
     .right-click-customization = 右键单击自定义
     .right-click-in-drawing-area = 在绘图区域中单击右键
     .hold-duration = 按住时长
-    .right-click-mode-help = 快捷菜单：右键单击始终打开菜单（AutoCAD 默认）。时间敏感：快速单击等于 Enter，长按打开菜单 (SHORTCUTMENUDURATION)。
+    .right-click-mode-help = 快捷菜单：右键单击始终打开菜单。时间敏感：快速单击等于 Enter，长按打开菜单 (SHORTCUTMENUDURATION)。
     .right-click-mode-shortcut-menu = 快捷菜单
     .right-click-mode-time-sensitive = 时间敏感（快速单击 = Enter）
     .right-click-mode-enter-first = 先 Enter，第二次单击 = 菜单

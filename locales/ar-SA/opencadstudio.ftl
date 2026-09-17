@@ -60,7 +60,7 @@ options =
     .right-click-customization = تخصيص النقر بالزر الأيمن
     .right-click-in-drawing-area = النقر بالزر الأيمن في منطقة الرسم
     .hold-duration = مدة الضغط
-    .right-click-mode-help = قائمة الاختصارات: النقر بالزر الأيمن يفتح القائمة دائمًا (الافتراضي في AutoCAD). حساس للوقت: النقرة السريعة تعني Enter، والضغط المطوّل يفتح القائمة (SHORTCUTMENUDURATION).
+    .right-click-mode-help = قائمة الاختصارات: النقر بالزر الأيمن يفتح القائمة دائمًا. حساس للوقت: النقرة السريعة تعني Enter، والضغط المطوّل يفتح القائمة (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = قائمة الاختصارات
     .right-click-mode-time-sensitive = حساس للوقت (نقرة سريعة = Enter)
     .right-click-mode-enter-first = Enter أولًا، النقرة الثانية = القائمة

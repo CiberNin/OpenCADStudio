@@ -63,7 +63,7 @@ impl OpenCADStudio {
         // routing, so every path below (Start-tab gate, plugins, all dispatch
         // families, the Repeat menu) sees the canonical command. Arguments after
         // the first space are left untouched. A non-alias passes through as-is.
-        // AutoCAD's transparent prefix: `'PAN` / `'ZOOM` run in the middle
+        // The transparent prefix of commercial solutions: `'PAN` / `'ZOOM` run in the middle
         // of another command and hand control back to it afterwards.
         let (cmd, quoted) = match cmd.trim().strip_prefix('\'') {
             Some(rest) => (rest.trim(), true),

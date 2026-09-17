@@ -60,7 +60,7 @@ options =
     .right-click-customization = Personalização do clique direito
     .right-click-in-drawing-area = Clique direito na área de desenho
     .hold-duration = Duração do pressionamento
-    .right-click-mode-help = Menu de atalho: o clique direito sempre abre o menu (padrão do AutoCAD). Sensível ao tempo: um clique rápido é Enter, segurar mais tempo abre o menu (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Menu de atalho: o clique direito sempre abre o menu. Sensível ao tempo: um clique rápido é Enter, segurar mais tempo abre o menu (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Menu de atalho
     .right-click-mode-time-sensitive = Sensível ao tempo (clique rápido = Enter)
     .right-click-mode-enter-first = Primeiro Enter, segundo clique = menu

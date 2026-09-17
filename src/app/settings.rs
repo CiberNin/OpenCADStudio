@@ -132,16 +132,16 @@ impl CursorType {
     }
 }
 
-/// What a right-click in the drawing area does (AutoCAD SHORTCUTMENU /
+/// What a right-click in the drawing area does (SHORTCUTMENU in commercial solutions /
 /// "Right-click Customization").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RightClickMode {
-    /// AutoCAD default: a right-click always opens the shortcut menu (Enter /
+    /// The default of commercial solutions: a right-click always opens the shortcut menu (Enter /
     /// Cancel / the command's options while a command runs; Repeat / edit
     /// tools when idle).
     #[default]
     ShortcutMenu,
-    /// AutoCAD "time-sensitive right-click": a quick click is Enter (or
+    /// The "time-sensitive right-click" of commercial solutions: a quick click is Enter (or
     /// repeats the last command when idle); holding the button longer than
     /// `right_click_hold_ms` opens the shortcut menu.
     TimeSensitive,

@@ -60,7 +60,7 @@ options =
     .right-click-customization = Jobb kattintás testreszabása
     .right-click-in-drawing-area = Jobb kattintás a rajzterületen
     .hold-duration = Nyomva tartás ideje
-    .right-click-mode-help = Helyi menü: a jobb kattintás mindig a menüt nyitja (AutoCAD alapértelmezés). Időérzékeny: a rövid kattintás Enter, a hosszabb nyomva tartás a menüt nyitja (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Helyi menü: a jobb kattintás mindig a menüt nyitja. Időérzékeny: a rövid kattintás Enter, a hosszabb nyomva tartás a menüt nyitja (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Helyi menü
     .right-click-mode-time-sensitive = Időérzékeny (rövid kattintás = Enter)
     .right-click-mode-enter-first = Előbb Enter, második kattintás = menü

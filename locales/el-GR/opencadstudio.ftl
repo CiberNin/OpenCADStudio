@@ -60,7 +60,7 @@ options =
     .right-click-customization = Προσαρμογή δεξιού κλικ
     .right-click-in-drawing-area = Δεξί κλικ στην περιοχή σχεδίασης
     .hold-duration = Διάρκεια παρατεταμένου πατήματος
-    .right-click-mode-help = Μενού συντόμευσης: το δεξί κλικ ανοίγει πάντα το μενού (προεπιλογή AutoCAD). Χρονοευαίσθητο: γρήγορο κλικ = Enter, παρατεταμένο πάτημα ανοίγει το μενού (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Μενού συντόμευσης: το δεξί κλικ ανοίγει πάντα το μενού. Χρονοευαίσθητο: γρήγορο κλικ = Enter, παρατεταμένο πάτημα ανοίγει το μενού (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Μενού συντόμευσης
     .right-click-mode-time-sensitive = Χρονοευαίσθητο (γρήγορο κλικ = Enter)
     .right-click-mode-enter-first = Πρώτα Enter, δεύτερο κλικ = μενού

@@ -60,7 +60,7 @@ options =
     .right-click-customization = 오른쪽 클릭 사용자화
     .right-click-in-drawing-area = 도면 영역에서 오른쪽 클릭
     .hold-duration = 누르는 시간
-    .right-click-mode-help = 바로 가기 메뉴: 오른쪽 클릭 시 항상 메뉴를 엽니다 (AutoCAD 기본값). 시간 민감: 짧은 클릭은 Enter, 길게 누르면 메뉴가 열립니다 (SHORTCUTMENUDURATION).
+    .right-click-mode-help = 바로 가기 메뉴: 오른쪽 클릭 시 항상 메뉴를 엽니다. 시간 민감: 짧은 클릭은 Enter, 길게 누르면 메뉴가 열립니다 (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = 바로 가기 메뉴
     .right-click-mode-time-sensitive = 시간 민감 (짧은 클릭 = Enter)
     .right-click-mode-enter-first = 먼저 Enter, 두 번째 클릭 = 메뉴

@@ -60,7 +60,7 @@ options =
     .right-click-customization = राइट-क्लिक अनुकूलन
     .right-click-in-drawing-area = ड्रॉइंग क्षेत्र में राइट-क्लिक
     .hold-duration = दबाए रखने की अवधि
-    .right-click-mode-help = शॉर्टकट मेनू: राइट-क्लिक हमेशा मेनू खोलता है (AutoCAD डिफ़ॉल्ट)। समय-संवेदी: त्वरित क्लिक Enter है, देर तक दबाए रखने से मेनू खुलता है (SHORTCUTMENUDURATION)।
+    .right-click-mode-help = शॉर्टकट मेनू: राइट-क्लिक हमेशा मेनू खोलता है। समय-संवेदी: त्वरित क्लिक Enter है, देर तक दबाए रखने से मेनू खुलता है (SHORTCUTMENUDURATION)।
     .right-click-mode-shortcut-menu = शॉर्टकट मेनू
     .right-click-mode-time-sensitive = समय-संवेदी (त्वरित क्लिक = Enter)
     .right-click-mode-enter-first = पहले Enter, दूसरा क्लिक = मेनू

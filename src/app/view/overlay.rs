@@ -1150,7 +1150,7 @@ fn context_menu_gutter(icon: Option<MenuIcon>) -> Element<'static, Message> {
 /// Render the right-click context menu (rows from
 /// `ui::popup::context_menu::build_context_menu`). The panel is placed so the
 /// default row sits under the pointer: right-click then left-click in place
-/// completes the step without moving the mouse (AutoCAD anchors its shortcut
+/// completes the step without moving the mouse (commercial solutions anchor their shortcut
 /// menu the same way). `highlighted` is the keyboard highlight, if any.
 pub(super) fn viewport_context_menu_overlay(
     pos: iced::Point,

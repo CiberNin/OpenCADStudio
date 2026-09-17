@@ -304,7 +304,7 @@ impl OpenCADStudio {
         }
         // The open right-click context menu owns the keyboard the same way:
         // arrows / Enter / mnemonic letters drive it, any other key closes it
-        // and falls through to the command line (AutoCAD behaviour).
+        // and falls through to the command line (the behaviour of commercial solutions).
         if self.context_menu_open() {
             if let Some(task) = self.intercept_context_menu_key(&msg) {
                 return task;
@@ -3582,7 +3582,7 @@ impl OpenCADStudio {
                     return self.update(Message::CommandFinalize);
                 }
                 // A right-click. What it does is the user's choice (Options →
-                // User Preferences, AutoCAD's SHORTCUTMENU):
+                // User Preferences, SHORTCUTMENU in commercial solutions):
                 //  • Shortcut menu — always open the context menu, whose
                 //    default row (Enter / Repeat) sits under the pointer.
                 //  • Time-sensitive — a quick click is Enter while a command
@@ -3607,7 +3607,7 @@ impl OpenCADStudio {
                     sel.right_click_entered = true;
                     drop(sel);
                     // CommandFinalize is Enter during a command and "repeat
-                    // the last command" when idle — exactly AutoCAD's quick
+                    // the last command" when idle — exactly the quick
                     // right-click.
                     return self.update(Message::CommandFinalize);
                 }

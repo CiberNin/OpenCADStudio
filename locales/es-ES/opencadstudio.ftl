@@ -60,7 +60,7 @@ options =
     .right-click-customization = Personalización del botón derecho
     .right-click-in-drawing-area = Botón derecho en el área de dibujo
     .hold-duration = Duración de pulsación
-    .right-click-mode-help = Menú contextual: el botón derecho siempre abre el menú (valor por defecto de AutoCAD). Sensible al tiempo: un clic rápido es Intro, mantener pulsado abre el menú (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Menú contextual: el botón derecho siempre abre el menú. Sensible al tiempo: un clic rápido es Intro, mantener pulsado abre el menú (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Menú contextual
     .right-click-mode-time-sensitive = Sensible al tiempo (clic rápido = Intro)
     .right-click-mode-enter-first = Primero Intro, segundo clic = menú

@@ -4,7 +4,7 @@
 //   Requires at least one entity selected before starting.
 //   Step 1: pick base point, or D = type the displacement vector directly
 //   Step 2: pick destination → translates all selected entities by (dest - base);
-//           Enter uses the base point as the displacement (AutoCAD).
+//           Enter uses the base point as the displacement (commercial solutions).
 
 use acadrust::Handle;
 use glam::DVec3;
@@ -119,7 +119,7 @@ impl CadCommand for MoveCommand {
 
     fn on_enter(&mut self) -> CmdResult {
         match self.step {
-            // AutoCAD: Enter at the second point uses the base point as the
+            // Commercial solutions: Enter at the second point uses the base point as the
             // displacement from the origin.
             Step::Target(base) => CmdResult::TransformSelected(
                 self.handles.clone(),

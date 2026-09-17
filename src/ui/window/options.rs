@@ -1269,7 +1269,7 @@ pub fn view_window<'a>(
         .align_y(iced::Center),
         Space::new().height(6),
         text(crate::t!(
-            "Shortcut menu: right-click always opens the menu (AutoCAD default). Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION)."
+            "Shortcut menu: right-click always opens the menu. Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION)."
         ))
         .size(11)
         .width(sizing.width),

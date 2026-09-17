@@ -1,7 +1,7 @@
 // Polyline tool — ribbon definition + interactive command.
 //
 // Command:  PLINE (PL)
-//   Each click adds a vertex. Keywords follow AutoCAD:
+//   Each click adds a vertex. Keywords match commercial solutions:
 //   Line mode:  Arc / Close / Halfwidth / Length / Undo / Width
 //   Arc mode:   Angle / CEnter / CLose / Direction / Halfwidth / Line /
 //               Radius / Second pt / Undo / Width
@@ -42,7 +42,7 @@ enum SegMode {
     Arc,
 }
 
-/// A keyword sub-step inside PLINE (AutoCAD's option prompts). `None` is the
+/// A keyword sub-step inside PLINE (the option prompts of commercial solutions). `None` is the
 /// regular "specify next point" step for the current segment mode. Every
 /// sub-step returns to `None` once it has produced a vertex, or when Undo /
 /// Enter / Escape backs out of it.
@@ -114,7 +114,7 @@ pub struct PlineCommand {
     /// `(start, end)` width for segment i → i+1, parallel to `bulges`.
     widths: Vec<(f64, f64)>,
     /// Width pair applied to the next segment. After a segment lands its end
-    /// width becomes the next start width, as in AutoCAD.
+    /// width becomes the next start width, as in commercial solutions.
     cur_width: (f64, f64),
     mode: SegMode,
     sub: Sub,
@@ -696,7 +696,7 @@ pub(crate) fn arc_sample_points(a: Vec3, bulge: f64, b: Vec3, n: usize) -> Vec<[
 
 impl PlineCommand {
     /// Close the polyline: in Arc mode the closing segment is an arc tangent
-    /// to the last segment (AutoCAD's CLose), in Line mode a straight one.
+    /// to the last segment (CLose in commercial solutions), in Line mode a straight one.
     fn close(&mut self) -> CmdResult {
         if self.vertices.len() < 2 {
             return CmdResult::NeedPoint;
@@ -779,7 +779,7 @@ impl CadCommand for PlineCommand {
         let can_close = self.vertices.len() >= 3
             || (self.vertices.len() == 2 && matches!(self.mode, SegMode::Arc));
         match self.sub {
-            // AutoCAD's keyword sets, in AutoCAD's order.
+            // The keyword sets of commercial solutions, in their order.
             Sub::None => match self.mode {
                 SegMode::Line => {
                     let mut opts = vec![CmdOption::new("Arc", "A")];
@@ -849,7 +849,7 @@ impl CadCommand for PlineCommand {
         match self.sub {
             Sub::None => {}
             // A picked point at a typed-value prompt reads as the distance
-            // (or angle) from the last vertex, as AutoCAD allows.
+            // (or angle) from the last vertex, as commercial solutions allow.
             sub if sub.is_scalar() => {
                 let value = if sub.is_angle() {
                     (p - a).y.atan2((p - a).x).to_degrees()
@@ -1068,7 +1068,7 @@ impl CadCommand for PlineCommand {
                     self.sub = Sub::ArcCenter;
                     Some(CmdResult::NeedPoint)
                 }
-                // AutoCAD wants CL in arc mode; a bare C is accepted as well.
+                // Commercial solutions want CL in arc mode; a bare C is accepted as well.
                 (SegMode::Arc, "CL" | "C" | "CLOSE") => Some(self.close()),
                 (SegMode::Arc, "D" | "DIRECTION") => {
                     self.sub = Sub::ArcDirection;
@@ -1272,7 +1272,7 @@ mod tests {
     }
 
     #[test]
-    fn options_per_mode_match_autocad_keywords() {
+    fn options_per_mode_match_compatible_keywords() {
         let mut cmd = pl(&[(0.0, 0.0), (10.0, 0.0)]);
         assert_eq!(keywords(&cmd), ["A", "H", "L", "U", "W", ""]);
         cmd.on_point(DVec3::new(10.0, 5.0, 0.0));

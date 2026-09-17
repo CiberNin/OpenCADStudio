@@ -411,9 +411,9 @@ impl CadCommand for ArcCSECommand {
     }
 }
 
-// ── ARC: AutoCAD prompt flow ──────────────────────────────────────────────
+// ── ARC: compatible prompt flow ───────────────────────────────────────────
 //
-// The plain ARC command follows AutoCAD's prompts, so every keyword a user
+// The plain ARC command follows the prompts of commercial solutions, so every keyword a user
 // knows is there at the same step:
 //   Specify start point of arc or [Center]
 //   Specify second point of arc or [Center/End]
@@ -620,7 +620,7 @@ impl CadCommand for ArcCommand {
                 CmdResult::NeedPoint
             }
             ArcStep::EndSC { s, c } => self.commit(self.sc_end(s, c, pt)),
-            // At a typed prompt a pick reads as AutoCAD does: the cursor's
+            // At a typed prompt a pick reads as commercial solutions do: the cursor's
             // direction from the centre (angle) or its distance (length,
             // radius), the cursor itself for a direction / sagitta.
             ArcStep::AngleSC { s, c } => {
@@ -726,7 +726,7 @@ impl CadCommand for ArcCommand {
     fn on_enter(&mut self) -> CmdResult {
         match self.step {
             // Enter at the start prompt: continue tangent from the last
-            // line or arc, as AutoCAD does.
+            // line or arc, as commercial solutions do.
             ArcStep::Start => CmdResult::Dispatch("ARC_CONT".into()),
             _ => CmdResult::Cancel,
         }
@@ -1997,7 +1997,7 @@ mod acad_flow_tests {
     }
 
     #[test]
-    fn prompts_follow_autocad_keywords() {
+    fn prompts_follow_compatible_keywords() {
         let mut cmd = ArcCommand::new();
         assert_eq!(keywords(&cmd), ["C"]);
         cmd.on_point(p(0.0, 0.0));

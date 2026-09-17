@@ -60,7 +60,7 @@ options =
     .right-click-customization = Personalizzazione clic destro
     .right-click-in-drawing-area = Clic destro nell'area di disegno
     .hold-duration = Durata pressione
-    .right-click-mode-help = Menu di scelta rapida: il clic destro apre sempre il menu (impostazione predefinita di AutoCAD). Sensibile al tempo: un clic rapido è Invio, tenere premuto apre il menu (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Menu di scelta rapida: il clic destro apre sempre il menu. Sensibile al tempo: un clic rapido è Invio, tenere premuto apre il menu (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Menu di scelta rapida
     .right-click-mode-time-sensitive = Sensibile al tempo (clic rapido = Invio)
     .right-click-mode-enter-first = Prima Invio, secondo clic = menu

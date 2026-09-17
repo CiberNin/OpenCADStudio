@@ -60,7 +60,7 @@ options =
     .right-click-customization = 右クリックのカスタマイズ
     .right-click-in-drawing-area = 作図領域での右クリック
     .hold-duration = 長押し時間
-    .right-click-mode-help = ショートカットメニュー: 右クリックで常にメニューを開く (AutoCAD の既定)。時間依存: 短いクリックは Enter、長押しでメニューを開く (SHORTCUTMENUDURATION)。
+    .right-click-mode-help = ショートカットメニュー: 右クリックで常にメニューを開く。時間依存: 短いクリックは Enter、長押しでメニューを開く (SHORTCUTMENUDURATION)。
     .right-click-mode-shortcut-menu = ショートカットメニュー
     .right-click-mode-time-sensitive = 時間依存 (短いクリック = Enter)
     .right-click-mode-enter-first = 1 回目は Enter、2 回目でメニュー

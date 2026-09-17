@@ -60,7 +60,7 @@ options =
     .right-click-customization = Sağ tık özelleştirme
     .right-click-in-drawing-area = Çizim alanında sağ tık
     .hold-duration = Basılı tutma süresi
-    .right-click-mode-help = Kısayol menüsü: sağ tık her zaman menüyü açar (AutoCAD varsayılanı). Zamana duyarlı: kısa tık Enter, uzun basma menüyü açar (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Kısayol menüsü: sağ tık her zaman menüyü açar. Zamana duyarlı: kısa tık Enter, uzun basma menüyü açar (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Kısayol menüsü
     .right-click-mode-time-sensitive = Zamana duyarlı (kısa tık = Enter)
     .right-click-mode-enter-first = Önce Enter, ikinci tık = menü

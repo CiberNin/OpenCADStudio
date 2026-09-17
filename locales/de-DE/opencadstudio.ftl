@@ -60,7 +60,7 @@ options =
     .right-click-customization = Rechtsklick-Anpassung
     .right-click-in-drawing-area = Rechtsklick im Zeichenbereich
     .hold-duration = Haltedauer
-    .right-click-mode-help = Kontextmenü: Rechtsklick öffnet immer das Menü (AutoCAD-Standard). Zeitabhängig: ein kurzer Klick ist Enter, längeres Halten öffnet das Menü (SHORTCUTMENUDURATION).
+    .right-click-mode-help = Kontextmenü: Rechtsklick öffnet immer das Menü. Zeitabhängig: ein kurzer Klick ist Enter, längeres Halten öffnet das Menü (SHORTCUTMENUDURATION).
     .right-click-mode-shortcut-menu = Kontextmenü
     .right-click-mode-time-sensitive = Zeitabhängig (kurzer Klick = Enter)
     .right-click-mode-enter-first = Erst Enter, zweiter Klick = Menü

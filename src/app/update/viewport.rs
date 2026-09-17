@@ -6237,7 +6237,7 @@ properties={:.1}ms picked={}",
 
     /// Grip-menu Copy: leave the originals where they were and add the
     /// edited shapes as new entities, then re-arm the same grip at its
-    /// origin so the next placement makes another copy (AutoCAD grip Copy).
+    /// origin so the next placement makes another copy (grip Copy, as in commercial solutions).
     fn commit_active_grip_edit_as_copy(&mut self, grip: GripEdit) -> Task<Message> {
         let i = self.active_tab;
         let handles = std::mem::take(&mut self.grip_preview_handles);
