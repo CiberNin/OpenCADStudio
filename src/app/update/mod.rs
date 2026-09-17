@@ -1726,7 +1726,8 @@ impl OpenCADStudio {
                 // MTEXT bodies), where the typed case is the content and
                 // Space must stay in the buffer.
                 let text_with_spaces = self.is_free_text_active();
-                let s = if text_with_spaces {
+                let literal = self.command_line.literal_spaces || s.starts_with('>');
+                let s = if text_with_spaces || literal {
                     s
                 } else {
                     s.to_uppercase()
@@ -9842,6 +9843,14 @@ mod free_text_entry_tests {
             "Space submitted the line"
         );
         assert_eq!(app.text_entry_mode(), TextEntryMode::Command);
+    }
+
+    #[test]
+    fn literal_command_input_preserves_case() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.update(Message::CommandInput(">Plugin MixedCase".into()));
+        assert_eq!(app.command_line.input, ">Plugin MixedCase");
     }
 }
 
