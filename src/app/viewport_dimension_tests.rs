@@ -87,6 +87,14 @@ fn displayed(doc: &CadDocument) -> f64 {
     dim.measurement() * MeasurementScale::user_lfac_for_space(factor, true)
 }
 
+pub(super) fn preview_text(app: &OpenCADStudio, entity: &EntityType) -> String {
+    let EntityType::Dimension(dimension) = entity else { panic!("expected dimension") };
+    let doc = &app.tabs[app.active_tab].scene.document;
+    let source = doc.dim_styles.get(&dimension.base().style_name).unwrap();
+    let style = crate::entities::dimension::resolved_dimension_style(source, dimension, doc);
+    crate::entities::dimension::dimension_text_value(dimension, Some(&style)).unwrap()
+}
+
 fn finish_aligned(app: &mut OpenCADStudio, line: Handle, frame: ViewportFrame) {
     let _ = app.dispatch_command("DIMALIGNED");
     point(app, frame, line, DVec3::ZERO);
@@ -300,7 +308,13 @@ fn viewport_dimension_linear_aligned_and_radial_object_picks() {
             if radial { 1 } else { 2 },
             "{name}"
         );
-        let _ = app.feed_command(StepInput::Point(DVec3::new(55.0, 80.0, 0.0)));
+        let place = DVec3::new(55.0, 80.0, 0.0);
+        let preview = app.dimension_preview_entities(i, place).unwrap();
+        assert_eq!(preview.len(), 1, "{name}");
+        let value = preview_text(&app, &preview[0]);
+        assert!(!app.dimension_preview_wires(i, place).unwrap().is_empty(), "{name}");
+        let _ = app.feed_command(StepInput::Point(place));
+        assert_eq!(preview_text(&app, &EntityType::Dimension(dimension(&app.tabs[i].scene.document).clone())), value, "{name}");
         assert!(
             (displayed(&app.tabs[i].scene.document) - expected).abs() < 1e-4,
             "{name}: {}",
@@ -326,10 +340,43 @@ fn viewport_dimension_angular_preserves_angle_without_length_factor() {
     point(&mut app, frame, line, DVec3::ZERO);
     point(&mut app, frame, line, DVec3::X * 100.0);
     point(&mut app, frame, vertical, DVec3::Y * 100.0);
-    let _ = app.feed_command(StepInput::Point(DVec3::new(70.0, 70.0, 0.0)));
+    let place = DVec3::new(70.0, 70.0, 0.0);
+    let preview = app.dimension_preview_entities(i, place).unwrap();
+    assert_eq!(preview.len(), 1);
+    assert!(MeasurementScale::read(&preview[0].common().extended_data).is_none());
+    let value = preview_text(&app, &preview[0]);
+    let _ = app.feed_command(StepInput::Point(place));
     let doc = &app.tabs[app.active_tab].scene.document;
+    assert_eq!(preview_text(&app, &EntityType::Dimension(dimension(doc).clone())), value);
     assert!((dimension(doc).measurement() - 90.0).abs() < 1e-5);
     assert!(MeasurementScale::read(&dimension(doc).base().common.extended_data).is_none());
+}
+
+#[test]
+fn viewport_dimension_preview_uses_candidate_scale_only_before_second_pick() {
+    for command in ["DIMLINEAR", "DIMALIGNED"] {
+        let (mut app, model, frame) = fixture();
+        let i = app.active_tab;
+        let mut style = acadrust::tables::DimStyle::new("PreviewUnits");
+        style.dimlfac = 25.4;
+        app.tabs[i].scene.document.dim_styles.add(style).unwrap();
+        app.tabs[i].scene.document.header.current_dimstyle_name = "PreviewUnits".into();
+        let _ = app.dispatch_command(command);
+        let _ = app.feed_command(StepInput::Point(DVec3::new(55.0, 50.0, 0.0)));
+        let target = hit(frame, model, DVec3::X * 100.0);
+        let sheet = app.dimension_preview_entities(i, target.world).unwrap();
+        assert_eq!(preview_text(&app, &sheet[0]), "127");
+        app.vp_snap_frame = Some(frame);
+        app.tabs[i].snap_result = Some(target);
+        let model_preview = app.dimension_preview_entities(i, target.world).unwrap();
+        assert_eq!(preview_text(&app, &model_preview[0]), "1270");
+        point(&mut app, frame, model, DVec3::X * 100.0);
+        let other = ViewportFrame { viewport: Handle::new(0xFFFF), scale: frame.scale * 2.0, ..frame };
+        app.vp_snap_frame = Some(other);
+        app.tabs[i].snap_result = Some(hit(other, model, DVec3::X * 100.0));
+        let placement = app.dimension_preview_entities(i, DVec3::new(60.0, 80.0, 0.0)).unwrap();
+        assert_eq!(preview_text(&app, &placement[0]), "1270");
+    }
 }
 
 #[test]

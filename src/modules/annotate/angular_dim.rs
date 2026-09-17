@@ -7,8 +7,8 @@ use cadkernel::geom2d::{
 };
 
 use crate::command::{
-    CadCommand, CmdOption, CmdResult, DimensionAssociationInput,
-    DimensionAssociationSource, InputKind, WorkingPlane,
+    CadCommand, CmdOption, CmdResult, DimensionAssociationInput, DimensionAssociationSource,
+    DimensionPreview, InputKind, WorkingPlane,
 };
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
@@ -806,6 +806,32 @@ impl CadCommand for AngularDimensionCommand {
             }
         };
         Some(preview_wire(points))
+    }
+
+    fn dimension_preview(&self, cursor: DVec3) -> Option<Vec<DimensionPreview>> {
+        if self.selecting_object {
+            return None;
+        }
+        let result = match self.step {
+            Step::ArcPoint3 {
+                vertex,
+                first,
+                second,
+            } => self.finish_three_point(vertex, first, second, cursor),
+            Step::ArcPoint2 {
+                first_start,
+                first_end,
+                second_start,
+                second_end,
+            } => self.finish_two_line(first_start, first_end, second_start, second_end, cursor),
+            _ => return None,
+        };
+        match result {
+            CmdResult::CommitDimension { entity, .. } => {
+                Some(vec![DimensionPreview::current_style(entity)])
+            }
+            _ => Some(Vec::new()),
+        }
     }
 }
 
