@@ -472,6 +472,9 @@ impl CadCommand for ExtrudeCommand {
     fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
         Some((cursor - self.anchor).dot(self.profile_direction?))
     }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == ExtrudeStep::Height
+    }
     fn is_selection_gathering(&self) -> bool {
         self.step == ExtrudeStep::Pick
     }
@@ -2838,6 +2841,33 @@ inventory::submit!(crate::command::CommandRegistration {
 });
 inventory::submit!(crate::command::CommandRegistration { names: &["LOFT"] });
 inventory::submit!(crate::command::CommandRegistration { names: &["REVOLVE"] });
+
+#[cfg(test)]
+mod extrude_command_tests {
+    use super::*;
+
+    #[test]
+    fn typed_height_commits_through_the_text_path() {
+        let mut command = ExtrudeCommand::new_named("EXTRUDE", [1.0; 4]);
+        assert!(!command.dyn_commit_as_text());
+        command.set_preselection(
+            vec![(
+                Handle::new(1),
+                EntityType::Circle(acadrust::entities::Circle::new()),
+            )],
+            DVec3::ZERO,
+            Some(DVec3::Z),
+        );
+        assert!(command.dyn_commit_as_text());
+        assert!(matches!(
+            command.on_text_input("5"),
+            Some(CmdResult::ExtrudeEntities {
+                extent: ExtrudeExtent::Height(5.0),
+                ..
+            })
+        ));
+    }
+}
 
 #[cfg(test)]
 mod revolve_tests {
