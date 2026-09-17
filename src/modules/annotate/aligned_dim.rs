@@ -351,6 +351,18 @@ impl CadCommand for AlignedDimensionCommand {
             fill_tris_low: Vec::new(),
         })
     }
+
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        if !matches!(self.step, Step::DimLine { .. }) || self.awaiting_text || self.awaiting_angle {
+            return None;
+        }
+        Some(crate::command::DynSpec {
+            anchor: crate::command::DynAnchor::LastPoint,
+            fields: Vec::new(),
+            guide: crate::command::DynGuide::None,
+            ref_point: None,
+        })
+    }
 }
 
 fn v3(p: DVec3) -> Vector3 {
