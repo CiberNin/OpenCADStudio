@@ -64,8 +64,8 @@ impl OpenCADStudio {
     ) -> Element<'s, Message> {
         sized_flow(
             extra,
-            760,
-            540,
+            940,
+            620,
             |flow| {
                 crate::ui::window::plot::view_window(
                     &self.plot_dialog,

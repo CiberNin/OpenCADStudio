@@ -8512,14 +8512,6 @@ impl OpenCADStudio {
             Message::PlotExportPath(None) => Task::none(),
             Message::PlotExportPath(Some(path)) => self.on_plot_export_path_some(path),
 
-            Message::PlotFormat(f) => {
-                self.plot_format = f;
-                Task::none()
-            }
-            Message::PlotOrientation(o) => {
-                self.plot_orientation = o;
-                Task::none()
-            }
             Message::PlotWindowExport => {
                 let i = self.active_tab;
                 let stem = self.tabs[i]
