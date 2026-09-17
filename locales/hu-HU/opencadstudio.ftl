@@ -57,6 +57,13 @@ options =
     .default-application = Alapértelmezett alkalmazás
     .iced-theme = Iced-téma:
     .theme = Téma
+    .right-click-customization = Jobb kattintás testreszabása
+    .right-click-in-drawing-area = Jobb kattintás a rajzterületen
+    .hold-duration = Nyomva tartás ideje
+    .right-click-mode-help = Helyi menü: a jobb kattintás mindig a menüt nyitja. Időérzékeny: a rövid kattintás Enter, a hosszabb nyomva tartás a menüt nyitja (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Helyi menü
+    .right-click-mode-time-sensitive = Időérzékeny (rövid kattintás = Enter)
+    .right-click-mode-enter-first = Előbb Enter, második kattintás = menü
 
 command-line =
     .ready = Az Open CAD Studio használatra kész.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } objektumok
         }]:
     .target = MOVE Adja meg a rendeltetési helyet [bázis { $x },{ $y }]:
+    .displacement = MOVE  Adja meg az eltolást:
 
 command-copy =
     .array-count = COPY Enter a tömbben lévő elemek száma:
@@ -258,6 +266,8 @@ command-copy =
             [one] { $count } példány eddig
            *[other] { $count } példányok eddig
         } | tömb | Enter=kész | alap { $x },{ $y }]:
+    .displacement = COPY  Adja meg az eltolást:
+    .mode = COPY  Adja meg a másolási módot [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Tört sugarú méret
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2823,6 +2833,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Eltávolítás
+    .pline-specify-starting-width = PLINE  Adja meg a kezdő szélességet <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Adja meg a záró szélességet <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Adja meg a kezdő félszélességet <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Adja meg a záró félszélességet <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Vonal)  Adja meg a következő pontot:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Ív)  Adja meg az ív végpontját:
+    .pline-specify-length-of-line = PLINE  Adja meg a vonal hosszát:
+    .pline-specify-included-angle = PLINE  Adja meg a középponti szöget:
+    .pline-specify-endpoint-of-arc = PLINE  Adja meg az ív végpontját:
+    .pline-specify-center-point-of-arc = PLINE  Adja meg az ív középpontját:
+    .pline-specify-radius-of-arc = PLINE  Adja meg az ív sugarát:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Adja meg az ív húrjának irányát:
+    .pline-specify-length-of-chord = PLINE  Adja meg a húr hosszát:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Adja meg az érintő irányát az ív kezdőpontjában:
+    .pline-specify-second-point-on-arc = PLINE  Adja meg az ív második pontját:
+    .halfwidth = Félszélesség
+    .center-keyword = Középpont
+    .close-keyword = Zárás
+    .second-pt = Második pont
+    .arc-specify-start-point-of-arc = ARC  Adja meg az ív kezdőpontját:
+    .arc-specify-second-point-of-arc = ARC  Adja meg az ív második pontját:
+    .arc-specify-end-point-of-arc = ARC  Adja meg az ív végpontját:
+    .arc-specify-center-point-of-arc = ARC  Adja meg az ív középpontját:
+    .arc-specify-included-angle = ARC  Adja meg a középponti szöget:
+    .arc-specify-length-of-chord = ARC  Adja meg a húr hosszát:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Adja meg az érintő irányát az ív kezdőpontjában:
+    .arc-specify-radius-of-arc = ARC  Adja meg az ív sugarát:
+    .chord-length = Húrhossz
 
 modify =
     .add-vertex = Csúcspont hozzáadása
@@ -2975,6 +3013,13 @@ modify =
     .tol-scale-dimtfac = Tol. mérleg (DIMTFAC)
     .trim = Vágás
     .exit = kilépés
+    .area-keyword = Terület
+    .displacement = Eltolás
+    .mode-keyword = Mód
+    .array-keyword = Kiosztás
+    .use-first-point-as-displacement = Első pont eltolásként
+    .offset-erase-source-object-after-offsetting = OFFSET  Törli a forrásobjektumot eltolás után? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Az eltolt objektumok fóliája [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Enter csoport neve [__ocs_arg_name__]:
@@ -5264,6 +5309,19 @@ ui =
     .what-s-new = Újdonságok
     .width-value = Szélesség: __ocs_arg_value__
     .working = Dolgozik…
+    .recent-input = Legutóbbi bevitel
+    .copy-with-base-point = Másolás bázisponttal
+    .undo-label = Visszavonás: __ocs_arg_label__
+    .redo-label = Újra: __ocs_arg_label__
+    .copy-selection = Kijelölés másolása
+    .isolate = Elkülönítés
+    .deselect-all = Kijelölés megszüntetése
+    .options-ellipsis = Beállítások...
+    .base-point = Bázispont
+    .snap-overrides = Ideiglenes tárgyraszter
+    .mid-between-2-points = 2 pont közötti felezőpont
+    .osnap-settings = Tárgyraszter beállítások...
+    .snap-override-none-next-pick-only = Ideiglenes tárgyraszter: Nincs (csak a következő pontra).
 
 dimstyle =
     .keep-text-between-extension-lines = Mindig legyen szöveg a hosszabbító sorok között

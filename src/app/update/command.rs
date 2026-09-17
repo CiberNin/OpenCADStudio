@@ -727,6 +727,16 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         crate::app::expr_eval::eval_to_string(&raw)
                     };
                     self.command_line.input.clear();
+                    // Remember the token for the context menu's Recent Input
+                    // list (prose steps excluded: a table cell or text body
+                    // is not a reusable value).
+                    let is_prose = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .is_some_and(|c| c.input_kind().is_free_text());
+                    if !is_prose {
+                        self.command_line.record_recent_input(&text);
+                    }
 
                     // Offer the typed text to the command's option handler
                     // first (keywords like PLINE's A/L/C, a radius, …). If it
@@ -931,6 +941,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
 
                 if grip_dyn_locked {
                     return self.update(Message::CommandSubmit);
+                }
+                // Enter while a grip is hot places it where it is (or keeps
+                // it hot when it has not moved) — it must not fall through to
+                // "repeat the last command", which would discard the edit.
+                if self.tabs[i].active_grip.is_some() && self.tabs[i].active_cmd.is_none() {
+                    return self.commit_active_grip_edit();
                 }
 
                 // Normal command Dynamic Input commit.

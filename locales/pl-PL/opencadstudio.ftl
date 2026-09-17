@@ -57,6 +57,13 @@ options =
     .default-application = Aplikacja domyślna
     .iced-theme = Motyw Iced:
     .theme = Motyw
+    .right-click-customization = Dostosowanie prawego przycisku
+    .right-click-in-drawing-area = Prawy przycisk w obszarze rysunku
+    .hold-duration = Czas przytrzymania
+    .right-click-mode-help = Menu skrótów: prawy przycisk zawsze otwiera menu. Zależne od czasu: krótkie kliknięcie to Enter, dłuższe przytrzymanie otwiera menu (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Menu skrótów
+    .right-click-mode-time-sensitive = Zależne od czasu (krótkie kliknięcie = Enter)
+    .right-click-mode-enter-first = Najpierw Enter, drugie kliknięcie = menu
 
 command-line =
     .ready = Open CAD Studio jest gotowe.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } obiekty
         }]:
     .target = MOVE Określ miejsce docelowe [podstawa { $x },{ $y }]:
+    .displacement = MOVE  Określ przesunięcie:
 
 command-copy =
     .array-count = COPY Enter liczba elementów do tablicy:
@@ -258,6 +266,8 @@ command-copy =
             [one] { $count } kopia do tej pory
            *[other] { $count } kopii do tej pory
         } | Tablica | Enter=gotowe | baza { $x },{ $y }]:
+    .displacement = COPY  Określ przesunięcie:
+    .mode = COPY  Podaj tryb kopiowania [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Promień łamany
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2823,6 +2833,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Usuń
+    .pline-specify-starting-width = PLINE  Określ szerokość początkową <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Określ szerokość końcową <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Określ początkową połowę szerokości <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Określ końcową połowę szerokości <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Linia)  Określ następny punkt:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Łuk)  Określ punkt końcowy łuku:
+    .pline-specify-length-of-line = PLINE  Określ długość linii:
+    .pline-specify-included-angle = PLINE  Określ kąt rozwarcia:
+    .pline-specify-endpoint-of-arc = PLINE  Określ punkt końcowy łuku:
+    .pline-specify-center-point-of-arc = PLINE  Określ środek łuku:
+    .pline-specify-radius-of-arc = PLINE  Określ promień łuku:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Określ kierunek cięciwy łuku:
+    .pline-specify-length-of-chord = PLINE  Określ długość cięciwy:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Określ kierunek stycznej w punkcie początkowym łuku:
+    .pline-specify-second-point-on-arc = PLINE  Określ drugi punkt na łuku:
+    .halfwidth = Połowa szerokości
+    .center-keyword = Środek
+    .close-keyword = Zamknij
+    .second-pt = Drugi punkt
+    .arc-specify-start-point-of-arc = ARC  Określ punkt początkowy łuku:
+    .arc-specify-second-point-of-arc = ARC  Określ drugi punkt łuku:
+    .arc-specify-end-point-of-arc = ARC  Określ punkt końcowy łuku:
+    .arc-specify-center-point-of-arc = ARC  Określ środek łuku:
+    .arc-specify-included-angle = ARC  Określ kąt rozwarcia:
+    .arc-specify-length-of-chord = ARC  Określ długość cięciwy:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Określ kierunek stycznej w punkcie początkowym łuku:
+    .arc-specify-radius-of-arc = ARC  Określ promień łuku:
+    .chord-length = Długość cięciwy
 
 modify =
     .add-vertex = Dodaj wierzchołek
@@ -2975,6 +3013,13 @@ modify =
     .tol-scale-dimtfac = Toł. skala (DIMTFAC)
     .trim = Przytnij
     .exit = Wyjdź
+    .area-keyword = Pole
+    .displacement = Przesunięcie
+    .mode-keyword = Tryb
+    .array-keyword = Szyk
+    .use-first-point-as-displacement = Pierwszy punkt jako przesunięcie
+    .offset-erase-source-object-after-offsetting = OFFSET  Usunąć obiekt źródłowy po odsunięciu? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Warstwa odsuniętych obiektów [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Enter nazwa grupy [__ocs_arg_name__]:
@@ -5264,6 +5309,19 @@ ui =
     .what-s-new = Co nowego
     .width-value = Szerokość: __ocs_arg_value__
     .working = Pracuję…
+    .recent-input = Ostatnie wpisy
+    .copy-with-base-point = Kopiuj z punktem bazowym
+    .undo-label = Cofnij __ocs_arg_label__
+    .redo-label = Ponów __ocs_arg_label__
+    .copy-selection = Kopiuj zaznaczenie
+    .isolate = Izoluj
+    .deselect-all = Odznacz wszystko
+    .options-ellipsis = Opcje...
+    .base-point = Punkt bazowy
+    .snap-overrides = Tymczasowe lokalizacje
+    .mid-between-2-points = Środek między 2 punktami
+    .osnap-settings = Ustawienia lokalizacji...
+    .snap-override-none-next-pick-only = Tymczasowa lokalizacja: Brak (tylko następny punkt).
 
 dimstyle =
     .keep-text-between-extension-lines = Zawsze przechowuj tekst pomiędzy liniami pomocniczymi

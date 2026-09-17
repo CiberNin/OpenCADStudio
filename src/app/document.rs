@@ -146,6 +146,12 @@ pub(super) struct DocumentTab {
     pub(super) selected_grip_handles: Vec<Handle>,
     /// Shift-selected grips, keyed by entity and object-local grip id.
     pub(super) hot_grips: rustc_hash::FxHashSet<(Handle, usize)>,
+    /// Grip-mode "Copy" toggle (context menu): each grip placement leaves the
+    /// original in place and adds a modified copy, until Enter / Esc.
+    pub(super) grip_copy: bool,
+    /// Grip-mode "Base Point" (context menu): the next left-click re-bases
+    /// the active grip edit instead of committing it.
+    pub(super) grip_base_pending: bool,
     pub(super) selected_handle: Option<Handle>,
     /// Dynamic-block visibility grip for the current single selection.
     pub(super) visibility_grip: Option<super::visibility::VisibilityGrip>,
@@ -225,6 +231,9 @@ pub(super) struct DocumentTab {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
     pub(super) suspended_cmd: Option<Box<dyn CadCommand>>,
+    /// `suspended_cmd` was parked by a transparent command (`'ZOOM`) and is
+    /// restored as soon as the transparent one ends.
+    pub(super) transparent_resume: bool,
 }
 
 impl DocumentTab {
@@ -601,6 +610,8 @@ impl DocumentTab {
             selected_grips: vec![],
             selected_grip_handles: vec![],
             hot_grips: rustc_hash::FxHashSet::default(),
+            grip_copy: false,
+            grip_base_pending: false,
             selected_handle: None,
             visibility_grip: None,
             wireframe: false,
@@ -634,6 +645,7 @@ impl DocumentTab {
             zoom_dynamic_mode: false,
             plugin_state: HashMap::new(),
             suspended_cmd: None,
+            transparent_resume: false,
         }
     }
 

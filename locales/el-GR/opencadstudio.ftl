@@ -57,6 +57,13 @@ options =
     .default-application = Προεπιλεγμένη εφαρμογή
     .iced-theme = Θέμα Iced:
     .theme = Θέμα
+    .right-click-customization = Προσαρμογή δεξιού κλικ
+    .right-click-in-drawing-area = Δεξί κλικ στην περιοχή σχεδίασης
+    .hold-duration = Διάρκεια παρατεταμένου πατήματος
+    .right-click-mode-help = Μενού συντόμευσης: το δεξί κλικ ανοίγει πάντα το μενού. Χρονοευαίσθητο: γρήγορο κλικ = Enter, παρατεταμένο πάτημα ανοίγει το μενού (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Μενού συντόμευσης
+    .right-click-mode-time-sensitive = Χρονοευαίσθητο (γρήγορο κλικ = Enter)
+    .right-click-mode-enter-first = Πρώτα Enter, δεύτερο κλικ = μενού
 
 command-line =
     .ready = Το Open CAD Studio είναι έτοιμο.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } αντικείμενα
         }]:
     .target = MOVE  Ορίστε προορισμό  [βάση { $x },{ $y }]:
+    .displacement = MOVE  Ορίστε μετατόπιση:
 
 command-copy =
     .array-count = COPY  Δώστε πλήθος στοιχείων διάταξης:
@@ -258,6 +266,8 @@ command-copy =
             [one] { $count } αντίγραφο μέχρι τώρα
            *[other] { $count } αντίγραφα μέχρι τώρα
         } | Διάταξη | Enter=τέλος | βάση { $x },{ $y }]:
+    .displacement = COPY  Ορίστε μετατόπιση:
+    .mode = COPY  Επιλέξτε λειτουργία αντιγραφής [Single/Multiple] <Multiple>:
 
 common =
     .revolve-created-objects-failed-sources = REVOLVE: δημιουργήθηκαν __ocs_arg_created__ αντικείμενα· __ocs_arg_failed__ αρχικά αντικείμενα δεν μπόρεσαν να περιστραφούν.
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2824,6 +2834,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Αφαίρεση
+    .pline-specify-starting-width = PLINE  Ορίστε αρχικό πλάτος <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Ορίστε τελικό πλάτος <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Ορίστε αρχικό ημιπλάτος <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Ορίστε τελικό ημιπλάτος <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Γραμμή)  Ορίστε επόμενο σημείο:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Τόξο)  Ορίστε τελικό σημείο τόξου:
+    .pline-specify-length-of-line = PLINE  Ορίστε μήκος γραμμής:
+    .pline-specify-included-angle = PLINE  Ορίστε περιεχόμενη γωνία:
+    .pline-specify-endpoint-of-arc = PLINE  Ορίστε τελικό σημείο τόξου:
+    .pline-specify-center-point-of-arc = PLINE  Ορίστε κέντρο τόξου:
+    .pline-specify-radius-of-arc = PLINE  Ορίστε ακτίνα τόξου:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Ορίστε διεύθυνση χορδής τόξου:
+    .pline-specify-length-of-chord = PLINE  Ορίστε μήκος χορδής:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Ορίστε διεύθυνση εφαπτομένης στην αρχή του τόξου:
+    .pline-specify-second-point-on-arc = PLINE  Ορίστε δεύτερο σημείο του τόξου:
+    .halfwidth = Ημιπλάτος
+    .center-keyword = Κέντρο
+    .close-keyword = Κλείσιμο
+    .second-pt = Δεύτερο σημείο
+    .arc-specify-start-point-of-arc = ARC  Ορίστε αρχικό σημείο τόξου:
+    .arc-specify-second-point-of-arc = ARC  Ορίστε δεύτερο σημείο τόξου:
+    .arc-specify-end-point-of-arc = ARC  Ορίστε τελικό σημείο τόξου:
+    .arc-specify-center-point-of-arc = ARC  Ορίστε κέντρο τόξου:
+    .arc-specify-included-angle = ARC  Ορίστε περιεχόμενη γωνία:
+    .arc-specify-length-of-chord = ARC  Ορίστε μήκος χορδής:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Ορίστε διεύθυνση εφαπτομένης στην αρχή του τόξου:
+    .arc-specify-radius-of-arc = ARC  Ορίστε ακτίνα τόξου:
+    .chord-length = Μήκος χορδής
 
 modify =
     .count-objects = (__ocs_arg_count__ αντικείμενα)
@@ -2976,6 +3014,13 @@ modify =
     .tol-scale-dimtfac = Κλίμακα ανοχής (DIMTFAC)
     .trim = Αποκοπή
     .exit = Έξοδος
+    .area-keyword = Εμβαδόν
+    .displacement = Μετατόπιση
+    .mode-keyword = Λειτουργία
+    .array-keyword = Διάταξη
+    .use-first-point-as-displacement = Πρώτο σημείο ως μετατόπιση
+    .offset-erase-source-object-after-offsetting = OFFSET  Διαγραφή αρχικού αντικειμένου μετά την παράλληλη μετατόπιση; [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Επιλογή στρώσης για τα νέα αντικείμενα [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP  Δώστε όνομα ομάδας [__ocs_arg_name__]:
@@ -5265,6 +5310,19 @@ ui =
     .what-s-new = Τι νέο υπάρχει
     .width-value = Πλάτος: __ocs_arg_value__
     .working = Εκτέλεση…
+    .recent-input = Πρόσφατες εισαγωγές
+    .copy-with-base-point = Αντιγραφή με σημείο βάσης
+    .undo-label = Αναίρεση __ocs_arg_label__
+    .redo-label = Επανάληψη __ocs_arg_label__
+    .copy-selection = Αντιγραφή επιλογής
+    .isolate = Απομόνωση
+    .deselect-all = Αποεπιλογή όλων
+    .options-ellipsis = Επιλογές...
+    .base-point = Σημείο βάσης
+    .snap-overrides = Προσωρινές έλξεις
+    .mid-between-2-points = Μέσο μεταξύ 2 σημείων
+    .osnap-settings = Ρυθμίσεις έλξης...
+    .snap-override-none-next-pick-only = Προσωρινή έλξη: Καμία (μόνο για το επόμενο σημείο).
 
 dimstyle =
     .keep-text-between-extension-lines = Το κείμενο να παραμένει πάντα μεταξύ των γραμμών προέκτασης

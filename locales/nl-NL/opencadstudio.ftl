@@ -57,6 +57,13 @@ options =
     .default-application = Standaardtoepassing
     .iced-theme = Iced thema:
     .theme = Thema
+    .right-click-customization = Rechtsklik aanpassen
+    .right-click-in-drawing-area = Rechtsklik in tekengebied
+    .hold-duration = Vasthoudduur
+    .right-click-mode-help = Snelmenu: rechtsklik opent altijd het menu. Tijdgevoelig: een korte klik is Enter, langer vasthouden opent het menu (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Snelmenu
+    .right-click-mode-time-sensitive = Tijdgevoelig (korte klik = Enter)
+    .right-click-mode-enter-first = Eerst Enter, tweede klik = menu
 
 command-line =
     .ready = Open CAD Studio is gereed.
@@ -245,6 +252,7 @@ command-move =
            *[other] { $count } objecten
         }]:
     .target = MOVE  Geef de bestemming op  [basis { $x },{ $y }]:
+    .displacement = MOVE  Geef verplaatsing op:
 
 command-copy =
     .array-count = COPY Voer het aantal items in de reeks in:
@@ -259,6 +267,8 @@ command-copy =
             [one] { $count } kopie tot nu toe
            *[other] { $count } kopieën tot nu toe
         } | Reeks | Enter=gereed | basis { $x },{ $y }]:
+    .displacement = COPY  Geef verplaatsing op:
+    .mode = COPY  Geef kopieermodus op [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Geknikte straal
@@ -2118,7 +2128,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2824,6 +2834,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Verwijderen
+    .pline-specify-starting-width = PLINE  Geef beginbreedte op <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Geef eindbreedte op <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Geef halve beginbreedte op <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Geef halve eindbreedte op <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Lijn)  Geef volgend punt op:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Boog)  Geef eindpunt van boog op:
+    .pline-specify-length-of-line = PLINE  Geef lengte van lijn op:
+    .pline-specify-included-angle = PLINE  Geef ingesloten hoek op:
+    .pline-specify-endpoint-of-arc = PLINE  Geef eindpunt van boog op:
+    .pline-specify-center-point-of-arc = PLINE  Geef middelpunt van boog op:
+    .pline-specify-radius-of-arc = PLINE  Geef straal van boog op:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Geef richting van koorde van boog op:
+    .pline-specify-length-of-chord = PLINE  Geef lengte van koorde op:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Geef raaklijnrichting in beginpunt van boog op:
+    .pline-specify-second-point-on-arc = PLINE  Geef tweede punt op boog op:
+    .halfwidth = Halve breedte
+    .center-keyword = Centrum
+    .close-keyword = Sluiten
+    .second-pt = Tweede punt
+    .arc-specify-start-point-of-arc = ARC  Geef beginpunt van boog op:
+    .arc-specify-second-point-of-arc = ARC  Geef tweede punt van boog op:
+    .arc-specify-end-point-of-arc = ARC  Geef eindpunt van boog op:
+    .arc-specify-center-point-of-arc = ARC  Geef middelpunt van boog op:
+    .arc-specify-included-angle = ARC  Geef ingesloten hoek op:
+    .arc-specify-length-of-chord = ARC  Geef lengte van koorde op:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Geef raaklijnrichting in beginpunt van boog op:
+    .arc-specify-radius-of-arc = ARC  Geef straal van boog op:
+    .chord-length = Koordelengte
 
 modify =
     .add-vertex = Hoekpunt toevoegen
@@ -2976,6 +3014,13 @@ modify =
     .tol-scale-dimtfac = Tol. schaal (DIMTFAC)
     .trim = Trimmen
     .exit = Afsluiten
+    .area-keyword = Oppervlakte
+    .displacement = Verplaatsing
+    .mode-keyword = Modus
+    .array-keyword = Patroon
+    .use-first-point-as-displacement = Eerste punt als verplaatsing
+    .offset-erase-source-object-after-offsetting = OFFSET  Bronobject wissen na verschuiven? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Laag voor verschoven objecten [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Groepsnaam invoeren [__ocs_arg_name__]:
@@ -5263,6 +5308,19 @@ ui =
     .what-s-new = Wat is er nieuw?
     .width-value = Breedte: __ocs_arg_value__
     .working = Werken...
+    .recent-input = Recente invoer
+    .copy-with-base-point = Kopiëren met basispunt
+    .undo-label = Ongedaan maken __ocs_arg_label__
+    .redo-label = Opnieuw __ocs_arg_label__
+    .copy-selection = Selectie kopiëren
+    .isolate = Isoleren
+    .deselect-all = Alles deselecteren
+    .options-ellipsis = Opties...
+    .base-point = Basispunt
+    .snap-overrides = Tijdelijke snaps
+    .mid-between-2-points = Midden tussen 2 punten
+    .osnap-settings = Objectsnap-instellingen...
+    .snap-override-none-next-pick-only = Tijdelijke snap: Geen (alleen volgend punt).
 
 dimstyle =
     .keep-text-between-extension-lines = Tekst altijd tussen hulplijnen houden

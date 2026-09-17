@@ -176,6 +176,9 @@ impl OpenCADStudio {
 
     pub(super) fn cancel_active_grip_edit(&mut self) -> bool {
         let i = self.active_tab;
+        // Grip-menu toggles live only as long as the gesture.
+        self.tabs[i].grip_copy = false;
+        self.tabs[i].grip_base_pending = false;
         let had_grip = self.tabs[i].active_grip.take().is_some()
             || self.grip_add_provisional.is_some()
             || !self.grip_preview_handles.is_empty()
@@ -783,6 +786,9 @@ impl OpenCADStudio {
             }
             return Task::none();
         }
+        // Keywords, distances and points fed here (option buttons, the
+        // context menu, scripts) join the Recent Input list like typed ones.
+        self.command_line.record_recent_input(token);
         let is_mtp = token.trim_start_matches('_').eq_ignore_ascii_case("MTP")
             || token.trim_start_matches('_').eq_ignore_ascii_case("M2P");
         if is_mtp {
@@ -914,6 +920,9 @@ impl OpenCADStudio {
         );
         let task = self.apply_cmd_result_inner(result);
         let i = self.active_tab;
+        // A transparent zoom that just finished hands control back to the
+        // command it interrupted before the "command ended" bookkeeping below.
+        self.resume_transparent_parent(i);
         let preview_hidden = self.tabs[i]
             .active_cmd
             .as_ref()
@@ -1386,6 +1395,38 @@ impl OpenCADStudio {
         }
         self.refresh_properties();
         Task::none()
+    }
+
+    /// Bring back the command a transparent zoom parked, once the zoom is
+    /// over (no command active any more). No-op otherwise.
+    pub(in crate::app) fn resume_transparent_parent(&mut self, i: usize) {
+        if !self.tabs[i].transparent_resume {
+            return;
+        }
+        if self.tabs[i].active_cmd.is_some() {
+            // The transparent prompt is still up (or the parent was already
+            // restored by a Cancel).
+            if self.tabs[i].suspended_cmd.is_none() {
+                self.tabs[i].transparent_resume = false;
+            }
+            return;
+        }
+        self.tabs[i].transparent_resume = false;
+        let Some(parent) = self.tabs[i].suspended_cmd.take() else {
+            return;
+        };
+        self.tabs[i].active_cmd = Some(parent);
+        let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
+        if let Some(p) = prompt {
+            self.command_line.push_info(&p);
+        }
+        let opts = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| c.options())
+            .unwrap_or_default();
+        self.command_line.set_step_options(opts);
+        self.refresh_active_cmd_preview(i);
     }
 
     pub(in crate::app) fn start_mtp_modifier(&mut self, i: usize) {
@@ -6594,6 +6635,12 @@ impl OpenCADStudio {
                         for entity in entities {
                             command.inject_picked_entity(entity);
                         }
+                    }
+                }
+                {
+                    let tab = &mut self.tabs[i];
+                    if let Some(command) = tab.active_cmd.as_mut() {
+                        command.on_document_undone(&tab.scene.document);
                     }
                 }
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());

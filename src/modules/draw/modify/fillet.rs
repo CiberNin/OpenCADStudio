@@ -1320,6 +1320,8 @@ pub struct FilletCommand {
     /// (i.e. "R" pressed after the first object was already picked), so the
     /// command resumes at the second pick instead of restarting selection.
     resume_second: Option<(Handle, FilletEntity, [f64; 2])>,
+    /// Fillets applied by this command that Undo can still take back.
+    made: usize,
 }
 
 impl FilletCommand {
@@ -1335,6 +1337,7 @@ impl FilletCommand {
             all_entities,
             entity_index,
             resume_second: None,
+            made: 0,
         }
     }
 
@@ -1372,7 +1375,19 @@ impl FilletCommand {
         self.entity_index = ModifyEntityIndex::build(&self.all_entities);
         self.step = FilletStep::First;
         self.resume_second = None;
+        self.made += 1;
         CmdResult::ReplaceManyContinue(replacements)
+    }
+
+    /// Undo option: take back the last fillet of this command. The host
+    /// undoes the document step and then hands the restored entities back
+    /// through `on_document_undone`.
+    fn undo_last(&mut self) -> Option<CmdResult> {
+        if self.made == 0 {
+            return None;
+        }
+        self.made -= 1;
+        Some(CmdResult::UndoDocument)
     }
 }
 
@@ -1433,10 +1448,15 @@ impl CadCommand for FilletCommand {
         use crate::command::CmdOption;
 
         match self.step {
-            FilletStep::First => vec![
-                CmdOption::new("Polyline", "P"),
-                CmdOption::new("Radius", "R"),
-            ],
+            FilletStep::First => {
+                let mut opts = Vec::new();
+                if self.made > 0 {
+                    opts.push(CmdOption::new("Undo", "U"));
+                }
+                opts.push(CmdOption::new("Polyline", "P"));
+                opts.push(CmdOption::new("Radius", "R"));
+                opts
+            }
             FilletStep::Second { .. } => {
                 vec![CmdOption::new("Radius", "R")]
             }
@@ -1485,6 +1505,9 @@ impl CadCommand for FilletCommand {
                     self.step = FilletStep::Polyline;
                     return Some(CmdResult::NeedPoint);
                 }
+                if upper == "U" || upper == "UNDO" {
+                    return self.undo_last();
+                }
                 // "R" alone → enter sub-step to collect radius
                 if upper == "R" {
                     self.enter_radius_substep();
@@ -1518,6 +1541,20 @@ impl CadCommand for FilletCommand {
             FilletStep::WaitingForRadius
                 | FilletStep::RadiusSecondPoint { .. }
         )
+    }
+
+    fn on_undo_step(&mut self) -> Option<CmdResult> {
+        self.undo_last()
+    }
+
+    fn on_document_undone(&mut self, document: &acadrust::CadDocument) {
+        self.all_entities = document
+            .entities()
+            .map(crate::entities::curve::entity_with_lwpolyline_world_xy)
+            .collect();
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+        self.step = FilletStep::First;
+        self.resume_second = None;
     }
 
     fn on_entity_pick(&mut self, handle: Handle, pt: DVec3) -> CmdResult {
@@ -1848,6 +1885,10 @@ pub struct ChamferCommand {
     /// distance entry made mid-selection, so the command resumes at the
     /// second pick instead of restarting selection.
     resume_pick: Option<ChamferStep>,
+    /// Multiple option: keep chamfering until Enter / Esc.
+    multiple: bool,
+    /// Chamfers applied by this command that Undo can still take back.
+    made: usize,
 }
 
 impl ChamferCommand {
@@ -1864,6 +1905,8 @@ impl ChamferCommand {
             all_entities,
             entity_index,
             resume_pick: None,
+            multiple: false,
+            made: 0,
         }
     }
 
@@ -1889,6 +1932,37 @@ impl ChamferCommand {
     /// object was already chosen, otherwise restarting at the first pick.
     fn resume_after_dist(&mut self) {
         self.step = self.resume_pick.take().unwrap_or(ChamferStep::First);
+    }
+
+    /// Publish a chamfer. Single mode replaces and ends; Multiple mode
+    /// replaces, refreshes the cached entities and returns to the first pick.
+    fn commit(&mut self, replacements: Vec<(Handle, Vec<EntityType>)>) -> CmdResult {
+        if !self.multiple {
+            return CmdResult::ReplaceMany(replacements, vec![]);
+        }
+        self.all_entities.retain(|entity| {
+            !replacements
+                .iter()
+                .any(|(handle, _)| entity.common().handle == *handle)
+        });
+        self.all_entities.extend(
+            replacements
+                .iter()
+                .flat_map(|(_, entities)| entities.iter().cloned()),
+        );
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+        self.step = ChamferStep::First;
+        self.resume_pick = None;
+        self.made += 1;
+        CmdResult::ReplaceManyContinue(replacements)
+    }
+
+    fn undo_last(&mut self) -> Option<CmdResult> {
+        if self.made == 0 {
+            return None;
+        }
+        self.made -= 1;
+        Some(CmdResult::UndoDocument)
     }
 }
 
@@ -1944,10 +2018,19 @@ impl CadCommand for ChamferCommand {
         use crate::command::CmdOption;
 
         match self.step {
-            ChamferStep::First
-            | ChamferStep::Second { .. }
-            | ChamferStep::SecondPoly { .. } => {
-                vec![CmdOption::new(t!("Distance").as_ref(), "D")]
+            ChamferStep::First => {
+                let mut opts = Vec::new();
+                if self.made > 0 {
+                    opts.push(CmdOption::new("Undo", "U"));
+                }
+                opts.push(CmdOption::new("Distance", "D"));
+                if !self.multiple {
+                    opts.push(CmdOption::new("Multiple", "M"));
+                }
+                opts
+            }
+            ChamferStep::Second { .. } | ChamferStep::SecondPoly { .. } => {
+                vec![CmdOption::new("Distance", "D")]
             }
             ChamferStep::WaitingForDist1 | ChamferStep::WaitingForDist2 => vec![],
         }
@@ -2010,6 +2093,16 @@ impl CadCommand for ChamferCommand {
             | ChamferStep::SecondPoly { .. } => {
                 let t = text.trim();
                 let upper = t.to_uppercase();
+                if matches!(self.step, ChamferStep::First) {
+                    match upper.as_str() {
+                        "M" | "MULTIPLE" => {
+                            self.multiple = true;
+                            return Some(CmdResult::NeedPoint);
+                        }
+                        "U" | "UNDO" => return self.undo_last(),
+                        _ => {}
+                    }
+                }
                 // "D" alone → enter sub-step to collect distances
                 if upper == "D" {
                     self.enter_dist_substep();
@@ -2043,6 +2136,20 @@ impl CadCommand for ChamferCommand {
                 None
             }
         }
+    }
+
+    fn on_undo_step(&mut self) -> Option<CmdResult> {
+        self.undo_last()
+    }
+
+    fn on_document_undone(&mut self, document: &acadrust::CadDocument) {
+        self.all_entities = document
+            .entities()
+            .map(crate::entities::curve::entity_with_lwpolyline_world_xy)
+            .collect();
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+        self.step = ChamferStep::First;
+        self.resume_pick = None;
     }
 
     fn needs_entity_pick(&self) -> bool {
@@ -2093,7 +2200,7 @@ impl CadCommand for ChamferCommand {
                     return CmdResult::NeedPoint;
                 }
                 match chamfer_lwpoly_corner(&poly, click1, self.dist1, click, self.dist2) {
-                    Some(new_poly) => CmdResult::ReplaceMany(vec![(h1, vec![new_poly])], vec![]),
+                    Some(new_poly) => self.commit(vec![(h1, vec![new_poly])]),
                     None => CmdResult::NeedPoint,
                 }
             }
@@ -2118,10 +2225,22 @@ impl CadCommand for ChamferCommand {
 
                 if let Some(l2) = l2 {
                     match compute_chamfer(&l1, click1, self.dist1, &l2, click, self.dist2) {
-                        Some((new_l1, new_l2, chamfer_line)) => CmdResult::ReplaceMany(
-                            vec![(h1, vec![new_l1]), (handle, vec![new_l2])],
-                            vec![chamfer_line],
-                        ),
+                        Some((new_l1, new_l2, chamfer_line)) => {
+                            // Single mode adds the chamfer line as a new entity;
+                            // Multiple folds it into the first line's replacement
+                            // so the command can carry on.
+                            if self.multiple {
+                                self.commit(vec![
+                                    (h1, vec![new_l1, chamfer_line]),
+                                    (handle, vec![new_l2]),
+                                ])
+                            } else {
+                                CmdResult::ReplaceMany(
+                                    vec![(h1, vec![new_l1]), (handle, vec![new_l2])],
+                                    vec![chamfer_line],
+                                )
+                            }
+                        }
                         None => CmdResult::NeedPoint,
                     }
                 } else {
@@ -2243,6 +2362,61 @@ mod tests {
         let mut line = LineEnt::from_coords(x1, y1, 0.0, x2, y2, 0.0);
         line.common.handle = Handle::new(handle);
         EntityType::Line(line)
+    }
+
+    fn keywords(cmd: &dyn CadCommand) -> Vec<String> {
+        cmd.options().into_iter().map(|o| o.keyword).collect()
+    }
+
+    #[test]
+    fn fillet_undo_option_appears_after_a_fillet_and_refreshes_from_document() {
+        let mut command = FilletCommand::new(
+            1.0,
+            vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)],
+        );
+        assert_eq!(keywords(&command), ["P", "R"]);
+        assert!(command.on_text_input("U").is_none(), "nothing to undo yet");
+        command.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
+        assert!(matches!(
+            command.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)),
+            CmdResult::ReplaceManyContinue(_)
+        ));
+        assert_eq!(keywords(&command), ["U", "P", "R"]);
+        assert!(matches!(command.on_text_input("U"), Some(CmdResult::UndoDocument)));
+        assert_eq!(keywords(&command), ["P", "R"]);
+        // The host hands the restored document back; the cache follows it.
+        let mut doc = acadrust::CadDocument::new();
+        doc.add_entity(line(0.0, 0.0, 20.0, 0.0, 7));
+        command.on_document_undone(&doc);
+        assert_eq!(command.all_entities.len(), 1);
+        assert_eq!(command.all_entities[0].common().handle, Handle::new(7));
+    }
+
+    #[test]
+    fn chamfer_multiple_keeps_going_and_single_ends() {
+        let lines = || vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)];
+        let mut single = ChamferCommand::new(1.0, lines());
+        assert_eq!(keywords(&single), ["D", "M"]);
+        single.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
+        assert!(matches!(
+            single.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)),
+            CmdResult::ReplaceMany(..)
+        ));
+
+        let mut multi = ChamferCommand::new(1.0, lines());
+        assert!(matches!(multi.on_text_input("M"), Some(CmdResult::NeedPoint)));
+        assert_eq!(keywords(&multi), ["D"], "Multiple is not offered twice");
+        multi.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
+        match multi.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)) {
+            CmdResult::ReplaceManyContinue(replacements) => {
+                // The chamfer line rides along with the first line's replacement.
+                assert_eq!(replacements[0].1.len(), 2);
+                assert_eq!(replacements[1].1.len(), 1);
+            }
+            _ => panic!("multiple mode should keep the command active"),
+        }
+        assert_eq!(keywords(&multi), ["U", "D"]);
+        assert!(matches!(multi.on_text_input("U"), Some(CmdResult::UndoDocument)));
     }
 
     #[test]

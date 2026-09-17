@@ -57,6 +57,13 @@ options =
     .default-application = Výchozí aplikace
     .iced-theme = Motiv Iced:
     .theme = Motiv
+    .right-click-customization = Přizpůsobení pravého tlačítka
+    .right-click-in-drawing-area = Pravé tlačítko v kreslicí ploše
+    .hold-duration = Doba podržení
+    .right-click-mode-help = Kontextová nabídka: pravé tlačítko vždy otevře nabídku. Časově citlivé: krátké kliknutí je Enter, delší podržení otevře nabídku (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Kontextová nabídka
+    .right-click-mode-time-sensitive = Časově citlivé (krátké kliknutí = Enter)
+    .right-click-mode-enter-first = Nejprve Enter, druhé kliknutí = nabídka
 
 command-line =
     .ready = Open CAD Studio je připraveno.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } objektů
         }]:
     .target = MOVE Zadejte cíl [základ { $x },{ $y }]:
+    .displacement = MOVE  Zadejte posunutí:
 
 command-copy =
     .array-count = COPY Enter počet položek do pole:
@@ -258,6 +266,8 @@ command-copy =
             [one] zatím { $count } kopie
            *[other] zatím { $count } kopií
         } | Pole | Enter=hotovo | základna { $x },{ $y }]:
+    .displacement = COPY  Zadejte posunutí:
+    .mode = COPY  Zadejte režim kopírování [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Zalomený poloměr
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2823,6 +2833,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Odebrat
+    .pline-specify-starting-width = PLINE  Zadejte počáteční šířku <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Zadejte koncovou šířku <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Zadejte počáteční poloviční šířku <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Zadejte koncovou poloviční šířku <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Úsečka)  Zadejte další bod:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Oblouk)  Zadejte koncový bod oblouku:
+    .pline-specify-length-of-line = PLINE  Zadejte délku úsečky:
+    .pline-specify-included-angle = PLINE  Zadejte středový úhel:
+    .pline-specify-endpoint-of-arc = PLINE  Zadejte koncový bod oblouku:
+    .pline-specify-center-point-of-arc = PLINE  Zadejte střed oblouku:
+    .pline-specify-radius-of-arc = PLINE  Zadejte poloměr oblouku:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Zadejte směr tětivy oblouku:
+    .pline-specify-length-of-chord = PLINE  Zadejte délku tětivy:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Zadejte směr tečny v počátečním bodě oblouku:
+    .pline-specify-second-point-on-arc = PLINE  Zadejte druhý bod na oblouku:
+    .halfwidth = Poloviční šířka
+    .center-keyword = Střed
+    .close-keyword = Uzavřít
+    .second-pt = Druhý bod
+    .arc-specify-start-point-of-arc = ARC  Zadejte počáteční bod oblouku:
+    .arc-specify-second-point-of-arc = ARC  Zadejte druhý bod oblouku:
+    .arc-specify-end-point-of-arc = ARC  Zadejte koncový bod oblouku:
+    .arc-specify-center-point-of-arc = ARC  Zadejte střed oblouku:
+    .arc-specify-included-angle = ARC  Zadejte středový úhel:
+    .arc-specify-length-of-chord = ARC  Zadejte délku tětivy:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Zadejte směr tečny v počátečním bodě oblouku:
+    .arc-specify-radius-of-arc = ARC  Zadejte poloměr oblouku:
+    .chord-length = Délka tětivy
 
 modify =
     .add-vertex = Přidat vrchol
@@ -2975,6 +3013,13 @@ modify =
     .tol-scale-dimtfac = Tol. měřítko (DIMTFAC)
     .trim = Oříznout
     .exit = výstup
+    .area-keyword = Plocha
+    .displacement = Posunutí
+    .mode-keyword = Režim
+    .array-keyword = Pole
+    .use-first-point-as-displacement = První bod jako posunutí
+    .offset-erase-source-object-after-offsetting = OFFSET  Vymazat zdrojový objekt po odsazení? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Hladina odsazených objektů [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Enter název skupiny [__ocs_arg_name__]:
@@ -5262,6 +5307,19 @@ ui =
     .what-s-new = Co je nového
     .width-value = Šířka: __ocs_arg_value__
     .working = Práce…
+    .recent-input = Poslední zadání
+    .copy-with-base-point = Kopírovat s referenčním bodem
+    .undo-label = Zpět __ocs_arg_label__
+    .redo-label = Znovu __ocs_arg_label__
+    .copy-selection = Kopírovat výběr
+    .isolate = Izolovat
+    .deselect-all = Zrušit výběr
+    .options-ellipsis = Možnosti...
+    .base-point = Referenční bod
+    .snap-overrides = Dočasné uchopení
+    .mid-between-2-points = Střed mezi 2 body
+    .osnap-settings = Nastavení uchopení...
+    .snap-override-none-next-pick-only = Dočasné uchopení: Žádné (jen pro další bod).
 
 dimstyle =
     .keep-text-between-extension-lines = Vždy ponechte text mezi vynášecími řádky

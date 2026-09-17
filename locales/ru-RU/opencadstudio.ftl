@@ -57,6 +57,13 @@ options =
     .default-application = Применение по умолчанию
     .iced-theme = Тема ICED:
     .theme = Тема
+    .right-click-customization = Настройка правой кнопки мыши
+    .right-click-in-drawing-area = Правая кнопка в области чертежа
+    .hold-duration = Длительность удержания
+    .right-click-mode-help = Контекстное меню: правая кнопка всегда открывает меню. С учётом времени: короткий щелчок — Enter, удержание открывает меню (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Контекстное меню
+    .right-click-mode-time-sensitive = С учётом времени (короткий щелчок = Enter)
+    .right-click-mode-enter-first = Сначала Enter, второй щелчок = меню
 
 command-line =
     .ready = Open CAD Studio готов.
@@ -246,6 +253,7 @@ command-move =
            *[many] { $count } объектов
         }]:
     .target = MOVE  Укажите точку назначения  [база { $x },{ $y }]:
+    .displacement = MOVE  Укажите перемещение:
 
 command-copy =
     .array-count = COPY  Введите число элементов массива:
@@ -262,6 +270,8 @@ command-copy =
             [few] создано { $count } копии
            *[many] создано { $count } копий
         } | Массив | Enter=готово | база { $x },{ $y }]:
+    .displacement = COPY  Укажите перемещение:
+    .mode = COPY  Задайте режим копирования [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Радиус с изломом
@@ -2121,7 +2131,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2827,6 +2837,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Удалить
+    .pline-specify-starting-width = PLINE  Укажите начальную ширину <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Укажите конечную ширину <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Укажите начальную полуширину <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Укажите конечную полуширину <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Линия)  Укажите следующую точку:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Дуга)  Укажите конечную точку дуги:
+    .pline-specify-length-of-line = PLINE  Укажите длину линии:
+    .pline-specify-included-angle = PLINE  Укажите центральный угол:
+    .pline-specify-endpoint-of-arc = PLINE  Укажите конечную точку дуги:
+    .pline-specify-center-point-of-arc = PLINE  Укажите центр дуги:
+    .pline-specify-radius-of-arc = PLINE  Укажите радиус дуги:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Укажите направление хорды дуги:
+    .pline-specify-length-of-chord = PLINE  Укажите длину хорды:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Укажите направление касательной в начальной точке дуги:
+    .pline-specify-second-point-on-arc = PLINE  Укажите вторую точку дуги:
+    .halfwidth = Полуширина
+    .center-keyword = Центр
+    .close-keyword = Замкнуть
+    .second-pt = Вторая точка
+    .arc-specify-start-point-of-arc = ARC  Укажите начальную точку дуги:
+    .arc-specify-second-point-of-arc = ARC  Укажите вторую точку дуги:
+    .arc-specify-end-point-of-arc = ARC  Укажите конечную точку дуги:
+    .arc-specify-center-point-of-arc = ARC  Укажите центр дуги:
+    .arc-specify-included-angle = ARC  Укажите центральный угол:
+    .arc-specify-length-of-chord = ARC  Укажите длину хорды:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Укажите направление касательной в начальной точке дуги:
+    .arc-specify-radius-of-arc = ARC  Укажите радиус дуги:
+    .chord-length = Длина хорды
 
 modify =
     .add-vertex = Добавить вершину
@@ -2979,6 +3017,13 @@ modify =
     .tol-scale-dimtfac = Масштаб допуска (DIMTFAC)
     .trim = Усечь
     .exit = ЭКСИТ
+    .area-keyword = Площадь
+    .displacement = Перемещение
+    .mode-keyword = Режим
+    .array-keyword = Массив
+    .use-first-point-as-displacement = Первая точка как перемещение
+    .offset-erase-source-object-after-offsetting = OFFSET  Удалить исходный объект после смещения? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Слой для смещённых объектов [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Введите название группы [__ocs_arg_name__]:
@@ -5266,6 +5311,19 @@ ui =
     .what-s-new = Что нового
     .width-value = Ширина: __ocs_arg_value__
     .working = Работать...
+    .recent-input = Недавний ввод
+    .copy-with-base-point = Копировать с базовой точкой
+    .undo-label = Отменить __ocs_arg_label__
+    .redo-label = Повторить __ocs_arg_label__
+    .copy-selection = Копировать выбранное
+    .isolate = Изолировать
+    .deselect-all = Снять выделение
+    .options-ellipsis = Параметры...
+    .base-point = Базовая точка
+    .snap-overrides = Разовые привязки
+    .mid-between-2-points = Середина между 2 точками
+    .osnap-settings = Настройки привязки...
+    .snap-override-none-next-pick-only = Разовая привязка: Нет (только следующая точка).
 
 dimstyle =
     .keep-text-between-extension-lines = Всегда размещать текст между выносными линиями

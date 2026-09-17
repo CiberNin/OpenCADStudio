@@ -57,6 +57,13 @@ options =
     .default-application = 기본 애플리케이션
     .iced-theme = Iced 테마:
     .theme = 테마
+    .right-click-customization = 오른쪽 클릭 사용자화
+    .right-click-in-drawing-area = 도면 영역에서 오른쪽 클릭
+    .hold-duration = 누르는 시간
+    .right-click-mode-help = 바로 가기 메뉴: 오른쪽 클릭 시 항상 메뉴를 엽니다. 시간 민감: 짧은 클릭은 Enter, 길게 누르면 메뉴가 열립니다 (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = 바로 가기 메뉴
+    .right-click-mode-time-sensitive = 시간 민감 (짧은 클릭 = Enter)
+    .right-click-mode-enter-first = 먼저 Enter, 두 번째 클릭 = 메뉴
 
 command-line =
     .ready = Open CAD Studio가 준비되었습니다.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } 객체
         }]:
     .target = MOVE 대상 지정 [기본 { $x },{ $y }]:
+    .displacement = MOVE  변위 지정:
 
 command-copy =
     .array-count = COPY Enter 배열할 항목 수:
@@ -258,6 +266,8 @@ command-copy =
             [one] { $count } 지금까지 복사
            *[other] { $count } 지금까지의 사본
         } | 배열 | Enter=완료 | 베이스 { $x },{ $y }]:
+    .displacement = COPY  변위 지정:
+    .mode = COPY  복사 모드 옵션 입력 [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = 꺾인 반지름
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2823,6 +2833,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = 제거
+    .pline-specify-starting-width = PLINE  시작 폭 지정 <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  끝 폭 지정 <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  시작 반폭 지정 <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  끝 반폭 지정 <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (선)  다음 점 지정:
+    .pline-arc-specify-endpoint-of-arc = PLINE (호)  호의 끝점 지정:
+    .pline-specify-length-of-line = PLINE  선의 길이 지정:
+    .pline-specify-included-angle = PLINE  사이각 지정:
+    .pline-specify-endpoint-of-arc = PLINE  호의 끝점 지정:
+    .pline-specify-center-point-of-arc = PLINE  호의 중심점 지정:
+    .pline-specify-radius-of-arc = PLINE  호의 반지름 지정:
+    .pline-specify-direction-of-chord-for-arc = PLINE  호의 현 방향 지정:
+    .pline-specify-length-of-chord = PLINE  현의 길이 지정:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  호 시작점의 접선 방향 지정:
+    .pline-specify-second-point-on-arc = PLINE  호의 두 번째 점 지정:
+    .halfwidth = 반폭
+    .center-keyword = 중심
+    .close-keyword = 닫기
+    .second-pt = 두 번째 점
+    .arc-specify-start-point-of-arc = ARC  호의 시작점 지정:
+    .arc-specify-second-point-of-arc = ARC  호의 두 번째 점 지정:
+    .arc-specify-end-point-of-arc = ARC  호의 끝점 지정:
+    .arc-specify-center-point-of-arc = ARC  호의 중심점 지정:
+    .arc-specify-included-angle = ARC  사이각 지정:
+    .arc-specify-length-of-chord = ARC  현의 길이 지정:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  호 시작점의 접선 방향 지정:
+    .arc-specify-radius-of-arc = ARC  호의 반지름 지정:
+    .chord-length = 현 길이
 
 modify =
     .add-vertex = 정점 추가
@@ -2975,6 +3013,13 @@ modify =
     .tol-scale-dimtfac = 톨. 스케일(DIMTFAC)
     .trim = 트림
     .exit = 종료
+    .area-keyword = 면적
+    .displacement = 변위
+    .mode-keyword = 모드
+    .array-keyword = 배열
+    .use-first-point-as-displacement = 첫 번째 점을 변위로 사용
+    .offset-erase-source-object-after-offsetting = OFFSET  간격띄우기 후 원본 객체를 지우시겠습니까? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  간격띄우기 객체의 도면층 옵션 입력 [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Enter 그룹 이름 [__ocs_arg_name__]:
@@ -5264,6 +5309,19 @@ ui =
     .what-s-new = 새로운 소식
     .width-value = 폭: __ocs_arg_value__
     .working = 일하는 중…
+    .recent-input = 최근 입력
+    .copy-with-base-point = 기준점과 함께 복사
+    .undo-label = 명령 취소 __ocs_arg_label__
+    .redo-label = 명령 복구 __ocs_arg_label__
+    .copy-selection = 선택 복사
+    .isolate = 분리
+    .deselect-all = 선택 해제
+    .options-ellipsis = 옵션...
+    .base-point = 기준점
+    .snap-overrides = 스냅 재지정
+    .mid-between-2-points = 두 점 사이의 중간
+    .osnap-settings = 객체 스냅 설정...
+    .snap-override-none-next-pick-only = 스냅 재지정: 없음 (다음 선택만).
 
 dimstyle =
     .keep-text-between-extension-lines = 보조선 사이에 항상 텍스트 유지

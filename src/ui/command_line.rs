@@ -14,6 +14,9 @@ use std::ops::Range;
 
 use crate::ui::style::common::accessible_accent_threshold;
 
+/// Maximum entries kept for the context menu's "Recent Input" list.
+pub const RECENT_INPUT_CAP: usize = 10;
+
 pub const CMD_INPUT_ID: &str = "cmd_input";
 pub const HISTORY_SCROLL_ID: &str = "command_history_scroll";
 
@@ -68,15 +71,28 @@ fn mcp_status(enabled: bool, busy: bool) -> (&'static str, Color) {
 }
 
 /// Drop a prompt's "[A / B / …]" option listing — used for the pinned line
-/// when the same options render as clickable buttons beside it. Collapses the
-/// leftover double spaces and the orphaned " :" the removal leaves behind.
-fn strip_option_listing(s: &str) -> String {
+/// when the same options render as clickable buttons beside it. Only a
+/// bracket group that reads as a listing goes (several choices, or a single
+/// choice that is one of `options`); an informational group such as
+/// "[3 objects]" or "[base 1.0,2.0]" stays. Collapses the leftover double
+/// spaces and the orphaned " :" the removal leaves behind.
+fn strip_option_listing(s: &str, options: &[CmdOption]) -> String {
     let Some(a) = s.find('[') else {
         return s.to_string();
     };
     let Some(off) = s[a..].find(']') else {
         return s.to_string();
     };
+    let inner = s[a + 1..a + off].trim();
+    let is_listing = inner.contains('/')
+        || inner.contains('|')
+        || inner.contains('=')
+        || options.iter().any(|o| {
+            o.label.eq_ignore_ascii_case(inner) || o.keyword.eq_ignore_ascii_case(inner)
+        });
+    if !is_listing {
+        return s.to_string();
+    }
     let mut out = format!("{}{}", &s[..a], &s[a + off + 1..]);
     while out.contains("  ") {
         out = out.replace("  ", " ");
@@ -120,6 +136,10 @@ pub struct CommandLine {
     /// context menu, shortcuts), newest last. Drives the right-click "Repeat"
     /// menu so it reflects every command source, not only typed ones.
     pub recent_commands: Vec<String>,
+    /// Tokens typed into a running command (points, distances, keywords),
+    /// newest first, de-duplicated. Drives the context menu's "Recent Input"
+    /// submenu so a value can be re-fed with one click. Not persisted.
+    pub recent_inputs: Vec<String>,
     /// Current position in `cmd_recall` while navigating (None = not navigating).
     recall_cursor: Option<usize>,
     /// Saved draft input before the user started navigating history.
@@ -168,6 +188,7 @@ impl Default for CommandLine {
             last_error: None,
             cmd_recall: Vec::new(),
             recent_commands: Vec::new(),
+            recent_inputs: Vec::new(),
             recall_cursor: None,
             recall_draft: String::new(),
             history_open: false,
@@ -307,6 +328,22 @@ impl CommandLine {
             }
         }
         self.cancel_history_navigation();
+    }
+
+    /// Remember a token fed to a running command for the "Recent Input"
+    /// submenu: newest first, case-insensitive move-to-front de-duplication,
+    /// capped at `RECENT_INPUT_CAP`. Empty, overly long and entity-handle
+    /// tokens are skipped (a handle is meaningless outside the pick it
+    /// answered).
+    pub fn record_recent_input(&mut self, token: &str) {
+        let token = token.trim();
+        if token.is_empty() || token.chars().count() > 40 {
+            return;
+        }
+        let upper = token.to_uppercase();
+        self.recent_inputs.retain(|t| t.to_uppercase() != upper);
+        self.recent_inputs.insert(0, token.to_string());
+        self.recent_inputs.truncate(RECENT_INPUT_CAP);
     }
 
     pub fn history_navigation_active(&self) -> bool {
@@ -463,6 +500,24 @@ impl CommandLine {
         e.pinned || (self.fade_ms > 0 && e.created_at.elapsed().as_secs_f32() < self.fade_secs())
     }
 
+    /// Height of the overlaid prompt lines currently shown above the input
+    /// row (CLIPROMPTLINES, minus lines that have faded out), in pixels. Lets
+    /// cursor-anchored panels stay clear of the whole command area, not just
+    /// the input row.
+    pub fn overlay_lines_height(&self) -> f32 {
+        if self.cliprompt_lines == 0 || self.history_open {
+            return 0.0;
+        }
+        let visible = self
+            .history
+            .iter()
+            .filter(|e| self.entry_visible(e))
+            .count()
+            .min(self.cliprompt_lines as usize);
+        // Text size 12 (line height ≈ 15.6) plus the 1 px padding each side.
+        visible as f32 * 18.0
+    }
+
     /// Visible overlay count respecting CLIPROMPTLINES (0–50). Used in tests.
     #[cfg(test)]
     pub fn visible_history_count(&self) -> usize {
@@ -614,7 +669,7 @@ impl CommandLine {
                 // already name every choice, so the prompt's own "[A / B / …]"
                 // listing is dropped here (the history log keeps the full text).
                 if entry.pinned && !self.step_options.is_empty() {
-                    let shown = strip_option_listing(&entry.text);
+                    let shown = strip_option_listing(&entry.text, &self.step_options);
                     let mut r = row![entry_text(shown)].spacing(6).align_y(iced::Center);
                     for opt in &self.step_options {
                         let btn = button(text(opt.label.to_uppercase()).size(11))

@@ -57,6 +57,13 @@ options =
     .default-application = التطبيق الافتراضي
     .iced-theme = سمة Iced:
     .theme = السمة
+    .right-click-customization = تخصيص النقر بالزر الأيمن
+    .right-click-in-drawing-area = النقر بالزر الأيمن في منطقة الرسم
+    .hold-duration = مدة الضغط
+    .right-click-mode-help = قائمة الاختصارات: النقر بالزر الأيمن يفتح القائمة دائمًا. حساس للوقت: النقرة السريعة تعني Enter، والضغط المطوّل يفتح القائمة (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = قائمة الاختصارات
+    .right-click-mode-time-sensitive = حساس للوقت (نقرة سريعة = Enter)
+    .right-click-mode-enter-first = Enter أولًا، النقرة الثانية = القائمة
 
 command-line =
     .ready = ‏Open CAD Studio جاهز.
@@ -249,6 +256,7 @@ command-move =
            *[other] { $count } كائن
         }]:
     .target = MOVE  حدد الوجهة  [الأساس { $x },{ $y }]:
+    .displacement = MOVE  حدد الإزاحة:
 
 command-copy =
     .array-count = COPY  أدخل عدد عناصر المصفوفة:
@@ -271,6 +279,8 @@ command-copy =
             [many] { $count } نسخة حتى الآن
            *[other] { $count } نسخة حتى الآن
         } | مصفوفة | Enter=إنهاء | الأساس { $x },{ $y }]:
+    .displacement = COPY  حدد الإزاحة:
+    .mode = COPY  أدخل خيار وضع النسخ [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = نصف قطر منكسر
@@ -2130,7 +2140,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2836,6 +2846,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = إزالة
+    .pline-specify-starting-width = PLINE  حدد عرض البداية <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  حدد عرض النهاية <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  حدد نصف عرض البداية <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  حدد نصف عرض النهاية <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (خط)  حدد النقطة التالية:
+    .pline-arc-specify-endpoint-of-arc = PLINE (قوس)  حدد نقطة نهاية القوس:
+    .pline-specify-length-of-line = PLINE  حدد طول الخط:
+    .pline-specify-included-angle = PLINE  حدد الزاوية المحصورة:
+    .pline-specify-endpoint-of-arc = PLINE  حدد نقطة نهاية القوس:
+    .pline-specify-center-point-of-arc = PLINE  حدد مركز القوس:
+    .pline-specify-radius-of-arc = PLINE  حدد نصف قطر القوس:
+    .pline-specify-direction-of-chord-for-arc = PLINE  حدد اتجاه وتر القوس:
+    .pline-specify-length-of-chord = PLINE  حدد طول الوتر:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  حدد اتجاه المماس عند نقطة بداية القوس:
+    .pline-specify-second-point-on-arc = PLINE  حدد النقطة الثانية على القوس:
+    .halfwidth = نصف العرض
+    .center-keyword = المركز
+    .close-keyword = إغلاق
+    .second-pt = النقطة الثانية
+    .arc-specify-start-point-of-arc = ARC  حدد نقطة بداية القوس:
+    .arc-specify-second-point-of-arc = ARC  حدد النقطة الثانية للقوس:
+    .arc-specify-end-point-of-arc = ARC  حدد نقطة نهاية القوس:
+    .arc-specify-center-point-of-arc = ARC  حدد مركز القوس:
+    .arc-specify-included-angle = ARC  حدد الزاوية المحصورة:
+    .arc-specify-length-of-chord = ARC  حدد طول الوتر:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  حدد اتجاه المماس عند نقطة بداية القوس:
+    .arc-specify-radius-of-arc = ARC  حدد نصف قطر القوس:
+    .chord-length = طول الوتر
 
 modify =
     .add-vertex = إضافة رأس
@@ -2988,6 +3026,13 @@ modify =
     .tol-scale-dimtfac = مقياس التفاوت (DIMTFAC)
     .trim = قص
     .exit = خروج
+    .area-keyword = المساحة
+    .displacement = إزاحة
+    .mode-keyword = الوضع
+    .array-keyword = مصفوفة
+    .use-first-point-as-displacement = استخدام النقطة الأولى كإزاحة
+    .offset-erase-source-object-after-offsetting = OFFSET  مسح الكائن المصدر بعد الإزاحة؟ [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  أدخل خيار الطبقة للكائنات المزاحة [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP  أدخل اسم المجموعة [__ocs_arg_name__]:
@@ -5277,6 +5322,19 @@ ui =
     .what-s-new = ما الجديد
     .width-value = العرض: __ocs_arg_value__
     .working = جارٍ العمل…
+    .recent-input = الإدخالات الأخيرة
+    .copy-with-base-point = نسخ مع نقطة أساس
+    .undo-label = تراجع عن __ocs_arg_label__
+    .redo-label = إعادة __ocs_arg_label__
+    .copy-selection = نسخ التحديد
+    .isolate = عزل
+    .deselect-all = إلغاء تحديد الكل
+    .options-ellipsis = خيارات...
+    .base-point = نقطة الأساس
+    .snap-overrides = تجاوزات الالتقاط
+    .mid-between-2-points = المنتصف بين نقطتين
+    .osnap-settings = إعدادات الالتقاط...
+    .snap-override-none-next-pick-only = تجاوز الالتقاط: بدون (للاختيار التالي فقط).
 
 dimstyle =
     .keep-text-between-extension-lines = إبقاء النص دائمًا بين خطوط الامتداد

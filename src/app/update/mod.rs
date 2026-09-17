@@ -90,6 +90,7 @@ fn reorder_insertion_index(from: usize, to: usize, after: bool, len: usize) -> O
 }
 
 mod command;
+mod context_menu;
 mod dialog;
 mod dynamic;
 mod file;
@@ -299,6 +300,14 @@ impl OpenCADStudio {
             }
             if is_modal_blocked_key_msg(&msg) {
                 return Task::none();
+            }
+        }
+        // The open right-click context menu owns the keyboard the same way:
+        // arrows / Enter / mnemonic letters drive it, any other key closes it
+        // and falls through to the command line (the behaviour of commercial solutions).
+        if self.context_menu_open() {
+            if let Some(task) = self.intercept_context_menu_key(&msg) {
+                return task;
             }
         }
         let task = self.update_inner(msg);
@@ -742,6 +751,14 @@ impl OpenCADStudio {
                     .unwrap_or("Snap");
                 self.command_line
                     .push_info(crate::tf!("Snap override: {label} (next pick only).").as_ref());
+                Task::none()
+            }
+
+            Message::SnapOverrideNone => {
+                self.snap_override_popup = None;
+                self.snapper.set_override_none();
+                self.command_line
+                    .push_info(crate::t!("Snap override: None (next pick only).").as_ref());
                 Task::none()
             }
 
@@ -3536,6 +3553,10 @@ impl OpenCADStudio {
                     return Task::none();
                 }
                 let was_click = !sel.right_dragging;
+                // How long the button was held, for the time-sensitive mode.
+                let held_ms = sel
+                    .right_press_time
+                    .map_or(0, |t| t.elapsed().as_millis() as i32);
                 sel.right_down = false;
                 sel.right_press_pos = None;
                 sel.right_press_time = None;
@@ -3560,21 +3581,43 @@ impl OpenCADStudio {
                     drop(sel);
                     return self.update(Message::CommandFinalize);
                 }
-                // A right-click (no orbit). While a command is active the first
-                // right-click acts as Enter (commit / close); a second
-                // consecutive right-click opens the context menu instead. When
-                // idle it always opens the menu. (Right-drag, handled above,
-                // always orbits.) Any other interaction — a left-click pick or a
-                // new command — resets the cycle so the next right-click is Enter.
-                if self.tabs[i].active_cmd.is_some() && !sel.right_click_entered {
+                // A right-click. What it does is the user's choice (Options →
+                // User Preferences, SHORTCUTMENU in commercial solutions):
+                //  • Shortcut menu — always open the context menu, whose
+                //    default row (Enter / Repeat) sits under the pointer.
+                //  • Time-sensitive — a quick click is Enter while a command
+                //    runs (repeat the last command when idle); a held click
+                //    opens the menu.
+                //  • Enter first — while a command is active the first
+                //    right-click acts as Enter and a second consecutive one
+                //    opens the menu; idle always opens the menu. Any other
+                //    interaction — a left-click pick or a new command — resets
+                //    that cycle so the next right-click is Enter again.
+                let has_cmd = self.tabs[i].active_cmd.is_some();
+                let open_menu = match self.right_click_mode {
+                    super::settings::RightClickMode::ShortcutMenu => true,
+                    super::settings::RightClickMode::TimeSensitive => {
+                        held_ms >= self.right_click_hold_ms
+                    }
+                    super::settings::RightClickMode::EnterFirst => {
+                        !(has_cmd && !sel.right_click_entered)
+                    }
+                };
+                if !open_menu {
                     sel.right_click_entered = true;
                     drop(sel);
+                    // CommandFinalize is Enter during a command and "repeat
+                    // the last command" when idle — exactly the quick
+                    // right-click.
                     return self.update(Message::CommandFinalize);
                 }
                 sel.right_click_entered = false;
-                sel.context_menu = Some(click_pos);
-                sel.draworder_submenu = false;
-                Task::none()
+                sel.open_context_menu(click_pos);
+                drop(sel);
+                // Take the keyboard away from the command-line field so keys
+                // reach the menu through the global subscription; the field
+                // is re-focused when the menu closes.
+                self.unfocus_widgets()
             }
 
             Message::ViewportMiddlePress => self.on_viewport_middle_press(),
@@ -5336,12 +5379,9 @@ impl OpenCADStudio {
                 self.post_editor_closed(committed)
             }
 
-            Message::DrawOrderSubmenuToggle => {
-                let i = self.active_tab;
-                let mut sel = self.tabs[i].scene.selection.borrow_mut();
-                sel.draworder_submenu = !sel.draworder_submenu;
-                Task::none()
-            }
+            Message::ContextMenuPick(action) => self.on_context_menu_pick(action),
+            Message::ContextMenuSubmenuToggle(id) => self.on_context_menu_submenu_toggle(id),
+            Message::ContextMenuNavigate(nav) => self.on_context_menu_navigate(nav),
 
             Message::DrawOrderPickRef(above) => {
                 let i = self.active_tab;
@@ -7232,6 +7272,18 @@ impl OpenCADStudio {
 
             Message::ZoomFactorChanged(factor) => {
                 self.zoom_factor = factor.clamp(3, 100);
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::RightClickModeChanged(mode) => {
+                self.right_click_mode = mode;
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::RightClickHoldMsChanged(ms) => {
+                self.right_click_hold_ms = super::settings::clamp_right_click_hold_ms(ms);
                 self.persist_settings_if_changed();
                 Task::none()
             }

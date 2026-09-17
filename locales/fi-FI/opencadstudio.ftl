@@ -57,6 +57,13 @@ options =
     .default-application = Oletussovellus
     .iced-theme = Iced-teema:
     .theme = Teema
+    .right-click-customization = Hiiren oikean painikkeen mukautus
+    .right-click-in-drawing-area = Oikea painike piirtoalueella
+    .hold-duration = Painalluksen kesto
+    .right-click-mode-help = Pikavalikko: oikea painike avaa aina valikon. Aikaherkkä: nopea napsautus on Enter, pidempi painallus avaa valikon (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Pikavalikko
+    .right-click-mode-time-sensitive = Aikaherkkä (nopea napsautus = Enter)
+    .right-click-mode-enter-first = Ensin Enter, toinen napsautus = valikko
 
 command-line =
     .ready = Open CAD Studio on valmis.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } objektit
         }]:
     .target = MOVE Määritä kohde [tukikohta { $x },{ $y }]:
+    .displacement = MOVE  Määritä siirtymä:
 
 command-copy =
     .array-count = COPY Enter taulukon kohteiden määrä:
@@ -258,6 +266,8 @@ command-copy =
             [one] { $count } kopio tähän mennessä
            *[other] { $count } kopiot tähän mennessä
         } | taulukko | Enter=valmis | pohja { $x },{ $y }]:
+    .displacement = COPY  Määritä siirtymä:
+    .mode = COPY  Valitse kopiointitila [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = Katkaistu säde
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2823,6 +2833,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Poista
+    .pline-specify-starting-width = PLINE  Määritä alkuleveys <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Määritä loppuleveys <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Määritä alun puolileveys <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Määritä lopun puolileveys <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Viiva)  Määritä seuraava piste:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Kaari)  Määritä kaaren päätepiste:
+    .pline-specify-length-of-line = PLINE  Määritä viivan pituus:
+    .pline-specify-included-angle = PLINE  Määritä keskuskulma:
+    .pline-specify-endpoint-of-arc = PLINE  Määritä kaaren päätepiste:
+    .pline-specify-center-point-of-arc = PLINE  Määritä kaaren keskipiste:
+    .pline-specify-radius-of-arc = PLINE  Määritä kaaren säde:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Määritä kaaren jänteen suunta:
+    .pline-specify-length-of-chord = PLINE  Määritä jänteen pituus:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Määritä tangentin suunta kaaren alkupisteessä:
+    .pline-specify-second-point-on-arc = PLINE  Määritä kaaren toinen piste:
+    .halfwidth = Puolileveys
+    .center-keyword = Keskipiste
+    .close-keyword = Sulje
+    .second-pt = Toinen piste
+    .arc-specify-start-point-of-arc = ARC  Määritä kaaren alkupiste:
+    .arc-specify-second-point-of-arc = ARC  Määritä kaaren toinen piste:
+    .arc-specify-end-point-of-arc = ARC  Määritä kaaren päätepiste:
+    .arc-specify-center-point-of-arc = ARC  Määritä kaaren keskipiste:
+    .arc-specify-included-angle = ARC  Määritä keskuskulma:
+    .arc-specify-length-of-chord = ARC  Määritä jänteen pituus:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Määritä tangentin suunta kaaren alkupisteessä:
+    .arc-specify-radius-of-arc = ARC  Määritä kaaren säde:
+    .chord-length = Jänteen pituus
 
 modify =
     .add-vertex = Lisää kärkipiste
@@ -2975,6 +3013,13 @@ modify =
     .tol-scale-dimtfac = Tol. asteikko (DIMTFAC)
     .trim = Leikkaa
     .exit = poistu
+    .area-keyword = Pinta-ala
+    .displacement = Siirtymä
+    .mode-keyword = Tila
+    .array-keyword = Sarja
+    .use-first-point-as-displacement = Ensimmäinen piste siirtymänä
+    .offset-erase-source-object-after-offsetting = OFFSET  Poistetaanko lähdeobjekti siirron jälkeen? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Siirrettyjen objektien taso [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP Enter ryhmän nimi [__ocs_arg_name__]:
@@ -5262,6 +5307,19 @@ ui =
     .what-s-new = Mitä uutta?
     .width-value = Leveys: __ocs_arg_value__
     .working = Työskentely…
+    .recent-input = Viimeisimmät syötteet
+    .copy-with-base-point = Kopioi peruspisteellä
+    .undo-label = Kumoa __ocs_arg_label__
+    .redo-label = Tee uudelleen __ocs_arg_label__
+    .copy-selection = Kopioi valinta
+    .isolate = Eristä
+    .deselect-all = Poista valinta
+    .options-ellipsis = Asetukset...
+    .base-point = Peruspiste
+    .snap-overrides = Tilapäiset tartunnat
+    .mid-between-2-points = 2 pisteen keskikohta
+    .osnap-settings = Tartunta-asetukset...
+    .snap-override-none-next-pick-only = Tilapäinen tartunta: Ei mitään (vain seuraava piste).
 
 dimstyle =
     .keep-text-between-extension-lines = Pidä teksti aina jatkorivien välissä
