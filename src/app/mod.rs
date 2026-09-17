@@ -1854,6 +1854,8 @@ pub enum ModalKind {
     /// means and what usually fixes it. Queued once per verdict; the status
     /// bar's ⚠ pill reopens it.
     GpuWarning,
+    /// Reference Manager help window (toolbar Help button).
+    XrefHelp,
 }
 
 /// A property group controlled by a layer state's restore mask.
@@ -2473,6 +2475,8 @@ pub enum Message {
     XrefManagerRefreshMenu,
     /// Toggle the Change Path dropdown menu.
     XrefManagerPathMenu,
+    /// Open the Reference Manager help window.
+    XrefHelpOpen,
     /// Close all palette dropdown menus (overlay dismissal).
     XrefManagerDismissMenus,
     /// Open the file picker for Select New Path (anchor entry).

@@ -22,6 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// read-only list renders everywhere.
 const IS_WASM: bool = cfg!(target_arch = "wasm32");
 
+
+
 /// Font size for table cells (mirrors `layers.rs`).
 const FONT_SZ: f32 = ROW_H * 0.42; // ≈11 px at ROW_H=26
 /// Fixed table height so the details pane below keeps stable space.
@@ -784,9 +786,12 @@ impl XrefManagerPanel {
                 )
             }
         };
-        let help = toolbar_tip(
+        // Help opens a modal window explaining the manager (and its web
+        // shortcomings): the old disabled tip could never be clicked, and
+        // an anchored dropdown squeezes the text into the toolbar's width.
+        let help = toolbar_btn(
             crate::t!("Help").into_owned(),
-            crate::t!("Reference Manager — select rows, then Detach, Unload, Reload, Bind, Overlay, or a Change Path mode.").into_owned(),
+            Some(Message::XrefHelpOpen),
             false,
         );
         let toolbar = container(

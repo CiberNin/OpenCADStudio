@@ -2395,6 +2395,10 @@ impl OpenCADStudio {
                 self.xref_manager.refresh_open = false;
                 Task::none()
             }
+            Message::XrefHelpOpen => {
+                self.active_modal = Some(super::ModalKind::XrefHelp);
+                Task::none()
+            }
             Message::XrefManagerDismissMenus => {
                 self.xref_manager.attach_open = false;
                 self.xref_manager.refresh_open = false;

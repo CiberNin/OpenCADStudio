@@ -56,6 +56,7 @@ impl OpenCADStudio {
             Some(K::MissingFonts) => crate::t!("Missing fonts").into_owned(),
             Some(K::RecoveryPrompt) => crate::tr!("modal", "recovery-prompt"),
             Some(K::GpuWarning) => crate::tr!("gpu", "title"),
+            Some(K::XrefHelp) => crate::t!("Reference Manager Help").into_owned(),
             None => String::new(),
         }
     }
@@ -84,6 +85,9 @@ impl OpenCADStudio {
         Some(match self.active_modal? {
             super::super::ModalKind::About => {
                 automatic_flow(ex, crate::ui::window::about::view_window)
+            }
+            super::super::ModalKind::XrefHelp => {
+                automatic_flow(ex, crate::ui::window::xref_help::view_window)
             }
             super::super::ModalKind::Shortcuts => {
                 // Keys claimed by two rows — the cells turn red and a
