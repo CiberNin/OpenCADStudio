@@ -1831,7 +1831,7 @@ impl OpenCADStudio {
                     && s.contains(' ')
                 {
                     self.command_line.input = s;
-                    return Task::batch(vec![sweep, self.update(Message::CommandSubmit)]);
+                    return Task::batch(vec![sweep, self.on_command_submit()]);
                 }
                 let live_input = s.clone();
                 self.command_line.input = live_input.clone();

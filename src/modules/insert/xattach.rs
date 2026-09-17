@@ -219,9 +219,19 @@ pub fn unique_block_name(stem: &str, taken: &[impl AsRef<str>]) -> String {
 /// the host drawing's base dir (yielding an absolute path when the base dir
 /// is absolute); absolute paths and missing base dirs pass through verbatim.
 /// Separators are normalized to `/` for stable DWG storage.
+fn is_absolute_xref_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    std::path::Path::new(path).is_absolute()
+        || path.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+}
+
 pub fn resolve_xref_store_path(path: &str, host_base_dir: Option<&std::path::Path>) -> String {
     let p = std::path::Path::new(path);
-    if p.is_absolute() {
+    if is_absolute_xref_path(path) {
         return path.replace('\\', "/");
     }
     match host_base_dir {
@@ -248,7 +258,7 @@ pub fn is_self_attach(
     host_base_dir: Option<&std::path::Path>,
 ) -> bool {
     let joined = resolve_xref_store_path(ref_path, host_base_dir);
-    let candidate = if std::path::Path::new(&joined).is_absolute() {
+    let candidate = if is_absolute_xref_path(&joined) {
         joined
     } else if let Some(parent) = host_file.parent() {
         parent

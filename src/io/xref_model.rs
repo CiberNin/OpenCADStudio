@@ -64,9 +64,11 @@ fn normalize_core(raw: &str, fold_case: bool) -> String {
     }
 
     // 4. Case fold: Windows filesystems are case-insensitive, so identity
-    // must be too. Elsewhere case is significant and preserved.
+    // must be too. Native non-Windows paths remain case-sensitive.
     let mut joined = stack.join("/");
-    if fold_case && cfg!(windows) {
+    // A drive/UNC path keeps Windows identity semantics even when the host
+    // application runs elsewhere and is inspecting a drawing created there.
+    if fold_case && (cfg!(windows) || !prefix.is_empty()) {
         joined = joined.to_lowercase();
     }
 

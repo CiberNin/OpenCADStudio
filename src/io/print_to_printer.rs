@@ -1016,6 +1016,7 @@ mod printer_properties_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn windows_opens_selected_printer_or_printer_list() {
         assert_eq!(

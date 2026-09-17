@@ -2182,32 +2182,12 @@ fn solve_scope(
                     sys.add_constraint(Rc::new(Equal::new(circle.rad, target, 1.0)));
                 }
                 EntityGeom::Arc(arc) => {
-                    let (current_start, current_end) = {
-                        let store = sys.store();
-                        (store.get(arc.start_angle), store.get(arc.end_angle))
-                    };
                     let radius = retained_before
                         .get(handle)
                         .and_then(|entity| retained_radius(entity))
                         .unwrap_or_else(|| sys.store().get(arc.circle.rad));
-                    let target_radius = sys.add_param(radius, true);
-                    let target_start = sys.add_param(current_start, true);
-                    let target_end = sys.add_param(current_end, true);
-                    sys.add_constraint(Rc::new(Equal::new(
-                        arc.circle.rad,
-                        target_radius,
-                        1.0,
-                    )));
-                    sys.add_constraint(Rc::new(Equal::new(
-                        arc.start_angle,
-                        target_start,
-                        1.0,
-                    )));
-                    sys.add_constraint(Rc::new(Equal::new(
-                        arc.end_angle,
-                        target_end,
-                        1.0,
-                    )));
+                    let target = sys.add_param(radius, true);
+                    sys.add_constraint(Rc::new(Equal::new(arc.circle.rad, target, 1.0)));
                 }
                 EntityGeom::Ellipse(ellipse) => {
                     let (focus_distance, minor_radius) = {

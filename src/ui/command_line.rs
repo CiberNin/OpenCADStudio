@@ -85,7 +85,7 @@ fn strip_option_listing(s: &str) -> String {
 }
 
 // Font swaps must preserve U+276F, U+24D8, and U+2715.
-const COMMAND_PREFIX: &str = "❯  ";
+const COMMAND_PREFIX: &str = "❯ ";
 const INFO_PREFIX: &str = "ⓘ ";
 const ERROR_PREFIX: &str = "✕ ";
 

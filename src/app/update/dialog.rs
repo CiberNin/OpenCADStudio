@@ -1865,17 +1865,21 @@ mod tests {
         app.refresh_xref_manager();
         let idx = app.xref_manager.entries.iter().position(|e| e.name == "INNER").expect("nested INNER listed");
         assert!(app.xref_manager.entries[idx].parent_key.is_some());
-        for (op, expect) in [
-            (XrefPaletteOp::Detach, "cannot detach nested"),
-            (XrefPaletteOp::Unload, "cannot unload nested"),
-            (XrefPaletteOp::Reload, "cannot reload nested"),
-            (XrefPaletteOp::Bind, "cannot bind nested"),
-            (XrefPaletteOp::Overlay, "cannot overlay nested"),
+        for op in [
+            XrefPaletteOp::Detach,
+            XrefPaletteOp::Unload,
+            XrefPaletteOp::Reload,
+            XrefPaletteOp::Bind,
+            XrefPaletteOp::Overlay,
         ] {
             let start = app.command_line.history.len();
             let _ = app.update(Message::XrefRowOp(idx, op));
             let out = palette_output(&app, start);
-            assert!(out.contains(expect), "op {op:?} on nested row gave: {out:?}");
+            assert!(out.contains("INNER"), "op {op:?} on nested row gave: {out:?}");
+            assert!(
+                app.tabs[i].scene.document.block_records.get("HOST").is_some(),
+                "op {op:?} must not mutate the direct reference"
+            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1902,13 +1906,17 @@ mod tests {
         let start = app.command_line.history.len();
         let _ = app.update(Message::XrefRowOp(idx, XrefPaletteOp::Detach));
         let out = palette_output(&app, start);
-        assert!(out.contains("detached"), "detach output missing, got: {out:?}");
+        assert!(out.contains("PLAN"), "detach output missing, got: {out:?}");
         assert!(app.tabs[i].scene.document.block_records.get("PLAN").is_none(), "PLAN definition must be gone");
         let idx = app.xref_manager.entries.iter().position(|e| e.name == "SITE").expect("SITE listed");
         let start = app.command_line.history.len();
         let _ = app.update(Message::XrefRowOp(idx, XrefPaletteOp::Unload));
         let out = palette_output(&app, start);
-        assert!(out.contains("unloaded"), "unload output missing, got: {out:?}");
+        assert!(out.contains("SITE"), "unload output missing, got: {out:?}");
+        assert_eq!(
+            app.xref_manager.entries.iter().find(|e| e.name == "SITE").unwrap().status,
+            crate::io::xref_model::RefStatus::Unloaded
+        );
     }
 
     #[test]
@@ -1932,14 +1940,14 @@ mod tests {
         let start = app.command_line.history.len();
         let _ = app.update(Message::XrefRowOp(idx, XrefPaletteOp::Overlay));
         let out = palette_output(&app, start);
-        assert!(out.contains("set to Overlay"), "got: {out:?}");
+        assert!(out.contains("PLAN"), "got: {out:?}");
         let br = app.tabs[i].scene.document.block_records.get("PLAN").unwrap();
         assert!(br.flags.is_xref_overlay && !br.flags.is_xref);
         assert_eq!(app.xref_manager.entries.iter().find(|e| e.name == "PLAN").unwrap().ref_type, RefType::Overlay);
         let start = app.command_line.history.len();
         let _ = app.update(Message::XrefRowOp(idx, XrefPaletteOp::Pathtype(Pathtype::None)));
         let out = palette_output(&app, start);
-        assert!(out.contains("Path set"), "got: {out:?}");
+        assert!(out.contains("PLAN"), "got: {out:?}");
         let br = app.tabs[i].scene.document.block_records.get("PLAN").unwrap();
         assert_eq!(br.xref_path, "plan.dwg", "Remove Path strips to the bare filename");
     }
@@ -1950,7 +1958,7 @@ mod tests {
         // resolve, per-ref report, entry back to Loaded.
         use acadrust::tables::BlockRecord;
         let dir = palette_tmpdir("reloadall");
-        let mut ref_doc = acadrust::CadDocument::new();
+        let ref_doc = acadrust::CadDocument::new();
         let bytes = crate::io::save_to_bytes(&ref_doc, "dwg", ref_doc.version).unwrap();
         std::fs::write(dir.join("plan.dwg"), &bytes).unwrap();
         let mut app = fresh();
@@ -2009,7 +2017,8 @@ mod tests {
         let start = app.command_line.history.len();
         app.xref_manager_op(XrefPaletteOp::Unload);
         let out = palette_output(&app, start);
-        assert!(out.contains("cannot unload nested reference 'INNER'"), "got: {out:?}");
+        assert!(out.contains("INNER"), "got: {out:?}");
+        assert_eq!(app.command_line.history.len(), start + 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2045,8 +2054,8 @@ mod tests {
         let start = app.command_line.history.len();
         app.xref_manager_op(XrefPaletteOp::Reload);
         let out = palette_output(&app, start);
-        assert!(out.contains("reload applies to drawing references only"), "got: {out:?}");
-        assert!(!out.contains("no references match"), "spurious no-match, got: {out:?}");
+        assert!(out.contains("img.png"), "got: {out:?}");
+        assert_eq!(app.command_line.history.len(), start + 1);
         assert!(app.tabs[i].xref_unloaded.is_unloaded(key), "image flag must stay untouched");
         std::fs::remove_dir_all(&dir).ok();
     }
