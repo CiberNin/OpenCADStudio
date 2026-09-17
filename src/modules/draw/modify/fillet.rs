@@ -1062,10 +1062,13 @@ fn fillet_line_arc(
                 + (p1[1] + a * u[1] - click_line[1]).powi(2);
             let db = (p1[0] + b * u[0] - click_line[0]).powi(2)
                 + (p1[1] + b * u[1] - click_line[1]).powi(2);
-            da.partial_cmp(&db).unwrap()
+            da.total_cmp(&db)
         })?;
         let ix = p1[0] + t_best * u[0];
         let iy = p1[1] + t_best * u[1];
+        if !(ix.is_finite() && iy.is_finite()) {
+            return None;
+        }
 
         // Trim line to intersection
         let new_line = trim_line_to_point(line, [ix, iy], click_line)?;
@@ -1154,9 +1157,11 @@ fn fillet_arc_arc(
         let ip = *pts.iter().min_by(|a, b| {
             (a[0] - cx)
                 .hypot(a[1] - cy)
-                .partial_cmp(&(b[0] - cx).hypot(b[1] - cy))
-                .unwrap()
+                .total_cmp(&(b[0] - cx).hypot(b[1] - cy))
         })?;
+        if !(ip[0].is_finite() && ip[1].is_finite()) {
+            return None;
+        }
 
         let ia1 = arc_angle_at(c1, ip);
         let ia2 = arc_angle_at(c2, ip);
@@ -2366,6 +2371,26 @@ mod tests {
 
     fn keywords(cmd: &dyn CadCommand) -> Vec<String> {
         cmd.options().into_iter().map(|o| o.keyword).collect()
+    }
+
+    /// The upper half of a radius-5 circle at (5, 0), scaled about the origin
+    /// by an infinite factor: the center becomes (inf, NaN).
+    fn overflowed_arc(sweep_sign: f64) -> ArcEnt {
+        let mut arc = ArcEnt::new();
+        arc.center = acadrust::types::Vector3::new(f64::INFINITY, f64::NAN, 0.0);
+        arc.radius = f64::INFINITY;
+        arc.start_angle = 0.0;
+        arc.end_angle = sweep_sign * std::f64::consts::PI;
+        arc
+    }
+
+    #[test]
+    fn zero_radius_fillet_rejects_non_finite_geometry() {
+        let line = LineEnt::from_coords(f64::NAN, f64::NAN, 0.0, f64::INFINITY, f64::INFINITY, 0.0);
+        let arc = overflowed_arc(1.0);
+        assert!(fillet_line_arc(&line, [5.0, 5.0], &arc, [5.0, 5.0], 0.0, 0.0).is_none());
+        let other = overflowed_arc(-1.0);
+        assert!(fillet_arc_arc(&arc, [5.0, 5.0], &other, [5.0, -5.0], 0.0, 0.0).is_none());
     }
 
     #[test]

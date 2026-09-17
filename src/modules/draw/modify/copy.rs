@@ -199,6 +199,9 @@ impl CadCommand for CopyCommand {
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         if self.awaiting_count {
             if let Ok(n) = text.trim().parse::<usize>() {
+                if !super::array::array_items_within_limit(&[n as u64]) {
+                    return Some(super::array::array_limit_error());
+                }
                 if n >= 2 {
                     self.array_count = Some(n);
                 }
@@ -275,6 +278,18 @@ mod tests {
 
     fn keywords(cmd: &CopyCommand) -> Vec<String> {
         cmd.options().into_iter().map(|o| o.keyword).collect()
+    }
+
+    #[test]
+    fn array_count_above_the_item_limit_is_rejected() {
+        let mut cmd = CopyCommand::new(vec![Handle::new(1)], vec![]);
+        cmd.awaiting_count = true;
+        assert!(matches!(
+            cmd.on_text_input("18446744073709551615"),
+            Some(CmdResult::ReportError(_))
+        ));
+        assert!(cmd.awaiting_count, "the count prompt stays up");
+        assert_eq!(cmd.array_count, None);
     }
 
     #[test]
