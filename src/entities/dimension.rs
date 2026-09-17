@@ -5031,6 +5031,10 @@ fn append_linear_dimension(
     let text_extent = text_span
         .map(|(lo, hi)| (hi - lo) as f32)
         .unwrap_or(params.text_width);
+    // Horizontal text beside a non-horizontal dimension is reached by a leg
+    // and a hook instead of the dimension line itself.
+    let hooks_out_horizontally =
+        params.horizontal_text && !params.ticks && dir_d1_to_d2.y.abs() > 1e-3;
     let text_hits_an_arrow = text_span.is_some_and(|(lo, hi)| {
         let center = (lo + hi) * 0.5;
         center > 0.0
@@ -5066,13 +5070,22 @@ fn append_linear_dimension(
     if draw_inside_line && !suppress.dim2 && line_len - split > 1e-6 {
         add_segment_with_text_break(&mut g.dim_lines, split_point, d2_out, params.text_break);
     }
-    if arrows_outside && !params.dimsoxd {
-        let stub = params.arrow_len * 2.0;
-        if !suppress.dim1 {
-            add_segment(&mut g.dim_lines, d1 - dir_d1_to_d2 * stub, d1);
+    // Outside the extension lines the dimension line runs two arrow lengths,
+    // or on to the text when the text sits further out along the line.
+    let reach = |default: f32, toward_text: Option<f32>| toward_text.map_or(default, |t| t.max(default));
+    let stub = params.arrow_len * 2.0;
+    let text_beyond_d1 = text_span
+        .filter(|(_, hi)| *hi < 0.0 && !hooks_out_horizontally)
+        .map(|(_, hi)| -hi as f32);
+    let text_beyond_d2 = text_span
+        .filter(|(lo, _)| *lo > gap as f64 && !hooks_out_horizontally)
+        .map(|(lo, _)| (lo - gap as f64) as f32);
+    if (arrows_outside && !params.dimsoxd) || text_beyond_d1.is_some() || text_beyond_d2.is_some() {
+        if !suppress.dim1 && (arrows_outside || text_beyond_d1.is_some()) {
+            add_segment(&mut g.dim_lines, d1 - dir_d1_to_d2 * reach(stub, text_beyond_d1), d1);
         }
-        if !suppress.dim2 {
-            add_segment(&mut g.dim_lines, d2, d2 + dir_d1_to_d2 * stub);
+        if !suppress.dim2 && (arrows_outside || text_beyond_d2.is_some()) {
+            add_segment(&mut g.dim_lines, d2, d2 + dir_d1_to_d2 * reach(stub, text_beyond_d2));
         }
     }
 
@@ -5125,8 +5138,14 @@ fn append_radial_leader(g: &mut DimGeom, tip: Vec3, text: Vec3, params: &DimLine
             text.z,
         ));
         let hook_start = text_edge - Vec3::X * (side * params.arrow_len);
-        add_segment(&mut g.dim_lines, tip, hook_start);
-        add_segment(&mut g.dim_lines, hook_start, text_edge);
+        let slope = (hook_start - tip).y.abs().atan2((hook_start - tip).x.abs());
+        // A leader already within 15° of horizontal runs straight to the text.
+        if slope > 15.0_f32.to_radians() {
+            add_segment(&mut g.dim_lines, tip, hook_start);
+            add_segment(&mut g.dim_lines, hook_start, text_edge);
+        } else {
+            add_segment(&mut g.dim_lines, tip, text_edge);
+        }
     } else {
         let toward = normalized_or(text - tip, Vec3::X);
         let reach = ((text - tip).length() - params.text_width * 0.5).max(0.0);
@@ -5151,10 +5170,11 @@ fn append_diameter_dimension(
     }
     let center = (chord + far_chord) * 0.5;
     let text_is_outside = params.text_position.distance(center) > diameter * 0.5 + 1e-5;
-    if text_is_outside && !params.dimtofl && params.text_movement == 0 {
+    if text_is_outside && !params.dimtofl {
         // Outside text without DIMTOFL: no line across the circle, just a
         // leader from the near side with the arrowhead on the circle and its
-        // body toward the text.
+        // body toward the text. DIMTMOVE 2 keeps the arrowhead and drops the
+        // leader.
         let (tip, suppressed) = if params.text_position.distance_squared(chord)
             <= params.text_position.distance_squared(far_chord)
         {
@@ -5163,7 +5183,9 @@ fn append_diameter_dimension(
             (far_chord, suppress.dim2)
         };
         if !suppressed {
-            append_radial_leader(g, tip, params.text_position, &params);
+            if params.text_movement != 2 {
+                append_radial_leader(g, tip, params.text_position, &params);
+            }
             append_arrow(g, tip, normalized_or(tip - center, axis), arrow1);
         }
         return;
@@ -8593,6 +8615,23 @@ mod layout_parity_tests {
         assert!(
             points.iter().all(|p| p.y <= top + 0.01 && p.y >= -0.01),
             "centred text leaves the arrows inside"
+        );
+    }
+
+    // Text stored well past the second extension line of a horizontal
+    // dimension: the dimension line runs out to the text, not just two arrow
+    // lengths.
+    #[test]
+    fn outside_text_on_the_axis_pulls_the_line_out_to_it() {
+        let document = document();
+        let mut d = DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.8, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 2.0, 0.0);
+        d.base.text_middle_point = Vector3::new(2.5, 2.0, 0.0);
+        let (points, _) = drawn(&document, &Dimension::Linear(d));
+        let furthest = points.iter().map(|p| p.x).fold(f64::MIN, f64::max);
+        assert!(
+            furthest > 2.0 && furthest < 2.5,
+            "line reaches the text's near edge, got {furthest}"
         );
     }
 
