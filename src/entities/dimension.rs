@@ -6195,7 +6195,7 @@ fn dimension_text_parts(
 
     // Alternate units appended in brackets when DIMALT is on (linear only).
     let primary = if !is_angular {
-        match alternate_units_text(dim.measurement(), style) {
+        match alternate_units_text(display_measurement(dim) * effective_dimlfac(style), style) {
             Some(alt) => format!("{} [{}]", primary, alt),
             None => primary,
         }
@@ -6260,8 +6260,8 @@ fn limits_text(dim: &Dimension, style: Option<&DimStyle>, is_angular: bool) -> O
 /// writes `13.950` over `13.926` with DIMTZIN 8, not `13.95` over `13.926`.
 fn limit_pair(high: f64, low: f64, s: &DimStyle) -> (String, String) {
     let dimtdec = s.dimtdec.max(0) as usize;
-    let mut high = format!("{:.*}", dimtdec, high);
-    let mut low = format!("{:.*}", dimtdec, low);
+    let mut high = decimal_text(high, dimtdec);
+    let mut low = decimal_text(low, dimtdec);
     if s.dimtzin & 8 != 0 {
         let droppable = |value: &str| match value.find('.') {
             Some(_) => value.len() - value.trim_end_matches('0').len(),
@@ -6290,7 +6290,7 @@ fn limit_pair(high: f64, low: f64, s: &DimStyle) -> (String, String) {
 fn tolerance_formatter(s: &DimStyle) -> impl Fn(f64) -> String + '_ {
     let dimtdec = s.dimtdec.max(0) as usize;
     move |v: f64| {
-        let raw = format!("{:.*}", dimtdec, v);
+        let raw = decimal_text(v, dimtdec);
         swap_decimal_sep(&apply_linear_zero_suppression(&raw, s.dimtzin), s.dimdsep)
     }
 }
@@ -6387,7 +6387,7 @@ fn alternate_units_text(measurement: f64, style: Option<&DimStyle>) -> Option<St
         let alttdec = s.dimalttd.max(0) as usize;
         let alttzin = s.dimalttz;
         let fmt = |x: f64| -> String {
-            let raw = format!("{:.*}", alttdec, x * tolerance_factor);
+            let raw = decimal_text(x * tolerance_factor, alttdec);
             swap_decimal_sep(&apply_linear_zero_suppression(&raw, alttzin), s.dimdsep)
         };
         if (s.dimtp - s.dimtm).abs() < 1e-12 && s.dimtp.abs() > 1e-12 {
@@ -6401,11 +6401,12 @@ fn alternate_units_text(measurement: f64, style: Option<&DimStyle>) -> Option<St
         let alttdec = s.dimalttd.max(0) as usize;
         let alttzin = s.dimalttz;
         let fmt = |x: f64| -> String {
-            let raw = format!("{:.*}", alttdec, x * tolerance_factor);
+            let raw = decimal_text(x * tolerance_factor, alttdec);
             swap_decimal_sep(&apply_linear_zero_suppression(&raw, alttzin), s.dimdsep)
         };
+        // Alternate limits stack like the primary ones.
         format!(
-            "{}/{}",
+            "\\S{}^{};",
             fmt(measurement + s.dimtp),
             fmt(measurement - s.dimtm)
         )
@@ -6639,8 +6640,18 @@ fn format_with_unit(
         5 => format_fractional(value, dec, if alternate { 0 } else { dimfrac }),
         6 if alternate => format_architectural(value, dec, 2, zin),
         7 if alternate => format_fractional(value, dec, 2),
-        _ => format!("{:.*}", dec, value),
+        _ => decimal_text(value, dec),
     }
+}
+
+/// Fixed-point text rounded half away from zero, as AutoCAD prints it. Rust's
+/// formatter rounds the binary value, so 0.4255 (stored a hair below) came out
+/// as 0.425 where the drawing shows 0.426; a nudge well under any dimension
+/// tolerance settles the tie the same way.
+fn decimal_text(value: f64, decimals: usize) -> String {
+    let nudged = value + value.signum() * 1e-9;
+    let scale = 10f64.powi(decimals.min(15) as i32);
+    format!("{:.*}", decimals, (nudged * scale).round() / scale)
 }
 
 fn format_engineering(inches: f64, dec: usize) -> String {
@@ -8183,6 +8194,36 @@ mod limits_format_tests {
         s.dimtm = 0.1;
         let (value, _) = dimension_text_parts(&dim, Some(&s)).unwrap();
         assert!(value.starts_with(r"\S45"), "{value}");
+    }
+
+    // AutoCAD rounds a printed value half away from zero; Rust's formatter
+    // rounds the binary value, which sits a hair below the decimal tie.
+    #[test]
+    fn decimal_text_rounds_half_away_from_zero() {
+        assert_eq!(decimal_text(0.4255, 3), "0.426");
+        assert_eq!(decimal_text(0.4085, 3), "0.409");
+        assert_eq!(decimal_text(-0.4255, 3), "-0.426");
+        assert_eq!(decimal_text(2.5, 0), "3");
+        assert_eq!(decimal_text(0.1234, 3), "0.123");
+    }
+
+    // Alternate units multiply the displayed (DIMLFAC-scaled) value and stack
+    // their limits like the primary ones.
+    #[test]
+    fn alternate_limits_stack_from_the_scaled_value() {
+        let mut s = style();
+        s.dimlim = true;
+        s.dimlfac = 2.0;
+        s.dimalt = true;
+        s.dimaltf = 25.4;
+        s.dimaltd = 2;
+        s.dimalttd = 2;
+        s.dimaltz = 0;
+        s.dimalttz = 0;
+        s.dimtp = 0.02;
+        s.dimtm = 0.05;
+        let (value, _) = dimension_text_parts(&horizontal(), Some(&s)).unwrap();
+        assert_eq!(value, r"\S20.020^19.950; [\S508.51^506.73;]");
     }
 
     #[test]
