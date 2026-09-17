@@ -472,6 +472,9 @@ impl CadCommand for ExtrudeCommand {
     fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
         Some((cursor - self.anchor).dot(self.profile_direction?))
     }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == ExtrudeStep::Height
+    }
     fn is_selection_gathering(&self) -> bool {
         self.step == ExtrudeStep::Pick
     }
