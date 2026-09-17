@@ -5,12 +5,15 @@
 mod coincident;
 mod equal_distance;
 mod geom_constraint;
+#[path = "perpendicular.rs"]
+mod perpendicular_command;
 mod point_on_entity;
 mod tools;
 mod value;
 pub use coincident::{coincident_tool, CoincidentConstraintCommand};
 pub use equal_distance::{equal_distance_tool, EqualDistanceConstraintCommand};
 pub use geom_constraint::GeomConstraintCommand;
+pub use perpendicular_command::{PerpendicularConstraintCommand, PerpendicularPick};
 pub use point_on_entity::{
     center_point_tool, midpoint_tool, point_on_curve_tool, PointOnEntityConstraintCommand,
 };

@@ -53,7 +53,7 @@ pub mod perpendicular {
             icon: IconKind::Svg(include_bytes!(
                 "../../../assets/icons/constrain/perpendicular.svg"
             )),
-            event: ModuleEvent::Command("QCONSTRAINT".to_string()),
+            event: ModuleEvent::Command("GCPERPENDICULAR".to_string()),
         }
     }
 }
@@ -164,6 +164,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "VCONSTRAINT",
         "PCONSTRAINT",
         "QCONSTRAINT",
+        "GCPERPENDICULAR",
         "ECONSTRAINT",
         "TCONSTRAINT",
         "NCONSTRAINT",

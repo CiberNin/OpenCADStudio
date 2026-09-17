@@ -28,6 +28,16 @@ pub struct ParametricRef {
 
 const POLYLINE_SEGMENT_MARKER_BASE: i32 = -1_000_000;
 const POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE: i32 = -2_000_000;
+const ELLIPSE_MAJOR_AXIS_MARKER: i32 = -4;
+const ELLIPSE_MINOR_AXIS_MARKER: i32 = -5;
+const TEXT_BASELINE_MARKER: i32 = -6;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectionalAxis {
+    TextBaseline,
+    EllipseMajor,
+    EllipseMinor,
+}
 
 impl ParametricRef {
     pub fn whole(entity: Handle) -> Self {
@@ -80,6 +90,99 @@ impl ParametricRef {
         let marker = self.marker?;
         (marker <= POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE)
             .then(|| (POLYLINE_SEGMENT_MIDPOINT_MARKER_BASE - marker) as usize)
+    }
+
+    /// Select the displayed baseline of a Text or MText entity.
+    pub fn text_baseline(entity: Handle) -> Self {
+        Self {
+            entity,
+            marker: Some(TEXT_BASELINE_MARKER),
+        }
+    }
+
+    /// Select the major axis of an ellipse or elliptical arc.
+    pub fn ellipse_major_axis(entity: Handle) -> Self {
+        Self {
+            entity,
+            marker: Some(ELLIPSE_MAJOR_AXIS_MARKER),
+        }
+    }
+
+    /// Select the minor axis of an ellipse or elliptical arc.
+    pub fn ellipse_minor_axis(entity: Handle) -> Self {
+        Self {
+            entity,
+            marker: Some(ELLIPSE_MINOR_AXIS_MARKER),
+        }
+    }
+
+    pub(crate) fn directional_axis(self) -> Option<DirectionalAxis> {
+        match self.marker? {
+            TEXT_BASELINE_MARKER => Some(DirectionalAxis::TextBaseline),
+            ELLIPSE_MAJOR_AXIS_MARKER => Some(DirectionalAxis::EllipseMajor),
+            ELLIPSE_MINOR_AXIS_MARKER => Some(DirectionalAxis::EllipseMinor),
+            _ => None,
+        }
+    }
+}
+
+/// The finite guide used to pick, display and serialize a directional text or
+/// ellipse reference. Constraint equations treat the guide as an infinite
+/// line; its finite length only makes selection and native persistence stable.
+pub(crate) fn directional_axis_endpoints(
+    entity: &acadrust::EntityType,
+    reference: ParametricRef,
+) -> Option<[Vector3; 2]> {
+    match (entity, reference.directional_axis()?) {
+        (acadrust::EntityType::Text(text), DirectionalAxis::TextBaseline) => {
+            use acadrust::entities::TextHorizontalAlignment as Alignment;
+
+            if matches!(
+                text.horizontal_alignment,
+                Alignment::Aligned | Alignment::Fit
+            ) {
+                if let Some(end) = text.alignment_point.filter(|end| {
+                    (*end - text.insertion_point).length_squared() > 1.0e-18
+                }) {
+                    return Some([text.insertion_point, end]);
+                }
+            }
+            let length = text.height.abs().max(1.0);
+            Some([
+                text.insertion_point,
+                text.insertion_point
+                    + Vector3::new(text.rotation.cos(), text.rotation.sin(), 0.0) * length,
+            ])
+        }
+        (acadrust::EntityType::MText(text), DirectionalAxis::TextBaseline) => {
+            let length = text.height.abs().max(1.0);
+            Some([
+                text.insertion_point,
+                text.insertion_point
+                    + Vector3::new(text.rotation.cos(), text.rotation.sin(), 0.0) * length,
+            ])
+        }
+        (acadrust::EntityType::Ellipse(ellipse), axis) => {
+            let major_length = ellipse.major_axis.length();
+            if major_length <= 1.0e-12 {
+                return None;
+            }
+            let vector = match axis {
+                DirectionalAxis::EllipseMajor => ellipse.major_axis,
+                DirectionalAxis::EllipseMinor => {
+                    let major = ellipse.major_axis / major_length;
+                    let normal = ellipse.normal.normalize();
+                    Vector3::new(
+                        normal.y * major.z - normal.z * major.y,
+                        normal.z * major.x - normal.x * major.z,
+                        normal.x * major.y - normal.y * major.x,
+                    ) * (major_length * ellipse.minor_axis_ratio)
+                }
+                DirectionalAxis::TextBaseline => return None,
+            };
+            (vector.length_squared() > 1.0e-24).then_some([ellipse.center, ellipse.center + vector])
+        }
+        _ => None,
     }
 }
 
@@ -702,6 +805,11 @@ fn glyph_placement_for_reference(
             .unwrap_or(Vector3::UNIT_Y)
     };
     let line_normal = |line: &acadrust::entities::Line| segment_normal(line.start, line.end);
+    if r.directional_axis().is_some() {
+        let [start, end] = directional_axis_endpoints(entity, r)?;
+        let anchor = (start + end) * 0.5;
+        return Some((anchor, segment_normal(start, end)));
+    }
     if let Some(segment) = r.segment_index() {
         let anchor = resolve_point(
             entity,
@@ -826,7 +934,15 @@ fn constraint_reference_curve_xy(
     document: &acadrust::CadDocument,
     reference: ParametricRef,
 ) -> Option<cadkernel::geom2d::Curve> {
-    let curve = crate::entities::curve::entity_curve_xy(document.get_entity(reference.entity)?)?;
+    let entity = document.get_entity(reference.entity)?;
+    if reference.directional_axis().is_some() {
+        let [start, end] = directional_axis_endpoints(entity, reference)?;
+        return Some(cadkernel::geom2d::Curve::Line(cadkernel::geom2d::Line {
+            start: [start.x, start.y],
+            end: [end.x, end.y],
+        }));
+    }
+    let curve = crate::entities::curve::entity_curve_xy(entity)?;
     reference
         .segment_index()
         .map(|index| curve.segments().into_iter().nth(index))

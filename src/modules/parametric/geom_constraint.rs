@@ -16,7 +16,7 @@ impl GeomConstraintCommand {
         Some(match keyword {
             "H" | "HORIZONTAL" => "HCONSTRAINT",
             "V" | "VERTICAL" => "VCONSTRAINT",
-            "P" | "PERPENDICULAR" => "QCONSTRAINT",
+            "P" | "PERPENDICULAR" => "GCPERPENDICULAR",
             "PA" | "PARALLEL" => "PCONSTRAINT",
             "T" | "TANGENT" => "TCONSTRAINT",
             "SM" | "SMOOTH" => "SMOOTHCONSTRAINT",
