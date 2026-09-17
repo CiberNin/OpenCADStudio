@@ -1000,6 +1000,7 @@ fn finalize_loaded_outcome(
 ) -> Result<acadrust::ReadOutcome, String> {
     let doc = &mut outcome.document;
     normalize_block_origins(doc);
+    normalize_knotless_splines(doc);
     if outcome.stats.source_format == Some(acadrust::SourceFormat::Dxf) {
         fix_dxf_dimension_rotations(doc);
         fix_dxf_layout_plot_settings(doc);
@@ -2425,6 +2426,31 @@ mod corrupt_guard_tests {
         ));
         save_as_version(&doc, &path, acadrust::DxfVersion::AC1032).expect("save");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // `load_file` (headless export, xrefs, block import) does not purge, so
+    // the spline repair has to happen when any load is finalized.
+    #[test]
+    fn knotless_spline_is_repaired_by_every_load_path() {
+        const DXF: &str = "0\nSECTION\n2\nENTITIES\n0\nSPLINE\n8\n0\n70\n0\n71\n3\n72\n0\n73\n2\n74\n0\n\
+10\n0\n20\n0\n30\n0\n10\n1\n20\n1\n30\n0\n0\nENDSEC\n0\nEOF\n";
+        let dir = std::env::temp_dir();
+        let source = dir.join(format!("ocs_knotless_load_{}.dxf", std::process::id()));
+        let target = dir.join(format!("ocs_knotless_load_{}.dwg", std::process::id()));
+        std::fs::write(&source, DXF).unwrap();
+        let doc = load_file(&source).expect("load");
+        let _ = std::fs::remove_file(&source);
+        let spline = doc
+            .entities()
+            .find_map(|entity| match entity {
+                EntityType::Spline(spline) => Some(spline),
+                _ => None,
+            })
+            .expect("spline");
+        assert_eq!(spline.degree, 1);
+        assert_eq!(spline.knots.len(), 4);
+        save_as_version(&doc, &target, acadrust::DxfVersion::AC1032).expect("save");
+        let _ = std::fs::remove_file(&target);
     }
 
     // Small but finite arcs are valid records. Kernel tessellation is bounded,
