@@ -677,11 +677,11 @@ impl CadCommand for ArcSCACommand {
     }
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         if self.step == 2 {
-            let mut span: f64 = text.trim().replace(',', ".").parse().ok()?;
+            let mut span = crate::entities::common::parse_typed_angle(text)?;
             if self.cw {
                 span = -span;
             }
-            let ea = self.sa + span.to_radians();
+            let ea = self.sa + span;
             return Some(if span < 0.0 {
                 arc_result(self.c, self.r, ea, self.sa, self.plane)
             } else {
@@ -939,7 +939,7 @@ impl CadCommand for ArcSEACommand {
         if self.step != 2 {
             return None;
         }
-        let mut included = text.trim().replace(',', ".").parse::<f64>().ok()?.to_radians();
+        let mut included = crate::entities::common::parse_typed_angle(text)?;
         if self.ctrl {
             included = -included;
         }
@@ -1166,7 +1166,7 @@ impl CadCommand for ArcSEDCommand {
         if self.step != 2 {
             return None;
         }
-        let angle = text.trim().replace(',', ".").parse::<f64>().ok()?.to_radians();
+        let angle = crate::entities::common::parse_typed_angle(text)?;
         let tangent = self.plane.x * angle.cos() + self.plane.y * angle.sin();
         let (center, radius, sa, ea) =
             arc_continue(self.s, tangent, self.e, self.ctrl, self.plane)?;
@@ -1285,11 +1285,11 @@ impl CadCommand for ArcCSACommand {
     }
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         if self.step == 2 {
-            let mut span: f64 = text.trim().replace(',', ".").parse().ok()?;
+            let mut span = crate::entities::common::parse_typed_angle(text)?;
             if self.cw {
                 span = -span;
             }
-            let ea = self.sa + span.to_radians();
+            let ea = self.sa + span;
             return Some(if span < 0.0 {
                 arc_result(self.c, self.r, ea, self.sa, self.plane)
             } else {

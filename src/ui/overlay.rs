@@ -3069,11 +3069,8 @@ impl DynInputCanvas {
 
     fn box_content(b: &DynBox) -> String {
         match b.role {
-            // Live angle values already come from `format_angle`, which adds
-            // the drawing's appropriate marker (°, g, r, DMS, or bearing).
-            // A locked value is the user's raw numeric buffer and retains the
-            // legacy degree marker while it is being edited.
-            DynRole::Angle if b.locked => format!("{}\u{00B0}", b.value),
+            // Formatted live values already carry their unit marker; typed
+            // buffers stay unadorned while they are being edited.
             DynRole::Angle => b.value.clone(),
             _ if b.label.is_empty() => b.value.clone(),
             _ => format!("{}{}", b.label, b.value),

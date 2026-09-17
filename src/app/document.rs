@@ -33,7 +33,7 @@ pub(super) enum DynComponent {
     Z,
     /// Linear distance from the last point.
     Distance,
-    /// Angle from the last point, in degrees.
+    /// Angle from the last point, displayed and entered in the drawing's units.
     Angle,
     /// A scalar the command reads from the command line (a count, a radius,
     /// a delta). Typed-only — it has no geometric live value derived from

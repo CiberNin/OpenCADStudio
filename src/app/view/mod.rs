@@ -1093,7 +1093,7 @@ bg={bg_ms:.1}ms n={view_count}"
                             if f.component == DynComponent::Distance {
                                 crate::entities::common::format_length(lv)
                             } else {
-                                lv.to_string()
+                                format!("{lv:.4}")
                             }
                         }
                         _ => dyn_component_value(
