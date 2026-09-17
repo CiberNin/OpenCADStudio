@@ -1247,10 +1247,10 @@ pub fn open_desktop_printer_settings(printer: Option<&str>) -> Result<(), String
 /// print job then honours. Returns `Ok(false)` when the user cancelled.
 #[cfg(target_os = "windows")]
 pub fn edit_printer_preferences(printer: &str, owner: isize) -> Result<bool, String> {
-    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Graphics::Gdi::DEVMODEW;
     use windows_sys::Win32::Graphics::Printing::{
-        ClosePrinter, DocumentPropertiesW, OpenPrinterW, SetPrinterW, PRINTER_INFO_9W,
+        ClosePrinter, DocumentPropertiesW, OpenPrinterW, SetPrinterW, PRINTER_HANDLE,
+        PRINTER_INFO_9W,
     };
     // winspool.h: DM_OUT_BUFFER = DM_COPY, DM_IN_PROMPT = DM_PROMPT,
     // DM_IN_BUFFER = DM_MODIFY.
@@ -1260,7 +1260,9 @@ pub fn edit_printer_preferences(printer: &str, owner: isize) -> Result<bool, Str
     const IDOK: i32 = 1;
 
     let name: Vec<u16> = printer.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut handle: HANDLE = std::ptr::null_mut();
+    let mut handle = PRINTER_HANDLE {
+        Value: std::ptr::null_mut(),
+    };
     // SAFETY: `name` is NUL-terminated and outlives the call; a null default
     // asks for PRINTER_ACCESS_USE, enough for per-user preferences.
     if unsafe { OpenPrinterW(name.as_ptr(), &mut handle, std::ptr::null()) } == 0 {
