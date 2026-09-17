@@ -6733,10 +6733,14 @@ fn dimension_text_extent_height(dim: &Dimension, style: Option<&DimStyle>, text_
 fn dimension_text_block_height(style: Option<&DimStyle>, text_height: f64) -> f64 {
     match style {
         Some(s) if s.dimlim => {
+            // From the lower half's baseline to the upper half's cap, as the
+            // MText stack lays them out.
             text_height
                 * dimtfac_or_one(s)
-                * 2.0
-                * f64::from(crate::entities::text_support::STACK_HALF_SCALE)
+                * f64::from(
+                    crate::entities::text_support::STACK_RAISE
+                        + crate::entities::text_support::STACK_HALF_SCALE,
+                )
         }
         _ => text_height,
     }
@@ -8515,7 +8519,12 @@ mod limits_format_tests {
         assert_eq!(dimension_text_block_height(Some(&s), 2.0), 2.0);
         s.dimlim = true;
         s.dimtfac = 0.5;
-        let expected = 2.0 * 0.5 * 2.0 * f64::from(crate::entities::text_support::STACK_HALF_SCALE);
+        let expected = 2.0
+            * 0.5
+            * f64::from(
+                crate::entities::text_support::STACK_RAISE
+                    + crate::entities::text_support::STACK_HALF_SCALE,
+            );
         assert_eq!(dimension_text_block_height(Some(&s), 2.0), expected);
     }
 }
