@@ -4,9 +4,11 @@
 // Default save format: DWG (AC1032 / R2018+).
 
 pub mod file_association;
+pub mod font_repo;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod edit_lock;
 pub mod obj;
+pub mod ole_embed;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod single_instance;
 pub mod pdf_export;
@@ -1553,6 +1555,23 @@ pub async fn pick_image_file() -> Result<(PathBuf, u32, u32), String> {
     let img = image::open(&path).map_err(|e| e.to_string())?;
     let (w, h) = image::GenericImageView::dimensions(&img);
     Ok((path, w, h))
+}
+
+/// Pick an image file and prepare it for embedding (IMAGEEMBED). The bytes
+/// are read before returning so the OLE2FRAME payload is ready to place.
+pub async fn pick_embedded_image_file() -> Result<ole_embed::EmbeddedImage, String> {
+    let handle = crate::sys::file_dialog()
+        .set_title(crate::t!("Select Image File").as_ref())
+        .add_filter(crate::t!("Images").as_ref(), &["png", "jpg", "jpeg", "bmp", "tiff", "tif"])
+        .add_filter(crate::t!("PNG").as_ref(), &["png"])
+        .add_filter(crate::t!("JPEG").as_ref(), &["jpg", "jpeg"])
+        .add_filter(crate::t!("All Files").as_ref(), &["*"])
+        .pick_file()
+        .await
+        .ok_or_else(|| "Cancelled".to_string())?;
+    let name = handle.file_name();
+    let bytes = handle.read().await;
+    ole_embed::EmbeddedImage::from_bytes(name, bytes)
 }
 
 /// Save `doc` to `path` with the given DXF version, overriding `doc.version`.

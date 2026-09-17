@@ -4693,6 +4693,7 @@ impl OpenCADStudio {
                     let x1 = p1.x.max(p2.x);
                     let y1 = p1.y.max(p2.y);
                     self.plot_window = Some((x0, y0, x1, y1));
+                    self.plot_dialog.window = self.plot_window;
                     self.command_line.push_output(
                         crate::tf!("Plot window: {x0:.2},{y0:.2} to {x1:.2},{y1:.2}").as_ref(),
                     );
@@ -4700,6 +4701,8 @@ impl OpenCADStudio {
                     // receive the two clicks — bring the dialog back with the
                     // window now active.
                     self.plot_dialog.area = "Window".to_string();
+                    // Remember the pick immediately, like the printer choice.
+                    self.save_config();
                     self.active_modal = Some(super::ModalKind::Plot);
                 } else {
                     // PLOTWINDOW always describes the plotted layout. In MSPACE
@@ -4712,10 +4715,12 @@ impl OpenCADStudio {
                     let x2 = p1.x.max(p2.x);
                     let y2 = p1.y.max(p2.y);
                     self.plot_window = Some((x1, y1, x2, y2));
+                    self.plot_dialog.window = self.plot_window;
                     self.command_line.push_output(
                         crate::tf!("Plot window: {x1:.2},{y1:.2} to {x2:.2},{y2:.2}").as_ref(),
                     );
                     self.plot_dialog.area = "Window".to_string();
+                    self.save_config();
                     self.active_modal = Some(super::ModalKind::Plot);
                 }
                 self.tabs[i].active_cmd = None;

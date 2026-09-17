@@ -2153,19 +2153,19 @@ impl Scene {
 
     fn populate_images_from_document_unbumped(&mut self) {
         self.images.clear();
-        let entries: Vec<(Handle, acadrust::entities::RasterImage)> = self
+        let entries: Vec<(Handle, acadrust::entities::EntityType)> = self
             .document
             .entities()
-            .filter_map(|e| {
-                if let EntityType::RasterImage(img) = e {
-                    Some((img.common.handle, img.clone()))
-                } else {
-                    None
-                }
+            .filter(|e| {
+                matches!(
+                    e,
+                    EntityType::RasterImage(_) | EntityType::Ole2Frame(_) | EntityType::Underlay(_)
+                )
             })
+            .map(|e| (e.common().handle, e.clone()))
             .collect();
-        for (handle, img) in entries {
-            if let Some(model) = ImageModel::from_raster_image(&img) {
+        for (handle, entity) in entries {
+            if let Some(model) = self.image_seed_for(&entity) {
                 self.images.insert(handle, model);
             }
         }

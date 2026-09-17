@@ -620,6 +620,11 @@ impl XrefManagerPanel {
                         None,
                     ),
                     menu_item(
+                        crate::t!("Embed Image (in drawing)").into_owned(),
+                        Some(Message::ImageEmbedPick),
+                        None,
+                    ),
+                    menu_item(
                         crate::t!("Attach PDF").into_owned(),
                         Some(Message::PdfAttachPick),
                         None,

@@ -53,6 +53,7 @@ impl OpenCADStudio {
             Some(K::AttributeEditor) => crate::tr!("modal", "attribute-editor"),
             Some(K::SaveDialog) => crate::tr!("modal", "save-drawing-as"),
             Some(K::Recovery) => crate::tr!("modal", "recovery-report"),
+            Some(K::MissingFonts) => crate::t!("Missing fonts").into_owned(),
             Some(K::RecoveryPrompt) => crate::tr!("modal", "recovery-prompt"),
             Some(K::GpuWarning) => crate::tr!("gpu", "title"),
             None => String::new(),
@@ -1633,6 +1634,17 @@ impl OpenCADStudio {
                     save_as_dialog_window(
                         &self.save_dialog_filename,
                         &self.save_dialog_format,
+                        flow,
+                    )
+                })
+            }
+            super::super::ModalKind::MissingFonts => {
+                let fonts = self.missing_fonts.as_ref()?;
+                let font_source = &self.font_source_input;
+                automatic_flow(ex, |flow| {
+                    crate::ui::window::missing_fonts::view_window(
+                        fonts,
+                        &font_source,
                         flow,
                     )
                 })

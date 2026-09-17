@@ -30,6 +30,7 @@ const NO_DEVICE_STORED_NAME: &str = "none_device";
 /// Recognised on read so those drawings keep plotting to PDF, and always
 /// rewritten with [`PDF_DEVICE_NAME`] on save.
 const LEGACY_PDF_LABEL: &str = "Save to PDF file…";
+const WINDOWS_PDF_PRINTER: &str = "Microsoft Print to PDF";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlotDevice {
@@ -67,7 +68,7 @@ impl PlotDevice {
             // the source application's own spelling: keep it rather than rewriting it.
             return (PlotDevice::None, true);
         }
-        if name == LEGACY_PDF_LABEL {
+        if name == LEGACY_PDF_LABEL || name.eq_ignore_ascii_case(WINDOWS_PDF_PRINTER) {
             return (PlotDevice::Pdf, false);
         }
         let lower = name.to_ascii_lowercase();
@@ -418,6 +419,10 @@ mod tests {
         );
         assert_eq!(
             PlotDevice::from_stored_name("Save to PDF file…"),
+            (PlotDevice::Pdf, false)
+        );
+        assert_eq!(
+            PlotDevice::from_stored_name("Microsoft Print to PDF"),
             (PlotDevice::Pdf, false)
         );
         assert_eq!(

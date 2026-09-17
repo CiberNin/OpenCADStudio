@@ -781,6 +781,8 @@ impl OpenCADStudio {
             "set_properties" => self.control_set_record_properties(req)?,
             "action" => self.control_ui_action(req)?,
             #[cfg(not(target_arch = "wasm32"))]
+            "embed_image" => self.control_embed_image(req)?,
+            #[cfg(not(target_arch = "wasm32"))]
             "save" => {
                 let path = req["path"]
                     .as_str()
@@ -1386,5 +1388,40 @@ mod tests {
             1
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn embed_image_op_places_an_ole2frame_and_undoes_it() {
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        let img = image::RgbaImage::from_pixel(40, 30, image::Rgba([9, 9, 9, 255]));
+        let path = std::env::temp_dir().join(format!("ocs-embed-{}.png", session_id()));
+        img.save(&path).unwrap();
+
+        let response = request(
+            &mut app,
+            json!({"op":"embed_image","path":path.to_string_lossy(),"at":[0,0,0],"width":20}),
+        );
+        assert_eq!(response["status"], "completed", "{response}");
+        let handle = response["result"]["handle"].as_str().unwrap().to_string();
+        assert_eq!(response["result"]["kind"], "Ole2Frame");
+        let ole_count = |app: &OpenCADStudio| {
+            app.tabs[app.active_tab]
+                .scene
+                .document
+                .entities()
+                .filter(|e| matches!(e, acadrust::EntityType::Ole2Frame(_)))
+                .count()
+        };
+        assert_eq!(ole_count(&app), 1);
+
+        // The entity must be queryable like any other and undoable as one step.
+        let queried =
+            app.automation_op(json!({"op":"entities","type":"OLE2FRAME"}).to_string().as_str());
+        assert_eq!(queried["total"], 1, "{queried}");
+        request(&mut app, json!({"op":"undo"}));
+        assert_eq!(ole_count(&app), 0);
+        let _ = std::fs::remove_file(path);
+        let _ = handle;
     }
 }

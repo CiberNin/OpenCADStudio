@@ -491,6 +491,8 @@ impl OpenCADStudio {
             snap_angle_deg: self.snap_angle_deg,
             otrack: self.snapper.otrack_enabled,
             default_assoc_prompted: self.default_assoc_prompted,
+            check_missing_fonts: self.check_missing_fonts,
+            font_source_url: self.font_source_url.clone(),
             donation_prompt_version: self.donation_prompt_version.clone(),
             gpu_warning_silenced: self.gpu_warning_silenced.clone(),
             disabled_plugins: {
@@ -577,6 +579,9 @@ impl OpenCADStudio {
         // open / tab switch), not app-global, so they are not applied here.
         self.snapper.otrack_enabled = s.otrack;
         self.default_assoc_prompted = s.default_assoc_prompted;
+        self.check_missing_fonts = s.check_missing_fonts;
+        self.font_source_url = s.font_source_url.clone();
+        self.font_source_input = s.font_source_url.clone();
         self.donation_prompt_version = s.donation_prompt_version.clone();
         self.gpu_warning_silenced = s.gpu_warning_silenced.clone();
         self.disabled_plugins = s.disabled_plugins.iter().cloned().collect();
@@ -1728,6 +1733,21 @@ impl OpenCADStudio {
             self.active_modal = Some(crate::app::ModalKind::Recovery);
             Task::none()
         } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // A drawing referencing fonts this machine lacks offers to
+                // fetch them from the community repository before the user
+                // studies garbled substitute text (unless recovery already
+                // owns the modal slot).
+                let missing = crate::io::font_repo::missing_shx_fonts(
+                    &self.tabs[i].scene.document,
+                );
+                if !missing.is_empty() && self.check_missing_fonts {
+                    self.font_source_input = self.font_source_url.clone();
+                    self.missing_fonts = Some(missing);
+                    self.active_modal = Some(crate::app::ModalKind::MissingFonts);
+                }
+            }
             self.drain_pending_open()
         };
         Task::batch([thumbs_task, pending_open_task, interaction_task])
@@ -3106,9 +3126,15 @@ impl OpenCADStudio {
                 .into_iter()
                 .map(|(name, _, factor)| (name, factor))
                 .collect();
+            // This load only refreshes paper/scale context from the layout;
+            // the device the user just plotted with must survive it.
+            let kept_printer = self.plot_dialog.printer.clone();
+            let kept_to_file = self.plot_dialog.to_file;
             if let Some(settings) = self.tabs[i].scene.effective_plot_settings() {
                 self.load_plotsettings_into_dialog(&settings);
             }
+            self.plot_dialog.printer = kept_printer;
+            self.plot_dialog.to_file = kept_to_file;
         }
         let Some(page) = self.direct_plot_page()
         else {
@@ -3272,6 +3298,7 @@ impl OpenCADStudio {
                 } else {
                     self.plot_dialog.paper_space = true;
                     self.plot_window = None;
+                    self.plot_dialog.window = None;
                     self.load_plotsettings_into_dialog(&page_setup);
                 }
                 let dialog = self.plot_dialog.clone();
@@ -3799,6 +3826,13 @@ impl OpenCADStudio {
         self.plot_prev = Some(previous);
         let cur = self.tabs[self.active_tab].scene.current_layout.clone();
         let layout_entry = format!("*{cur}*");
+        // The auto-applied page setup must not reset the output device: a
+        // drawing rarely stores one, so honouring it would snap the dialog
+        // back to the system default on every open. The user's last choice
+        // (persisted across sessions with the rest of the dialog) survives
+        // unless the setup names an explicit device of its own.
+        let kept_printer = self.plot_dialog.printer.clone();
+        let kept_to_file = self.plot_dialog.to_file;
         if self.tabs[self.active_tab]
             .scene
             .plot_settings_for(&cur)
@@ -3807,6 +3841,19 @@ impl OpenCADStudio {
             self.select_page_setup(&layout_entry);
         } else {
             self.select_page_setup(crate::ui::window::plot::SETUP_PREV);
+        }
+        let setup_named_a_device =
+            self.plot_dialog.printer.is_some() || self.plot_dialog.to_file;
+        if !setup_named_a_device {
+            self.plot_dialog.printer = kept_printer;
+            self.plot_dialog.to_file = kept_to_file;
+        }
+        // A persisted plot window (saved with the dialog settings) restores
+        // across sessions; a freshly loaded one wins so the two stay in sync.
+        if self.plot_window.is_none() {
+            self.plot_window = self.plot_dialog.window;
+        } else {
+            self.plot_dialog.window = self.plot_window;
         }
         if self.plot_dialog.scale.eq_ignore_ascii_case("fit") {
             self.plot_dialog.fit_to_paper = true;
@@ -4048,6 +4095,7 @@ impl OpenCADStudio {
                     self.plot_dialog.to_file = false;
                     self.plot_dialog.printer = Some(s);
                 }
+                self.save_config();
                 self.request_printer_media()
             }
             M::PrinterMedia(printer, caps) => {
@@ -4591,6 +4639,7 @@ impl OpenCADStudio {
                 ps.plot_window.upper_right_x,
                 ps.plot_window.upper_right_y,
             ));
+            self.plot_dialog.window = self.plot_window;
         }
         if !ps.current_style_sheet.is_empty()
             && self
@@ -5445,5 +5494,90 @@ cupsPrintQuality/Print Quality: *Normal High\n";
         assert_eq!(super::plot_dialog_sheet_mm(&app.plot_dialog), (1500.0, 609.6));
         let _ = app.on_plot_dlg(PlotDlgMsg::SetCurrent);
         assert_eq!(layout_paper(&app).0, "Roll_24_(609.60_x_1500.00_MM)");
+    }
+}
+
+#[cfg(test)]
+mod plot_device_persistence_tests {
+    use super::*;
+
+    /// Reopening the Plot dialog must keep the user's printer. Layouts in
+    /// real drawings carry plot settings with no device, and the auto-applied
+    /// page setup used to reset the choice to the system default on every
+    /// open.
+    #[test]
+    fn reopening_the_plot_dialog_keeps_the_chosen_printer() {
+        let mut app = OpenCADStudio::new_for_test();
+        // A real drawing's layout carries plot settings with no device; the
+        // auto-applied setup used to reset the choice to the default.
+        let mut ps = acadrust::objects::PlotSettings::default();
+        ps.printer_name = String::new();
+        let layout = app.tabs[app.active_tab].scene.current_layout.clone();
+        assert!(
+            app.tabs[app.active_tab]
+                .scene
+                .set_layout_plot_settings(&layout, &ps),
+            "the test layout must accept plot settings"
+        );
+        app.plot_dialog.printer = Some("Brother DCP-L2520D series".into());
+        app.plot_dialog.to_file = false;
+        let _ = app.on_plot_dialog_open();
+        assert_eq!(
+            app.plot_dialog.printer.as_deref(),
+            Some("Brother DCP-L2520D series"),
+            "the chosen printer must survive the auto-applied page setup"
+        );
+        assert!(!app.plot_dialog.to_file);
+    }
+
+    /// A layout whose plot settings name an explicit device wins over the
+    /// saved preference: selecting its setup is an explicit device choice.
+    #[test]
+    fn layout_device_overrides_the_saved_preference() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.plot_dialog.printer = Some("Brother DCP-L2520D series".into());
+        let mut ps = acadrust::objects::PlotSettings::default();
+        ps.printer_name = "Godex G500".into();
+        app.load_plotsettings_into_dialog(&ps);
+        assert_eq!(app.plot_dialog.printer.as_deref(), Some("Godex G500"));
+        assert!(!app.plot_dialog.to_file);
+    }
+
+    /// A persisted plot window (saved with the dialog settings) seeds the
+    /// runtime window when the dialog reopens, so `area == "Window"` keeps
+    /// plotting the same rectangle instead of reporting an empty area.
+    #[test]
+    fn persisted_window_seeds_the_dialog_on_reopen() {
+        let mut app = OpenCADStudio::new_for_test();
+        assert!(app.plot_window.is_none());
+        app.plot_dialog.area = "Window".into();
+        app.plot_dialog.window = Some((-10.0, -5.0, 30.0, 15.0));
+        let _ = app.on_plot_dialog_open();
+        assert_eq!(app.plot_window, Some((-10.0, -5.0, 30.0, 15.0)));
+    }
+
+    /// A window freshly loaded from a layout's plot settings is mirrored into
+    /// the dialog so it persists with the next config save.
+    #[test]
+    fn layout_window_is_mirrored_into_the_dialog() {
+        let mut app = OpenCADStudio::new_for_test();
+        let mut ps = acadrust::objects::PlotSettings::default();
+        ps.plot_type = acadrust::objects::PlotType::Window;
+        ps.set_plot_window(1.0, 2.0, 3.0, 4.0);
+        app.load_plotsettings_into_dialog(&ps);
+        assert_eq!(app.plot_window, Some((1.0, 2.0, 3.0, 4.0)));
+        assert_eq!(app.plot_dialog.window, Some((1.0, 2.0, 3.0, 4.0)));
+    }
+
+    /// A layout pointing at a PDF device switches the dialog to file output.
+    #[test]
+    fn pdf_device_switches_to_file_output() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.plot_dialog.printer = Some("Brother DCP-L2520D series".into());
+        let mut ps = acadrust::objects::PlotSettings::default();
+        ps.printer_name = "Microsoft Print to PDF".into();
+        app.load_plotsettings_into_dialog(&ps);
+        assert!(app.plot_dialog.to_file);
+        assert!(app.plot_dialog.printer.is_none());
     }
 }
