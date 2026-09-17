@@ -213,6 +213,12 @@ impl OpenCADStudio {
 
         let i = self.active_tab;
         let tab = &self.tabs[i];
+        // Dynamic input is built before the status bar and properties panel,
+        // so seed its shared formatter here rather than relying on either of
+        // those later views to have done it for this drawing/thread.
+        crate::entities::common::set_unit_context(
+            crate::entities::common::UnitContext::from_header(&tab.scene.document.header),
+        );
         let thumbnail_capture_clean = self.thumbnail_capture_clean;
         let theme_text = self.active_theme.palette().background.base.text;
         let viewcube_text_color = [theme_text.r, theme_text.g, theme_text.b, theme_text.a];
@@ -1068,15 +1074,15 @@ bg={bg_ms:.1}ms n={view_count}"
                         (None, _) if rectangle_values.is_some() => {
                             let (width, height) = rectangle_values.unwrap();
                             match f.role {
-                                crate::command::DynRole::Width => format!("{width:.4}"),
-                                crate::command::DynRole::Height => format!("{height:.4}"),
+                                crate::command::DynRole::Width => crate::entities::common::format_length(width),
+                                crate::command::DynRole::Height => crate::entities::common::format_length(height),
                                 _ => String::new(),
                             }
                         }
                         // An angle step with a command-supplied live value
                         // (ARC span / direction) shows it in degrees.
                         (None, Some(lv)) if f.component == DynComponent::Angle => {
-                            format!("{lv:.1}")
+                            crate::entities::common::format_angle(lv.to_radians())
                         }
                         (None, Some(lv))
                             if matches!(
@@ -1084,7 +1090,11 @@ bg={bg_ms:.1}ms n={view_count}"
                                 DynComponent::Scalar | DynComponent::Distance
                             ) =>
                         {
-                            format!("{lv:.4}")
+                            if f.component == DynComponent::Distance {
+                                crate::entities::common::format_length(lv)
+                            } else {
+                                lv.to_string()
+                            }
                         }
                         _ => dyn_component_value(
                             f,
