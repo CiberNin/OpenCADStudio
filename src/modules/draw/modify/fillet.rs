@@ -1514,7 +1514,7 @@ impl CadCommand for FilletCommand {
                     return Some(CmdResult::NeedPoint);
                 }
                 // "R 5.0" inline shorthand
-                if upper.starts_with('R') {
+                if t.starts_with(['r', 'R']) {
                     let body = t[1..].trim();
                     if let Some(v) = crate::entities::common::parse_typed_length(body) {
                         if v >= 0.0 {
@@ -2109,7 +2109,7 @@ impl CadCommand for ChamferCommand {
                     return Some(CmdResult::NeedPoint);
                 }
                 // "D 5.0" or "D 5.0 3.0" inline shorthand
-                if upper.starts_with('D') {
+                if t.starts_with(['d', 'D']) {
                     let body = t[1..].trim();
                     let parts: Vec<f64> = body
                         .split_whitespace()
