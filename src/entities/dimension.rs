@@ -6236,9 +6236,9 @@ fn display_measurement(dim: &Dimension) -> f64 {
 /// DIMLIM: the upper limit stacked over the lower one, replacing the nominal.
 /// The offsets apply to the displayed number, so DIMLFAC and DIMRND come first.
 fn limits_text(dim: &Dimension, style: Option<&DimStyle>, is_angular: bool) -> Option<String> {
-    // With both offsets zero AutoCAD prints the plain value, not a stack of
-    // two equal numbers.
-    let s = style.filter(|s| s.dimlim && (s.dimtp.abs() > 1e-12 || s.dimtm.abs() > 1e-12))?;
+    // AutoCAD stacks the two limits even when both offsets are zero and the
+    // halves read the same.
+    let s = style.filter(|s| s.dimlim)?;
     let measurement = display_measurement(dim);
     if is_angular {
         return Some(format!(
@@ -8108,17 +8108,17 @@ mod limits_format_tests {
         );
     }
 
-    // DIMLIM with both offsets at zero is a plain value in AutoCAD, not a
-    // stack of two equal numbers.
+    // AutoCAD keeps the stack when both offsets are zero: production
+    // drawings show `\S11.469^11.469;` for such dimensions.
     #[test]
-    fn limits_without_offsets_show_the_plain_value() {
+    fn limits_without_offsets_still_stack() {
         let mut s = style();
         s.dimlim = true;
         s.dimtp = 0.0;
         s.dimtm = 0.0;
         assert_eq!(
             dimension_text_parts(&horizontal(), Some(&s)),
-            Some(("10.000".to_string(), None))
+            Some((r"\S10.000^10.000;".to_string(), None))
         );
     }
 
